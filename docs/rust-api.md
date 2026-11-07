@@ -30,7 +30,7 @@ frozen TENT C/C++ inventory, whose interfaces are out of scope.
 | Selection | `IntentType`, `PolicyName`, `SegmentType`, `SelectionPolicy`, `TransportSelectorConfig`, `QpPool`; compiled policies and named-policy resolution |
 | QoS | `QosConfig`, `QosPolicyFields`, `QosDegradedActions`, `QosTenantContract`, `QosRequestContext`, `QosUsage`, `EffectiveQosPolicy`; resolve and sample contracts |
 | Credits and accounting | `CreditResource`, `CreditBalance`, `CreditAmount`, `CreditUpdateDisposition`, `ReceiverCreditUpdateV1`, `ReceiverCreditConfig`, `ReceiverCreditStats`, `ReceiverCreditIssuerStats`, `EngineStats`, `RuntimeQueueStats`; manual and automatic credit lifecycle |
-| CPU providers | `HpTcpConfig`, `ShmConfig`, `MnnvlConfig`, `MnnvlHandleType`; SHM allocation/free and backing-name query (MNNVL settings exist without an active CUDA provider) |
+| CPU providers | `HpTcpConfig`, `ShmConfig`, `MnnvlConfig`, `MnnvlHandleType`; SHM allocation/free (MNNVL settings exist without an active CUDA provider) |
 | Linux topology | `Topology`, `NicEntry`, `NicType`, `MemEntry`, `MemType`, `DEVICE_PRIORITY_RANKS`; local/discovered topology snapshots |
 | `rdma` | `transport::rdma::{RdmaConfig, RdmaHostMemory, RdmaCudaMemory, RdmaProgressMode, SchedulingParams, NicLoadStats, QpReadDepths, RdmaStats}`; NIC load queries |
 | Unstable `rdma-adaptive` (excluded from freeze) | `transport::rdma::adaptive_congestion_control`: `Config`, `Mode`, `PathState`, `Snapshot`, `Signals`, `DomainState`, `AdmissionDomain`, `Decision`, `Reason`, `Rejection`, `PathHandle`, `Permit`, `Classification`, `FailureScope`, `Outcome`, `classify_completion`, `classify_async_event`; hidden callable core, not a live worker policy |

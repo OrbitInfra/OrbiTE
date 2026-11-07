@@ -248,7 +248,8 @@ behavior without C exports, C++ adapters or a plugin loader. The extension
 remains `orbite._native`. Rust-only builds do not compile or load Python.
 Maturin uses `>=1.10.2,<2`; CI fixes the build tool at 1.10.2.
 The binding pins `orbite` to its exact release because hidden owner helpers are
-compatible only within that release. Both Cargo packages inherit `0.1.0-beta.1` from the workspace version. The
+compatible only within that release. Both Cargo packages inherit `0.1.0-beta.1`
+from the workspace version. The
 dynamic version in `pyproject.toml` reads the binding crate's Cargo metadata;
 Python normalizes it to `0.1.0b1`. CI checks filenames and embedded wheel/sdist
 metadata, rebuilds a wheel from the sdist and checks the installed version.
