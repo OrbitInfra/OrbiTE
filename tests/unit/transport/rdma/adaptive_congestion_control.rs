@@ -21,17 +21,8 @@ fn finish(permit: &mut Permit) {
     assert!(!permit.complete(Outcome::Success, FailureScope::Operation));
 }
 #[test]
-fn startup_validates_each_supported_value_without_mutating_the_environment() {
-    use std::ffi::OsString;
-    let load = |values: &[(&str, &str)]| {
-        Config::from_lookup(|key| {
-            values
-                .iter()
-                .find(|(k, _)| *k == key.strip_prefix("MC_ADAPTIVE_CONGESTION_CONTROL_").unwrap())
-                .map(|(_, v)| OsString::from(v))
-        })
-    };
-    let defaults = load(&[]).unwrap();
+fn typed_configuration_preserves_defaults_and_rejects_invalid_windows() {
+    let defaults = Config::default();
     assert_eq!(
         (
             defaults.mode,
@@ -43,51 +34,32 @@ fn startup_validates_each_supported_value_without_mutating_the_environment() {
         ),
         (Mode::Off, 4 << 20, 64 << 20, 2_000_000, 2, 3)
     );
-    let c = load(&[
-        ("MODE", "enforce"),
-        ("MIN_WINDOW_BYTES", "1"),
-        ("MAX_WINDOW_BYTES", "18"),
-        ("TARGET_DRAIN_US", "7"),
-        ("HIGH_PRESSURE_EPOCHS", "9"),
-        ("LOW_PRESSURE_EPOCHS", "3"),
-    ])
-    .unwrap();
-    assert_eq!(
-        (
-            c.mode,
-            c.min_window_bytes,
-            c.max_window_bytes,
-            c.target_drain_time_ns,
-            c.high_pressure_epochs,
-            c.low_pressure_epochs
-        ),
-        (Mode::Enforce, 1, 18, 7000, 9, 3)
-    );
-    assert_eq!(
-        load(&[("MODE", "observe"), ("QUARANTINE_MS", "broken")])
-            .unwrap()
-            .mode,
-        Mode::Observe
-    );
-    for (key, val) in [
-        ("MODE", "Observe"),
-        ("MIN_WINDOW_BYTES", "+1"),
-        ("MAX_WINDOW_BYTES", ""),
-        ("MIN_WINDOW_BYTES", "4294967296"),
-        ("TARGET_DRAIN_US", "18446744073709552"),
-        ("HIGH_PRESSURE_EPOCHS", "0"),
-        ("LOW_PRESSURE_EPOCHS", "4294967296"),
-        ("HIGH_PRESSURE_EPOCHS", " 3"),
+    for bad in [
+        Config {
+            min_window_bytes: 0,
+            ..defaults
+        },
+        Config {
+            min_window_bytes: 1 << 30,
+            ..defaults
+        },
+        Config {
+            target_drain_time_ns: 0,
+            ..defaults
+        },
+        Config {
+            high_pressure_epochs: 0,
+            ..defaults
+        },
+        Config {
+            low_pressure_epochs: 0,
+            ..defaults
+        },
     ] {
-        assert!(
-            matches!(load(&[(key, val)]), Err(crate::Error::InvalidConfig(_))),
-            "{key}"
-        );
+        assert!(DomainState::new(bad, 0).is_err());
     }
-    let mut invalid = c;
-    invalid.min_window_bytes = 20;
-    assert!(DomainState::new(invalid, 0).is_err());
 }
+
 #[test]
 fn modes_admission_evidence_and_moved_permits_balance_device_and_route() {
     for mode in [Mode::Off, Mode::Observe, Mode::Enforce] {

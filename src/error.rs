@@ -7,10 +7,10 @@ pub type Result<T> = std::result::Result<T, Error>;
 #[non_exhaustive]
 pub enum Error {
     InvalidConfig(&'static str),
-    /// The TENT loader rejected a path before starting any engine owner.
-    TentConfig {
+    /// The JSON loader rejected a path before starting any engine owner.
+    Config {
         path: String,
-        reason: &'static str,
+        reason: String,
     },
     /// JSON syntax/schema diagnostics, including the offending QoS field.
     InvalidQosConfig(String),
@@ -79,9 +79,9 @@ impl Error {
             Self::Timeout => Self::Timeout,
             Self::DeadlineInfeasible => Self::DeadlineInfeasible,
             Self::InvalidConfig(msg) => Self::InvalidConfig(msg),
-            Self::TentConfig { path, reason } => Self::TentConfig {
+            Self::Config { path, reason } => Self::Config {
                 path: path.clone(),
-                reason,
+                reason: reason.clone(),
             },
             Self::Unavailable(msg) => Self::Unavailable(msg),
             Self::Protocol(msg) => Self::Protocol(msg),
@@ -112,8 +112,8 @@ impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::InvalidConfig(message) => write!(f, "invalid configuration: {message}"),
-            Self::TentConfig { path, reason } => {
-                write!(f, "invalid TENT configuration at {path}: {reason}")
+            Self::Config { path, reason } => {
+                write!(f, "invalid configuration at {path}: {reason}")
             }
             Self::InvalidQosConfig(message) => write!(f, "invalid QoS configuration: {message}"),
             Self::TransportPolicy { policy, reason } => {

@@ -5,6 +5,8 @@ use crate::{Error, MemoryType, Result, SourceEpoch};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum MnnvlHandleType {
     #[default]
     Fabric,
@@ -15,6 +17,8 @@ pub enum MnnvlHandleType {
 /// settings and transports/mnnvl/egm. Selecting this profile replaces legacy IPC.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
+#[derive(serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct MnnvlConfig {
     pub handle_type: MnnvlHandleType,
     pub host_register: bool,

@@ -30,15 +30,15 @@ fn pairs_follow_the_start_and_only_emit_bounded_outcomes() {
         recorded.terminal(None);
         let text = scrape.prometheus();
         assert!(text.contains(&format!(
-            r#"tent_logical_request_outcomes_total{{operation="write",outcome="{outcome}"}} 2"#
+            r#"orbite_logical_request_outcomes_total{{operation="write",outcome="{outcome}"}} 2"#
         )));
-        assert!(text.contains(&format!(r#"tent_transport_attempt_outcomes_total{{transport="rdma",operation="write",outcome="{outcome}"}} 1"#)));
+        assert!(text.contains(&format!(r#"orbite_transport_attempt_outcomes_total{{transport="rdma",operation="write",outcome="{outcome}"}} 1"#)));
     }
     let j = scrape.json();
-    assert_eq!(j["tent_logical_requests_started_total"], 8);
-    assert_eq!(j["tent_transport_attempts_total"], 4);
-    assert_eq!(j["tent_logical_requests_inflight"], 0);
-    assert_eq!(j["tent_inflight_attempts"], 0);
+    assert_eq!(j["orbite_logical_requests_started_total"], 8);
+    assert_eq!(j["orbite_transport_attempts_total"], 4);
+    assert_eq!(j["orbite_logical_requests_inflight"], 0);
+    assert_eq!(j["orbite_inflight_attempts"], 0);
 }
 
 #[test]
@@ -47,14 +47,14 @@ fn exporter_health_survives_pause_and_failed_serialization() {
     let m = e.metrics().unwrap();
     m.set_enabled(false);
     let health = e.metrics_status();
-    assert_eq!(health["tent_metrics_http_server_up"], 1);
-    assert_eq!(health["tent_metrics_runtime_enabled"], 0);
+    assert_eq!(health["orbite_metrics_http_server_up"], 1);
+    assert_eq!(health["orbite_metrics_runtime_enabled"], 0);
     assert_eq!(
-        health["tent_metrics_build_info"]["version"],
+        health["orbite_metrics_build_info"]["version"],
         env!("CARGO_PKG_VERSION")
     );
     assert_eq!(
-        health["tent_metrics_build_info"]["commit"],
+        health["orbite_metrics_build_info"]["commit"],
         crate::diagnostics::BUILD_COMMIT
     );
     for (format, path) in [("prometheus", "/metrics"), ("json", "/metrics/json")] {
@@ -66,18 +66,21 @@ fn exporter_health_survives_pause_and_failed_serialization() {
         assert!(head.starts_with("HTTP/1.1 500"));
         let h = e.metrics_status();
         for key in [
-            "tent_metrics_serialization_attempts_total",
-            "tent_metrics_serialization_failures_total",
+            "orbite_metrics_serialization_attempts_total",
+            "orbite_metrics_serialization_failures_total",
         ] {
             assert_eq!(h[key][format], 1);
         }
-        assert_eq!(h["tent_metrics_last_success_timestamp_seconds"][format], 0);
+        assert_eq!(
+            h["orbite_metrics_last_success_timestamp_seconds"][format],
+            0
+        );
         let body = scrape(m.http_port(), path);
         if format == "json" {
             let j: Value = serde_json::from_str(&body).unwrap();
-            assert_eq!(j["tent_metrics_serialization_attempts_total"]["json"], 2);
+            assert_eq!(j["orbite_metrics_serialization_attempts_total"]["json"], 2);
             assert!(
-                j["tent_metrics_last_success_timestamp_seconds"]["json"]
+                j["orbite_metrics_last_success_timestamp_seconds"]["json"]
                     .as_u64()
                     .unwrap()
                     > 0
@@ -85,17 +88,17 @@ fn exporter_health_survives_pause_and_failed_serialization() {
         } else {
             assert!(
                 body.contains(
-                    r#"tent_metrics_serialization_failures_total{format="prometheus"} 1"#
+                    r#"orbite_metrics_serialization_failures_total{format="prometheus"} 1"#
                 )
             );
-            assert!(body.contains("tent_metrics_runtime_enabled 0"));
+            assert!(body.contains("orbite_metrics_runtime_enabled 0"));
         }
         assert_eq!(
-            e.metrics_status()["tent_metrics_serialization_attempts_total"][format],
+            e.metrics_status()["orbite_metrics_serialization_attempts_total"][format],
             2
         );
         assert!(
-            e.metrics_status()["tent_metrics_last_success_timestamp_seconds"][format]
+            e.metrics_status()["orbite_metrics_last_success_timestamp_seconds"][format]
                 .as_u64()
                 .unwrap()
                 > 0
@@ -113,15 +116,15 @@ fn exporter_health_survives_pause_and_failed_serialization() {
     assert!(off.metrics().is_none());
     let h = off.metrics_status();
     for key in [
-        "tent_metrics_runtime_enabled",
-        "tent_metrics_http_server_up",
-        "tent_metrics_http_start_failures_total",
+        "orbite_metrics_runtime_enabled",
+        "orbite_metrics_http_server_up",
+        "orbite_metrics_http_start_failures_total",
     ] {
         assert_eq!(h[key], 0);
     }
     assert_eq!(
-        h["tent_metrics_build_info"],
-        health["tent_metrics_build_info"]
+        h["orbite_metrics_build_info"],
+        health["orbite_metrics_build_info"]
     );
 }
 
@@ -157,7 +160,7 @@ fn rejected_preflight_records_no_start_and_a_failed_prefix_settles_its_suffix() 
             )
             .is_err()
     );
-    assert_eq!(m.json()["tent_logical_requests_started_total"], 0);
+    assert_eq!(m.json()["orbite_logical_requests_started_total"], 0);
     source.close_source(WAIT).unwrap();
     let r = requester
         .submit_and_wait(
@@ -170,11 +173,11 @@ fn rejected_preflight_records_no_start_and_a_failed_prefix_settles_its_suffix() 
     assert_eq!(r.completed_requests, 0);
     assert!(r.failure.is_some());
     let j = m.json();
-    assert_eq!(j["tent_logical_requests_started_total"], 2);
-    assert_eq!(j["tent_logical_request_outcomes_total"], 2);
-    assert_eq!(j["tent_transport_attempts_total"], 1);
-    assert_eq!(j["tent_transport_attempt_outcomes_total"], 1);
-    assert_eq!(j["tent_logical_requests_inflight"], 0);
+    assert_eq!(j["orbite_logical_requests_started_total"], 2);
+    assert_eq!(j["orbite_logical_request_outcomes_total"], 2);
+    assert_eq!(j["orbite_transport_attempts_total"], 1);
+    assert_eq!(j["orbite_transport_attempt_outcomes_total"], 1);
+    assert_eq!(j["orbite_logical_requests_inflight"], 0);
     let mut got = [0; 12];
     local.read(0, &mut got).unwrap();
     assert_eq!(got, [0xee; 12]);
@@ -199,47 +202,47 @@ fn prometheus_metric_family_contract() {
     };
     let text = scrape.prometheus();
     for (name, kind) in [
-        ("tent_read_bytes_total", "counter"),
-        ("tent_write_bytes_total", "counter"),
-        ("tent_read_requests_total", "counter"),
-        ("tent_write_requests_total", "counter"),
-        ("tent_read_failures_total", "counter"),
-        ("tent_write_failures_total", "counter"),
-        ("tent_transport_failover_total", "counter"),
-        ("tent_transport_attempts_total", "counter"),
-        ("tent_transport_attempt_failures_total", "counter"),
-        ("tent_logical_requests_started_total", "counter"),
-        ("tent_logical_request_outcomes_total", "counter"),
-        ("tent_transport_attempt_outcomes_total", "counter"),
-        ("tent_task_failures_total", "counter"),
-        ("tent_deadline_infeasible_total", "counter"),
-        ("tent_quarantined_batches_total", "counter"),
-        ("tent_inflight_attempts", "gauge"),
-        ("tent_logical_requests_inflight", "gauge"),
-        ("tent_registered_buffer_bytes", "gauge"),
-        ("tent_read_latency_us", "histogram"),
-        ("tent_write_latency_us", "histogram"),
-        ("tent_read_size_bytes", "histogram"),
-        ("tent_write_size_bytes", "histogram"),
-        ("tent_deadline_mlu_permille", "histogram"),
-        ("tent_stage_queue_wait_us", "histogram"),
-        ("tent_stage_dispatch_us", "histogram"),
-        ("tent_stage_transport_us", "histogram"),
-        ("tent_transport_attempt_latency_us", "histogram"),
-        ("tent_metrics_build_info", "gauge"),
-        ("tent_metrics_runtime_enabled", "gauge"),
-        ("tent_metrics_http_server_up", "gauge"),
-        ("tent_metrics_http_start_failures_total", "counter"),
-        ("tent_metrics_serialization_attempts_total", "counter"),
-        ("tent_metrics_serialization_failures_total", "counter"),
-        ("tent_metrics_last_success_timestamp_seconds", "gauge"),
+        ("orbite_read_bytes_total", "counter"),
+        ("orbite_write_bytes_total", "counter"),
+        ("orbite_read_requests_total", "counter"),
+        ("orbite_write_requests_total", "counter"),
+        ("orbite_read_failures_total", "counter"),
+        ("orbite_write_failures_total", "counter"),
+        ("orbite_transport_failover_total", "counter"),
+        ("orbite_transport_attempts_total", "counter"),
+        ("orbite_transport_attempt_failures_total", "counter"),
+        ("orbite_logical_requests_started_total", "counter"),
+        ("orbite_logical_request_outcomes_total", "counter"),
+        ("orbite_transport_attempt_outcomes_total", "counter"),
+        ("orbite_task_failures_total", "counter"),
+        ("orbite_deadline_infeasible_total", "counter"),
+        ("orbite_quarantined_batches_total", "counter"),
+        ("orbite_inflight_attempts", "gauge"),
+        ("orbite_logical_requests_inflight", "gauge"),
+        ("orbite_registered_buffer_bytes", "gauge"),
+        ("orbite_read_latency_us", "histogram"),
+        ("orbite_write_latency_us", "histogram"),
+        ("orbite_read_size_bytes", "histogram"),
+        ("orbite_write_size_bytes", "histogram"),
+        ("orbite_deadline_mlu_permille", "histogram"),
+        ("orbite_stage_queue_wait_us", "histogram"),
+        ("orbite_stage_dispatch_us", "histogram"),
+        ("orbite_stage_transport_us", "histogram"),
+        ("orbite_transport_attempt_latency_us", "histogram"),
+        ("orbite_metrics_build_info", "gauge"),
+        ("orbite_metrics_runtime_enabled", "gauge"),
+        ("orbite_metrics_http_server_up", "gauge"),
+        ("orbite_metrics_http_start_failures_total", "counter"),
+        ("orbite_metrics_serialization_attempts_total", "counter"),
+        ("orbite_metrics_serialization_failures_total", "counter"),
+        ("orbite_metrics_last_success_timestamp_seconds", "gauge"),
     ] {
         let expected = format!("# TYPE {name} {kind}");
         assert!(text.lines().any(|line| line == expected), "{name}");
     }
     assert_eq!(
         text.lines()
-            .filter(|s| s.starts_with("# TYPE tent_"))
+            .filter(|s| s.starts_with("# TYPE orbite_"))
             .count(),
         34
     );

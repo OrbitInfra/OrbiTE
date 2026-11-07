@@ -17,11 +17,11 @@ Hardware qualification is separate. Rust is the primary API.
 The following names and their public methods/fields are the candidate; private
 transport owners, native function tables and test shims are not public APIs.
 Full signatures come from rustdoc for the chosen feature set, not from the
-frozen TENT C/C++ inventory, whose interfaces are out of scope.
+the independent OrbiTE API; TENT compatibility surfaces are out of scope.
 
 | Area | Public surface |
 | --- | --- |
-| Construction | `TransferEngine`, `EngineConfig`, `TentSettings`, `RuntimeQueueConfig`; typed `new`, explicit `from_tent_env/json/file`, config and stats queries |
+| Construction | `TransferEngine`, `EngineConfig`, `RuntimeQueueConfig`; typed `new`, explicit `from_env/json/file`, config and stats queries |
 | Requests and outcomes | `TransferRequest`, `TransferOp`, `Transport`, `Priority`, `FileIoElement`, `BatchReport`, `TransferFailure`, `RemoteEffect`, `Error`, `Result` |
 | Registered backing | `HostMemory`, `MemoryBacking`, `RegisteredMemory`, `Permission`, `MemoryType`, `MemoryLocation`, `RangeLocation`; owned/external and range-batch registration, address resolution, unregister, guarded reads/writes |
 | Peer and file authority | `SourceEpoch`, `RemoteSegment`, `RemoteRegion`, `TransferTarget`, `FileSegment`, `FileSegmentInfo`; endpoint/epoch discovery, open/refresh/close, file offset resolution and info |
@@ -31,7 +31,7 @@ frozen TENT C/C++ inventory, whose interfaces are out of scope.
 | QoS | `QosConfig`, `QosPolicyFields`, `QosDegradedActions`, `QosTenantContract`, `QosRequestContext`, `QosUsage`, `EffectiveQosPolicy`; resolve and sample contracts |
 | Credits and accounting | `CreditResource`, `CreditBalance`, `CreditAmount`, `CreditUpdateDisposition`, `ReceiverCreditUpdateV1`, `ReceiverCreditConfig`, `ReceiverCreditStats`, `ReceiverCreditIssuerStats`, `EngineStats`, `RuntimeQueueStats`; manual and automatic credit lifecycle |
 | CPU providers | `HpTcpConfig`, `ShmConfig`, `MnnvlConfig`, `MnnvlHandleType`; SHM allocation/free (MNNVL settings exist without an active CUDA provider) |
-| Linux topology | `Topology`, `NicEntry`, `NicType`, `MemEntry`, `MemType`, `DEVICE_PRIORITY_RANKS`; local/discovered topology snapshots |
+| Linux topology | `Topology`, `NicEntry`, `NicType`, `MemEntry`, `TopologyMemoryKind`, `DEVICE_PRIORITY_RANKS`; local/discovered topology snapshots |
 | `rdma` | `transport::rdma::{RdmaConfig, RdmaHostMemory, RdmaCudaMemory, RdmaProgressMode, SchedulingParams, NicLoadStats, QpReadDepths, RdmaStats}`; NIC load queries |
 | Unstable `rdma-adaptive` (excluded from freeze) | `transport::rdma::adaptive_congestion_control`: `Config`, `Mode`, `PathState`, `Snapshot`, `Signals`, `DomainState`, `AdmissionDomain`, `Decision`, `Reason`, `Rejection`, `PathHandle`, `Permit`, `Classification`, `FailureScope`, `Outcome`, `classify_completion`, `classify_async_event`; hidden callable core, not a live worker policy |
 | `cuda` | `cuda::{CudaMemory, RetainedResources, allocate_pinned_host, retained_resources}`, root `StagingLocation`, `StagingStats`, `NvlinkStats`; device/fabric/EGM allocation, external ownership, producer readiness, staging trim and IPC cache flush |
@@ -67,7 +67,7 @@ a unique name and any count/link overrides.
 | --- | --- |
 | Primary Rust helpers | `transport_installed`, `register_memory_ranges`, `Batch::observe_tasks`, `resolve_policy_name` and `discover_peer_epoch` are documented API. Installation is not availability on a peer; observational status is not a drain receipt; discovery never replaces consumer epoch authority. |
 | Binding internals | Backing `release_owned`, registration `exclusively_held` and `shm_backing_name` are `#[doc(hidden)]`, outside the stability promise. The Python packaging crate pins the core to the exact same release because it uses these helpers. |
-| Names | `NvlinkStats` matches `Transport::Nvlink`; `MemoryBacking` is the actual retained owner enum. `MemType` is deliberately TENT's topology name, distinct from registration `MemoryType`: frozen [`Topology::MemType`](https://github.com/OrbitInfra/Mooncake/blob/e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c/mooncake-transfer-engine/tent/include/tent/runtime/topology.h#L55). `TentSettings`, `from_tent_*`, `tent_id` and `ReceiverCreditUpdateV1` retain their compatibility names. |
+| Names | `NvlinkStats` matches `Transport::Nvlink`; `MemoryBacking` is the actual retained owner enum. `TopologyMemoryKind` describes topology entries and is distinct from registration `MemoryType`. Public TENT settings and transport-ID conversions are removed. `ReceiverCreditUpdateV1` names OrbiTE's credit-update schema. |
 | Adaptive core | The callable `rdma-adaptive` module is `#[doc(hidden)]`, unstable and outside this freeze. It has no engine integration or consumer. Crate-private visibility creates dead-code/unused-import warnings; hiding the reference core preserves its tests without suppressing those lints. |
 | Documentation | Missing docs are not a beta freeze blocker: adding documentation is non-breaking. The release-readiness audit found 668 all-feature Linux diagnostics. Before `0.1.0`, close the remaining findings and promote the CI audit to `-D missing-docs`, as required by the [release ladder](completion-plan.md#release-ladder). Ownership, receipts, epochs and units are documented at their affected entry points. |
 | Native binding types | The deliberate cudarc stream coupling and raw owner-backed alternative below remain. GPU signatures are frozen candidates even though installed profiles remain unqualified. |
@@ -94,36 +94,46 @@ order.
 default) and owns requester and source admission. Configuration is immutable per
 engine. `engine.config()` borrows its effective settings.
 
-### Loading TENT configuration
+### Configuration loading
 
 ```rust
 use orbite::{EngineConfig, TransferEngine};
 
 fn open_engine() -> orbite::Result<TransferEngine> {
-    TransferEngine::new(EngineConfig::from_tent_env()?)
+    TransferEngine::new(EngineConfig::from_env()?)
 }
 ```
 
-Use `EngineConfig::from_tent_json(text)` or `from_tent_file(path)` to supply
-constructor settings. A nonempty `MC_TENT_CONF` replaces that document with
-the contents of an existing file or with inline JSON. Legacy environment
-aliases then override individual leaves. Explicit constructor metadata type,
-servers, segment name, RPC hostname and port, and RDMA whitelist win over
-both sources. An explicit true `transports/force_tcp` also survives
-replacement. The presence of `MC_FORCE_TCP` forces memory traffic onto TCP,
-including when its value is empty or `0`. `NCCL_IB_GID_INDEX` wins over
-`MC_GID_INDEX`. NIC filters accept trimmed comma-separated names. Boolean
-aliases accept `1/0`, `true/false`, `yes/no` and `on/off` without regard to
-case. An invalid legacy boolean retains the configured leaf and logs a warning.
-For metrics, a JSON leaf wins over its environment alias.
+`EngineConfig::from_json(text)` and `from_file(path)` take explicit input and
+ignore the environment. `from_env()` reads only `ORBITE_CONF`, containing either
+inline JSON or a regular UTF-8 file path; absent means typed defaults. Engine
+construction never rereads it. Reuse a snapshot after changing or deleting its
+input file. No loader mutates the process environment.
 
-Nested objects take precedence over full slash keys at the root. The loader
-rejects malformed roots, duplicate keys, unsupported fields and out-of-range
-values before starting an engine. Each input document is limited to 1 MiB.
-You can reuse the returned configuration after deleting the file. Ordinary
-typed construction retains the existing subsystem environment switches.
-The [configuration inventory](https://github.com/OrbitInfra/OrbiTE/blob/main/tests/reference/inventory/config.tsv)
-lists the owner or rejection for each field.
+The root uses the typed `EngineConfig` field names. Transport fields may instead
+be grouped under `transports`; a field cannot appear in both places. Provider
+records use their typed field names and defaults. An optional provider object
+opts in; `null` disables it. `hp_tcp.enable` and `shm.enable` remain explicit.
+Duration fields have an `_us` suffix and take integer microseconds; fields already
+naming a unit, such as `connect_timeout_ms`, retain that unit. Other sizes are
+bytes except explicitly named KiB settings. Selector rules and QoS contracts
+live under `selector` and `qos`; receiver budgets under `receiver_credit`.
+
+```json
+{
+  "bind_addr": "127.0.0.1:0",
+  "handler_timeout_us": 5000000,
+  "transports": {"tcp": true, "shm": {"enable": false}},
+  "selector": {"policy": [{"name": "host", "segment_type": "memory", "transports": ["tcp"]}]}
+}
+```
+
+Unknown keys, duplicate keys, wrong types, malformed roots and out-of-range
+values fail before an engine starts. Documents are bounded to 1 MiB and files
+must be regular files. Removed metadata keys and legacy aliases are unknown
+fields. Legacy environment variables have no effect; provider-runtime variables
+such as `FI_PROVIDER` remain the provider's responsibility. Native fields require
+their build feature. Typed Rust construction stays the primary interface.
 
 | API | Contract |
 | --- | --- |
@@ -149,7 +159,7 @@ exhausted; see the
 | `EngineConfig::qos`, `QosConfig::from_json(_file)` | Global/tenant/intent contracts; `resolve_qos` returns a reusable `EffectiveQosPolicy` | [QoS](async-batches.md#qos-contracts), [actions](async-batches.md#qos-admission-actions) |
 | `EngineConfig::max_receiver_credit_sessions` | Sender credit gating; `activate`/`apply`/`deactivate_receiver_credit` for manual grants | [Credits](async-batches.md#receiver-credit-gating) |
 | `EngineConfig::receiver_credit` | Receiver-side issuer; `connect`/`disconnect_receiver_credit` for automatic windows | [Automatic windows](async-batches.md#automatic-receiver-windows) |
-| `EngineConfig::selector`, `TransportSelectorConfig::from_json` | Ordered transport selection rules (TENT's `policy` array) | [Selection](transport-selection.md) |
+| `EngineConfig::selector`, `TransportSelectorConfig::from_json` | Ordered transport selection rules (`selector.policy`) | [Selection](transport-selection.md) |
 
 `EffectiveQosPolicy::fields()`, `effective_priority()` and `usage()` explain a
 resolved policy and sample its budget.
@@ -217,13 +227,9 @@ For example, OrbitKV maintains its own etcd membership and passes
 P2P handshake supplies descriptors, capabilities and registration keys for
 that identity; it does not discover cluster members.
 
-Only `metadata_type: "p2p"` is supported. The TENT loader recognizes and
-rejects other metadata types and `etcd://`, `redis://`, `http://` and
-`https://` server URIs after configuration precedence, with an
-`Error::TentConfig` directing the caller to publish endpoint and epoch.
-This applies to file/inline `MC_TENT_CONF`, legacy overrides, the public
-`from_tent_*` loaders and the Python constructor. No Redis credentials are
-read. External stores are out of scope, not deferred providers.
+There are no metadata-server configuration keys. Unknown keys fail with
+`Error::Config`; no metastore URI or credential is resolved. The same immutable
+loader serves Rust and Python.
 
 When membership says a peer left, call
 `engine.close_segment(endpoint, expected_epoch, timeout)`. It immediately fences
@@ -259,7 +265,7 @@ and `retired_peer_segments` partition that count by admission state.
 failed cleanup. `reclaimed_peer_segments` is the cumulative reclaimed-entry
 count, and `active_peer_operations` counts outstanding admission permits. These
 counters are observations, not release receipts. Dropping a descriptor or calling the
-TENT-shaped Python `close_segment` still only closes a handle: TENT permits reopening
+Python `RemoteSegment.close()` only closes that handle; reopening
 the same live source. The stronger Rust operation deliberately remains separate.
 
 For a local file, `open_file_segment` takes a `file://` name and a permission;

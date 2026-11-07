@@ -8,7 +8,7 @@ use std::io::Read;
 use serde::de::{self, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 
-use super::{DEVICE_PRIORITY_RANKS, MemEntry, MemType, Topology};
+use super::{DEVICE_PRIORITY_RANKS, MemEntry, Topology, TopologyMemoryKind};
 use crate::transport::rdma::RdmaConfig;
 use crate::{Error, Result};
 
@@ -86,10 +86,6 @@ impl<'de> Deserialize<'de> for PriorityMatrix {
 }
 
 impl Topology {
-    pub(crate) fn check_matrix_shape(value: &serde_json::Value) -> bool {
-        serde_json::from_value::<PriorityMatrix>(value.clone()).is_ok()
-    }
-
     pub(crate) fn load_from_config(&mut self, config: &RdmaConfig) -> Result<()> {
         let rows = if let Some(json) = &config.priority_matrix {
             check_size(json)?;
@@ -114,7 +110,7 @@ impl Topology {
             memory.push(MemEntry {
                 name: "*".into(),
                 pci_bus_id: None,
-                kind: MemType::Host,
+                kind: TopologyMemoryKind::Host,
                 numa_node: None,
                 device_list: Default::default(),
             });
@@ -137,9 +133,9 @@ impl Topology {
             ))
     }
 
-    fn memory_kind(&self, name: &str) -> Result<MemType> {
+    fn memory_kind(&self, name: &str) -> Result<TopologyMemoryKind> {
         if name == "*" {
-            return Ok(MemType::Host);
+            return Ok(TopologyMemoryKind::Host);
         }
         self.mem_list
             .iter()
@@ -202,8 +198,8 @@ impl Topology {
         for memory in input.mems {
             let kind = self.memory_kind(&memory.name)?;
             let expected = match kind {
-                MemType::Host => 0,
-                MemType::Cuda => 1,
+                TopologyMemoryKind::Host => 0,
+                TopologyMemoryKind::Cuda => 1,
             };
             if memory
                 .kind

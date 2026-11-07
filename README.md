@@ -18,6 +18,8 @@
 
 ## Overview
 
+OrbiTE is an independent transfer engine whose design follows Mooncake TENT; it is not wire-, API- or configuration-compatible with TENT.
+
 OrbiTE is the KV data plane for LLM inference on NVIDIA. It moves KV between
 GPUs, DRAM, local SSD and peer hosts with two guarantees: memory, registrations
 and staging are never released before the hardware provably stops accessing

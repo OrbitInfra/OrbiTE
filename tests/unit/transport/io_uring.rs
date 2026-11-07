@@ -194,10 +194,10 @@ fn real_files_move_full_bytes_on_ext4_and_tmpfs() -> Result<()> {
         #[cfg(feature = "metrics")]
         {
             let p = f.engine.metrics().unwrap().prometheus();
-            assert!(!p.contains("tent_registered_buffer_bytes{transport=\"io_uring\"}"));
+            assert!(!p.contains("orbite_registered_buffer_bytes{transport=\"io_uring\"}"));
             for op in ["read", "write"] {
                 assert!(p.contains(&format!(
-                    "tent_{op}_bytes_total{{transport=\"io_uring\"}} 8223"
+                    "orbite_{op}_bytes_total{{transport=\"io_uring\"}} 8223"
                 )));
             }
         }
@@ -246,9 +246,9 @@ fn truncation_reports_short_and_eof_per_cqe_with_exact_copyback() -> Result<()> 
     #[cfg(feature = "metrics")]
     {
         let m = f.engine.metrics().unwrap();
-        assert_eq!(m.json()["tent_read_failures_total"], 2);
-        assert_eq!(m.json()["tent_read_bytes_total"], 2);
-        assert_eq!(m.json()["tent_read_requests_total"], 3);
+        assert_eq!(m.json()["orbite_read_failures_total"], 2);
+        assert_eq!(m.json()["orbite_read_bytes_total"], 2);
+        assert_eq!(m.json()["orbite_read_requests_total"], 3);
     }
     let tasks = batch.task_statuses()?;
     assert_eq!(
@@ -1248,53 +1248,26 @@ fn r1c_freed_file_batch_keeps_its_slot_until_the_consumed_cqe() -> Result<()> {
 }
 
 #[test]
-fn r1c_storage_environment_overrides_only_the_enabled_file_pool() -> Result<()> {
-    const CHILD: &str = "ORBITE_TEST_FILE_POOL_ENV";
-    if std::env::var_os(CHILD).is_some() {
-        let e = TransferEngine::new(EngineConfig::default())?;
-        if kernel() {
-            let s = e.stats()?.io_uring.unwrap();
-            assert_eq!(
-                (s.slot_bytes, s.slots, s.active_slots, s.slot_acquisitions),
-                (8192, 3, 0, 0)
-            );
-        }
-        return Ok(());
-    }
-    let enabled = IoUringConfig {
-        pinned_staging: true,
-        ..Default::default()
-    };
-    for val in ["On", "YES", "true", "1", "unknown"] {
-        assert!(
-            enabled
-                .resolve(|k| (k == "MC_IOURING_PINNED_STAGING").then(|| val.into()))?
-                .pinned_staging
+fn configured_pool_is_bounded_and_remains_lazy() -> Result<()> {
+    let config = EngineConfig::from_json(
+        r#"{"io_uring":{"pinned_staging":true,"staging_slot_kb":5,"staging_slots":3}}"#,
+    )?;
+    let e = TransferEngine::new(config)?;
+    if kernel() {
+        let s = e.stats()?.io_uring.unwrap();
+        assert_eq!(
+            (s.slot_bytes, s.slots, s.active_slots, s.slot_acquisitions),
+            (8192, 3, 0, 0)
         );
     }
-    for val in ["OFF", "no", "FALSE", "0"] {
+    for value in ["-7", "0", "4294967295"] {
         assert!(
-            !enabled
-                .resolve(|k| Some(
-                    if k == "MC_IOURING_PINNED_STAGING" {
-                        val
-                    } else {
-                        "invalid"
-                    }
-                    .into()
-                ))?
-                .pinned_staging
+            EngineConfig::from_json(&format!(
+                r#"{{"io_uring":{{"pinned_staging":true,"staging_slots":{value}}}}}"#
+            ))
+            .is_err()
         );
     }
-    for key in ["MC_IOURING_STAGING_SLOT_KB", "MC_IOURING_STAGING_SLOTS"] {
-        assert!(
-            matches!(enabled.resolve(|k|(k==key).then(||"-7".into())),Err(Error::InvalidConfig(k)) if k==key)
-        );
-    }
-    let status=std::process::Command::new(std::env::current_exe()?)
-        .args(["--exact","transport::io_uring::tests::r1c_storage_environment_overrides_only_the_enabled_file_pool"])
-        .env(CHILD,"1").env("MC_IOURING_PINNED_STAGING","1").env("MC_IOURING_STAGING_SLOT_KB","5").env("MC_IOURING_STAGING_SLOTS","3").status()?;
-    assert!(status.success());
     Ok(())
 }
 

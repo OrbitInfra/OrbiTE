@@ -1,266 +1,132 @@
-# Python API
+# Python
 
-The `orbite` distribution exposes the Mooncake v0.3.14 TENT Python API through
-OrbiTE's Rust owners. It targets CPython 3.10–3.14 on Linux x86_64 and aarch64.
-The `0.1.0-beta.1` surface follows the maintainer-approved freeze decisions.
-Wheels are built for review in CI; publishing to PyPI is the maintainer's action.
+The `orbite` package is a thin PEP 8 binding to OrbiTE's Rust owners. It is
+independent of Mooncake's Python API; there is no `tent` or `mooncake.engine`
+alias. Rust remains the primary interface.
 
-## Build and install
+## Install and configure
 
-```bash
-python -m pip install 'maturin==1.10.2' 'patchelf==0.17.2.4'
-python -m maturin build --release --locked --out /tmp/orbite-wheels
-python -m pip install /tmp/orbite-wheels/*.whl
-```
-
-The default wheel contains the CPU transports. To build with native features,
-pass `--features pyo3/extension-module,rdma,cuda,io-uring,gds,metrics,rdma-adaptive`
-to maturin, after installing the [native prerequisites](build.md).
-A compiled provider still needs its runtime library and hardware. Building a
-combined wheel does not qualify any GPU or RDMA profile.
-
-The wheel imports as `orbite`. Frozen Mooncake's wheel stages the extension at
-`mooncake.tent`; its standalone build/tests also use top-level `tent`. OrbiTE
-installs neither alias, so the distributions can coexist. A TENT application
-can explicitly use `import orbite as tent`.
-
-## Transfers
-
-Construct with no arguments to apply `MC_TENT_CONF` and the legacy environment,
-or pass a configuration file path. Both use the immutable
-[TENT configuration loader](rust-api.md#loading-tent-configuration). No environment
-variable is changed to construct an engine. External metadata types and
-etcd/Redis/HTTP URLs raise `TentException` with the same endpoint/epoch migration
-guidance as Rust; server URIs are not included in the diagnostic.
+Wheels target CPython 3.10–3.14 on Linux x86_64 and aarch64. The maintainer
+publishes releases; CI builds installable review artifacts. Python beta.1 is
+`0.1.0b1`.
 
 ```python
-import orbite as tent
+import orbite
 
-source = tent.TransferEngine("source.json")
-requester = tent.TransferEngine("requester.json")
-source_bytes = bytearray(b"source bytes")
-destination = bytearray(len(source_bytes))
-source_address = source.register_buffer(source_bytes)
-local_address = requester.register_buffer(destination)
-peer = requester.open_segment(source.get_segment_name())
-
-with requester.allocate_batch_guard(1) as batch:
-    request = tent.Request(
-        tent.READ, local_address, peer, source_address, len(destination),
-        transport_hint=tent.TCP,
-    )
-    requester.submit_transfer(batch, [request])
-    result = requester.wait(batch, timeout=5.0)
-    assert result.state == tent.COMPLETED
-    assert destination == source_bytes
-
-requester.unregister_local_memory(local_address)
-source.unregister_local_memory(source_address)
-requester.close()
-source.close()
+config = orbite.EngineConfig.from_json('{"bind_addr":"127.0.0.1:0","tcp":true}')
+engine = orbite.TransferEngine(config)
 ```
 
-For loopback, each file can contain:
+`EngineConfig(**settings)` and `from_json(text)` use the
+[OrbiTE JSON format](rust-api.md#configuration-loading). `from_file(path)`
+reads a bounded JSON file; `from_env()` reads only `ORBITE_CONF`, containing
+inline JSON or a file path. `TransferEngine()` captures that environment
+configuration once. Passing a config bypasses the environment. Unknown fields,
+wrong types and metadata-server options are errors. The snapshot is immutable.
 
-```json
-{
-  "metadata_type": "p2p",
-  "rpc_server_hostname": "127.0.0.1",
-  "rpc_server_port": 0,
-  "transports": {
-    "tcp": {"enable": true},
-    "hp_tcp": {"enable": false},
-    "rdma": {"enable": false},
-    "shm": {"enable": false}
-  }
-}
+## Registered buffers and remote segments
+
+Consumers publish `endpoint()` and `source_epoch()` in their own registry.
+Use that authoritative epoch when opening a peer; an endpoint alone does not
+identify a source incarnation. No discovery or external metadata service is
+part of OrbiTE.
+
+```python
+with orbite.TransferEngine(config) as source, orbite.TransferEngine(config) as client:
+    src, dst = bytearray(b"hello"), bytearray(5)
+    with source.register_buffer(src) as remote, client.register_buffer(dst) as local:
+        with client.open_segment(source.endpoint(), source.source_epoch()) as peer:
+            with client.allocate_batch(1) as batch:
+                batch.submit(orbite.TransferOp.READ, peer, [
+                    orbite.TransferRequest(local.address, remote.address, 5,
+                                           transport=orbite.Transport.TCP)
+                ])
+                task, = batch.wait(5.0)
+                assert task.state == orbite.TaskState.COMPLETED
+                assert task.locally_drained and dst == src
 ```
 
-The frozen `open_segment(name)` signature pins the first observed epoch for
-that handle. Only trust a source endpoint supplied by
-the consumer's authority. `close_segment(handle)` invalidates that handle;
-it is not membership retirement or a drain receipt. See the
-[discovery boundary](rust-api.md#discovery-boundary) for the Rust API that accepts
-an authoritative epoch and retires an endpoint/epoch identity.
+`register_buffer(owner)` acquires and retains a writable contiguous buffer
+export. `register_memory(address, length, owner=owner)` registers a subrange
+of a retained exporter; a bare foreign integer is rejected. Engine-allocated
+`Memory` can also be registered by address. `register_memory_ranges(ranges,
+owners=...)` validates the whole bounded list before registration. Close
+related aliases together with `unregister_memory_ranges(registrations)`.
+
+CUDA exporters use `__cuda_array_interface__` v2/v3 or
+`__dlpack__` plus `__dlpack_device__`. The driver validates the whole exported
+extent, pointer and device; Python claims alone are insufficient. Read-only,
+noncontiguous, out-of-range and wrong-device exports fail. CAI v3's stream and
+DLPack's producer handoff establish readiness. The Python owner and consumed
+capsule remain retained through drain, aliases and quarantine. A CPU wheel
+reports `UnavailableError` before requesting a CUDA capsule.
+
+```python
+registration = engine.register_memory(tensor.data_ptr(), tensor.nbytes, owner=tensor)
+```
+
+## Batches, notifications and files
+
+`Batch.submit(operation, target, requests, notification=None)` enqueues through
+the Rust admission, selector and physical-owner paths. Requests carry a local
+address, remote address (file offset for a file target), length, transport,
+priority, optional policy name, absolute monotonic `deadline_ns` and intent.
+`tasks()` observes; `progress()` advances a bounded step; `wait(timeout)`
+waits with the timeout in seconds. `cancel(task_index)` cancels queued work;
+running work still drains. A terminal result and physical quiescence are
+separate: inspect `locally_drained` and `failure.remote_effect`.
+
+`send_notification(peer, Notification(name, message))` and
+`receive_notifications()` use bounded native queues. A `None` peer delivers
+locally. File operations use `open_file_segment(path, permission)` and the same
+batch methods with `Transport.IO_URING` or `Transport.GDS`. Providers must be
+built and enabled. `FileSegment.info()` reports the extent; close drains file
+I/O. `stats()` returns a read-only snapshot of engine counters and charges.
 
 ## Surface and defaults
 
-This section and the inventory define the beta.1 Python surface. The additive
-helpers are ratified, including retained buffer registration, explicit progress,
-wait/drain and terminal-result inspection. Reversible `close_segment(handle)`
-is also ratified as-is. Per-peer retirement may be added later when a Python
-consumer needs it; it is not implied by closing a segment handle. The
-installed-wheel check retains every frozen declaration and rejects accidental
-top-level helper exports. `dataclass`, `field`, `IntEnum`, `operator` and
-`ClassVar` are now private imports; none was in the TENT inventory. `_native`,
-`_Engine`, underscore-prefixed helpers and implementation slots are private.
-
-All six enums and their values are exported both through their enum classes
-and at module scope, alongside `LOCAL_SEGMENT_ID`, `kWildcardLocation` and the
-three `PRIO_*` constants. The [binding inventory](https://github.com/OrbitInfra/OrbiTE/blob/main/tests/reference/inventory/python.tsv)
-maps 128 surface rows, covering 132 declarations including overloads, to the
-installed-wheel controls. Its source checker compares the frozen binding.
-
-| Surface | Contract |
+| Surface | Public names |
 | --- | --- |
-| `Notification` | Mutable `name`, `msg`; empty constructor or `(name, msg)` |
-| `Request` | Mutable opcode, source, target ID/offset, length, priority, hint, policy name, deadline and intent. Priority defaults to high, hint/intent to unspecified, policy to `None`, deadline to zero. |
-| `TransferStatus` | Mutable `state`, `bytes`; each task keeps its own result |
-| `SegmentInfoBuffer`, `SegmentInfo` | Mutable base/length/location and type/buffer list |
-| `MemoryOptions` | Location `"*"`, global read/write, unspecified transport, empty SHM path, zero SHM offset, `internal=False` |
-| `MemoryGuard` | `address()`, `size()`, context entry returns address; exit requests a safe release |
-| `BatchGuard` | `id()`, idempotent `release()`, context entry returns batch ID; exit delegates pending owners to deferred retirement |
-| `TransferEngine` | Both constructors; introspection, segment, basic/advanced/bulk memory, batches, both notification submit overloads, cancellation, notifications and all status queries |
+| Construction | `EngineConfig`, `TransferEngine` |
+| Retained owners / context managers | `Memory`, `RegisteredMemory`, `RemoteSegment`, `FileSegment`, `Batch` |
+| Requests and results | `TransferRequest`, `TaskStatus`, `TransferFailure`, `Notification`, `MemoryOptions` |
+| Enums | `TransferOp`, `Transport`, `Permission`, `Priority`, `IntentType`, `TaskState` |
+| Exceptions | `Error` and one `<RustVariant>Error` subclass per native error variant |
 
-The six enums are `OpCode`, `TransferStatusEnum`, `Permission`, `TransportType`,
-`IntentType` and `SegmentInfoType`; the inventory fixes every value and default.
-The engine methods in the freeze candidate are:
+Defaults come from Rust's typed configuration. Requests default to `UNSPEC`,
+high priority, unspecified intent and no deadline or named policy.
+`MemoryOptions` defaults to any local location, read/write permission and
+automatic transport selection. Only implemented OrbiTE transport identities
+are exported; a compiled-out provider raises a typed unavailable error.
 
-| Group | Methods |
-| --- | --- |
-| Identity and segments | `available`, `get_segment_name`, `get_rpc_server_address`, `get_rpc_server_port`, `get_local_topology`, `export_local_segment`, `import_remote_segment`, `open_segment`, `close_segment`, `get_segment_info` |
-| Memory | `allocate_local_memory`, `allocate_local_memory_ex`, `free_local_memory`, `allocate_memory_guard`, `allocate_memory_guard_ex`, `register_local_memory`, `register_local_memory_ex`, `register_local_memory_batch`, `register_local_memory_batch_ex`, `unregister_local_memory`, `unregister_local_memory_batch` |
-| Batches and notifications | `allocate_transfer_batch`, `free_transfer_batch`, `allocate_batch_guard`, `submit_transfer`, `submit_transfer_notif`, `cancel_transfer`, `send_notifi`, `recv_notifi`, `get_transfer_status`, `get_transfer_status_list`, `get_transfer_status_overall` |
-| OrbiTE additions | `register_buffer`, retained `owner=`/`owners=` arguments, `progress_batch`, `wait`, `terminal_result`, `close` |
+All blocking native calls detach the GIL behind a panic barrier. Exceptions
+derive from `orbite.Error`, including `ConfigError`, `PermissionDeniedError`,
+`EpochMismatchError`, `ResourceExhaustedError`, `TimeoutError` and
+`UnquiescedError`. Python argument/type errors retain normal Python exceptions.
+Task failures retain their independent byte prefixes and remote-effect status.
 
-Names such as `TentException`, `send_notifi`, `kWildcardLocation`, `Request.source`
-and `MemoryOptions.type` intentionally match `mooncake.tent` and stay unchanged.
-There is no classic `mooncake.engine` shim. The additive helpers and the
-reversible segment-handle close are part of the beta.1 surface. There is no
-Python per-peer retirement method with an authoritative epoch today; a later
-consumer can request it as an additive API. Most wrapper methods rely on this
-guide and the inventory rather than individual `help()` docstrings. Documentation
-can be added without breaking the frozen surface. No unsupported method is made
-silently successful to satisfy the inventory.
-
-Data records also accept keyword field initializers. Policy, intent, priority,
-transport hint and absolute monotonic `deadline_ns` reach the same compiled
-selector and physical owners as Rust. `export_local_segment` and
-`import_remote_segment` raise `NotImplementedError`, as the frozen engine does.
-Excluded transports retain their enum values and report unavailable.
-
-Errors follow TENT's exception hierarchy under `TentException`, including
-`InvalidArgumentError`, `AddressNotRegisteredError`, `DeviceNotFoundError`,
-`InvalidEntryError`, `RdmaError`, `CudaError`, `MetadataError`, `RpcServiceError`,
-`InternalError` and `NotImplementedError`. Resource exhaustion, malformed config,
-and unknown effect use `InternalError`, matching TENT's default mapping. Messages
-include the native status code. Rust panic barriers return `InternalError`.
-
-## Buffer and guard lifetimes
-
-An integer address from `allocate_local_memory` or a memory guard has an engine
-owner. For foreign host storage, use `register_buffer(buffer)` or retain an
-exporter explicitly:
-
-```python
-engine.register_local_memory(address, size, owner=writable_buffer)
-engine.register_local_memory_batch(addresses, sizes, owners=buffers)
-```
-
-The `owner` argument is also available on `register_local_memory_ex`, and
-`owners` on its batch counterpart. The exporter must be writable, C-contiguous
-and nonempty, and must contain the entire requested range. A retained host
-memoryview prevents resizing and follows the actual backing through aliases and
-quarantine. Bare foreign addresses and read-only exporters are rejected. Unlike
-frozen TENT's unchecked integer-pointer registration, dropping the caller's last
-reference cannot free submitted storage. Do not read or mutate it concurrently
-with native I/O.
-
-### CUDA exporters
-
-A CUDA-feature wheel accepts retained CUDA Array Interface v2/v3 or DLPack
-exporters, including a PyTorch GPU KV-cache tensor:
-
-```python
-engine.register_local_memory(t.data_ptr(), t.nbytes, owner=t)
-engine.register_local_memory_batch(
-    [a.data_ptr(), b.data_ptr()], [a.nbytes, b.nbytes], owners=[a, b],
-)
-# Submit and drain using the same Request/BatchGuard API above.
-engine.unregister_local_memory(t.data_ptr())
-```
-
-This is the migration from raw `tensor.data_ptr()` registration. Retainable
-owners are mandatory for foreign addresses; engine-owned allocation addresses
-keep their existing API. `register_buffer(exporter)` also accepts these CUDA
-protocols and returns the checked base address. A CPU wheel raises a clear
-`NotImplementedError` before requesting a GPU capsule.
-
-The engine checks shape, byte extent, contiguity, writable access and the
-requested subrange, then uses CUDA pointer attributes and allocation bounds to
-verify the full export and actual device. A claimed device must match the driver.
-The [CUDA Array Interface](https://nvidia.github.io/numba-cuda/user/cuda_array_interface.html)
-read-only flag is honored. Masked, strided, empty and overflowing exports are
-rejected. Its producer stream is captured as an event in the allocation's context;
-the caller's exact context is restored. With v2 or `stream=None`, the producer
-must already have made the exported bytes ready, as that protocol requires.
-
-[DLPack](https://dmlc.github.io/dlpack/latest/python_spec.html) negotiates a
-zero-copy export with `max_version=(1, 0)` and the device's legacy default stream;
-older producers that lack that keyword use the legacy capsule protocol. The
-engine consumes each capsule once and retains its managed tensor, deleter and
-Python owner. Versioned read-only or copied exports, unsupported versions and
-sub-byte dtypes are rejected. The managed tensor's deleter runs once under the
-GIL only after its native owners release it. A producer must provide a valid
-interchange capsule and keep the exported allocation and context stable.
-
-Each retained export lease, including duplicate registrations, counts against
-`max_registered_regions`; aliases cannot create an unbounded capsule list. Idle
-staging buffers and idle private copy/producer events are released before
-unregister acknowledges a foreign export, while its registration charge remains
-held. Their context cache cannot indefinitely pin a retired tensor. Active copies
-and uncertain cleanup still keep the exporter and charges. Unregister can report
-resource exhaustion while another alias or admitted operation is draining; this
-is not permission to reuse the memory. CPU objects that also implement DLPack
-still use the writable buffer protocol. CPU tensor-only protocols are not added.
-
-CUDA export controls use a CPU driver shim through the installed wheel. Python
-GPU is **Implemented; installed profile unqualified** until the
-{ref}`packaged GPU gate <queue-python-cuda>` runs.
-
-Registrations and allocation charges outlive a busy memory guard. After
-unregister obtains physical drain, deferred guard frees are reaped; engine close
-also drains them. A pending batch guard delegates to the existing batch owner.
-Neither a guard exit, cancellation, timeout nor terminal status is permission to
-free externally managed memory. Failed native cleanup retains the ABI slot,
-exporter, registrations and charges, and never retries an uncertain destroy.
-Repeated explicit close returns the saved cleanup error.
-At interpreter finalization, a slot that cannot safely enter Python is retained.
-
-Every native call releases the GIL before acquiring engine locks, waiting or
-performing I/O. Python argument conversion and buffer export happen while the
-GIL is held. One batch's wait does not hold its lock while sleeping, so another
-thread can query or cancel it.
-
-Additive helpers are `progress_batch(batch)`, `wait(batch, timeout)`,
-`terminal_result(batch, task_id=None)` and `close()`. `wait` requires both terminal
-tasks and physical drain, without sealing the batch; a timeout retains ownership.
-`terminal_result` returns `(native_status, effect_known)` and is observational
-only, never a drain receipt or replay permission. Cancellation of already-posted
-TCP work reports unavailable; queued cancellation prevents payload submission.
+Context exit invokes explicit close and surfaces errors. Dropping an unfinished
+batch defers retirement; dropping an allocation cannot free memory used by a
+registration or operation. A failed native cleanup retains owners and charges
+and is never retried as a destroy. Timeout, cancellation and dropped Python
+objects are not release receipts. Explicit unregister can report
+`ResourceExhaustedError` while a native owner still holds the range.
+`RemoteSegment.close()` releases that handle, not the peer identity; Rust's
+per-peer retirement API remains available to Rust consumers.
 
 ## Packaging and evidence
 
-PyO3 `0.27.2` is a semver-compatible minimum in the Python-only
-`crates/orbite-python` packaging crate; Cargo.lock fixes the tested graph.
-Its bounded engine, memory, segment and batch owners retain the existing Python
-behavior without C exports, C++ adapters or a plugin loader. The extension
-remains `orbite._native`. Rust-only builds do not compile or load Python.
-Maturin uses `>=1.10.2,<2`; CI fixes the build tool at 1.10.2.
-The binding pins `orbite` to its exact release because hidden owner helpers are
-compatible only within that release. Both Cargo packages inherit `0.1.0-beta.1`
-from the workspace version. The
-dynamic version in `pyproject.toml` reads the binding crate's Cargo metadata;
-Python normalizes it to `0.1.0b1`. CI checks filenames and embedded wheel/sdist
-metadata, rebuilds a wheel from the sdist and checks the installed version.
+The Python-only crate uses PyO3 and maturin. A CPython-specific wheel rather
+than abi3 preserves buffer protocol and CUDA exporter support across the tested
+interpreters. Its exact core dependency pin keeps hidden owner helpers within
+one release; other shared dependencies follow the repository's semver policy.
+There is no independent coordinator in the binding.
 
-Version-specific wheels preserve the buffer API on CPython 3.10. PyO3's
-[stable ABI buffer support starts at 3.11](https://pyo3.rs/v0.27.2/building-and-distribution.html#missing-features),
-so a single `abi3-py310` wheel would not provide the required ownership API.
-The wheel matrix uses regular CPython builds, not free-threaded interpreters.
-
-[Installed-wheel CI](qualification.md#python-wheels) covers both CPU and combined
-feature wheels on both Rust toolchains and both Linux architectures. Tests run
-with isolated imports outside the source package, move guarded bytes between
-processes, hold real TCP replies for GIL/lifetime controls and rebuild a wheel
-from the source distribution. These checks qualify only the declared CPU profile.
+The installed-wheel controls check real two-process TCP bytes and guards,
+file segments, policy/intent/priority/deadline routing, exceptions, notifications,
+GIL release, queued cancel and exporter retention under timeout and early drop.
+The combined wheel runs CUDA exporter controls through a CPU driver shim.
+The sdist is rebuilt, installed and tested separately. See
+[qualification](qualification.md#python-wheels) for exact CI evidence.
+Python GPU remains **Implemented; installed profile unqualified**; its
+[installed gate](qualification.md#verification-queue) is written but unrun.

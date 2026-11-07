@@ -243,11 +243,11 @@ fn queued_cancellation_timeout_and_oversize_have_no_io_and_partial_cancel_keeps_
                 crate::TaskState::Cancelled
             );
             let s = m.json();
-            assert_eq!(s["tent_logical_requests_started_total"], 2);
-            assert_eq!(s["tent_logical_request_outcomes_total"], 2);
-            assert_eq!(s["tent_transport_attempts_total"], 0);
+            assert_eq!(s["orbite_logical_requests_started_total"], 2);
+            assert_eq!(s["orbite_logical_request_outcomes_total"], 2);
+            assert_eq!(s["orbite_transport_attempts_total"], 0);
             assert!(m.prometheus().contains(
-                r#"tent_logical_request_outcomes_total{operation="write",outcome="canceled"} 2"#
+                r#"orbite_logical_request_outcomes_total{operation="write",outcome="canceled"} 2"#
             ));
         }
     }

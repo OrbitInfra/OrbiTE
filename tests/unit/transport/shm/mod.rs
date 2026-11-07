@@ -896,7 +896,7 @@ fn shm_counts_bytes_on_its_own_transport_label() -> Result<()> {
         dst.metrics()
             .unwrap()
             .prometheus()
-            .contains("tent_write_bytes_total{transport=\"shm\"} 8")
+            .contains("orbite_write_bytes_total{transport=\"shm\"} 8")
     );
     assert_eq!(bytes(&remote), [0, 3, 3, 3, 3, 3, 3, 3, 3, 0]);
     Ok(())

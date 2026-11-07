@@ -35,7 +35,7 @@ pub(crate) use metadata::SegmentMetadata;
 use crate::{Error, MemoryType, Permission, Result};
 
 /// Random source-instance identity, not an authentication credential.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Deserialize)]
 pub struct SourceEpoch(pub(crate) [u8; 16]);
 
 impl SourceEpoch {
@@ -111,7 +111,7 @@ impl RegionProfile {
     }
     pub(crate) const SIZE: usize = 5;
     pub(crate) fn encode(self, dst: &mut [u8]) {
-        dst[0] = self.route.tent_id();
+        dst[0] = self.route.wire_id();
         dst[1..5].copy_from_slice(&self.node.unwrap_or(u32::MAX).to_be_bytes());
     }
     pub(crate) fn decode(src: &[u8]) -> Result<Self> {
@@ -120,7 +120,7 @@ impl RegionProfile {
         };
         let index = u32::from_be_bytes([a, b, c, d]);
         Ok(Self {
-            route: crate::Transport::from_tent_id(route)
+            route: crate::Transport::from_wire_id(route)
                 .ok_or(Error::Protocol("unknown registration transport"))?,
             node: (index != u32::MAX).then_some(index),
         })

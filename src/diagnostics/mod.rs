@@ -1,4 +1,4 @@
-//! Offline TENT diagnostics. The version collector reads compile-time facts only.
+//! Offline build diagnostics. The version collector reads compile-time facts only.
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fmt::Write};
 
@@ -52,16 +52,15 @@ pub fn version_snapshot() -> Snapshot {
             compiler: env!("ORBITE_BUILD_COMPILER").into(),
             build_type: env!("ORBITE_BUILD_PROFILE").into(),
             features: [
-                ("tent", true),
-                ("ascend", false),
-                ("ascend_direct", false),
-                ("hip", false),
-                ("sunrise", false),
-                ("tpu", false),
+                ("tcp", true),
+                ("hp_tcp", true),
+                ("shm", cfg!(target_os = "linux")),
+                ("nvlink", cfg!(feature = "cuda")),
+                ("mnnvl", cfg!(feature = "cuda")),
                 ("cuda", cfg!(feature = "cuda")),
                 ("rdma", cfg!(feature = "rdma")),
                 ("fabric", cfg!(feature = "fabric")),
-                ("uring", cfg!(feature = "io-uring")),
+                ("io-uring", cfg!(feature = "io-uring")),
                 ("gds", cfg!(feature = "gds")),
                 ("metrics", cfg!(feature = "metrics")),
                 ("rdma-adaptive", cfg!(feature = "rdma-adaptive")),

@@ -1602,7 +1602,7 @@ fn one_tcp_transfer_carries_shuffled_aliases_and_owns_exact_qos_and_credit() {
             j["orbite_receiver_credit_reserved_owners"],
             credits.reserved_owners
         );
-        assert_eq!(j["tent_inflight_attempts"], 1);
+        assert_eq!(j["orbite_inflight_attempts"], 1);
     }
     assert_eq!(
         (

@@ -1,5 +1,5 @@
 use super::*;
-use crate::{MemType, NicEntry, NicType, Topology};
+use crate::{NicEntry, NicType, Topology, TopologyMemoryKind};
 use std::ffi::{c_char, c_int};
 use std::os::unix::fs::symlink;
 
@@ -92,7 +92,7 @@ fn cuda_inventory_maps_ordinals_to_pci_tiers_and_publishes_only_complete_snapsho
     let gpu = &topology.mem_list[0];
     assert_eq!(
         (gpu.name.as_str(), gpu.kind, gpu.numa_node),
-        ("cuda:0", MemType::Cuda, Some(0))
+        ("cuda:0", TopologyMemoryKind::Cuda, Some(0))
     );
     assert_eq!(gpu.pci_bus_id.as_deref(), Some("0000:0a:00.0"));
     assert_eq!(gpu.device_list, [vec![0], vec![1], vec![2, 3]]);

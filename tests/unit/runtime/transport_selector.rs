@@ -197,20 +197,16 @@ fn transport_selector_uses_both_owners_and_preserves_staging_intent() {
 
 #[test]
 fn qos_low_prefetch_selects_tcp_without_rdma() -> Result<()> {
-    use crate::{QosConfig, QosRequestContext};
+    use crate::QosRequestContext;
 
     let config = r#"{
-        "policy":[{"name":"prefetch","segment_type":"memory","priority":"low","transports":["rdma","tcp"]}],
+        "selector":{"policy":[{"name":"prefetch","segment_type":"memory","priority":"low","transports":["rdma","tcp"]}]},
         "qos":{"tenants":[{"name":"reader","intents":{"background_prefetch":{"priority":"low"}}}]}
     }"#;
     let source = TransferEngine::new(EngineConfig::default())?;
     let remote =
         source.register_memory(vec![1, 2, 3, 4].into_boxed_slice(), Permission::RemoteRead)?;
-    let requester = TransferEngine::new(EngineConfig {
-        selector: Some(TransportSelectorConfig::from_json(config)?),
-        qos: QosConfig::from_json(config)?,
-        ..Default::default()
-    })?;
+    let requester = TransferEngine::new(EngineConfig::from_json(config)?)?;
     let local = requester.register_memory(vec![0; 4].into_boxed_slice(), Permission::LocalOnly)?;
     let peer = requester.open_segment(source.endpoint(), source.source_epoch(), TIMEOUT)?;
     let request = TransferRequest::new(
@@ -634,15 +630,10 @@ fn default_order_legacy_force_tcp_and_strict_hints() -> Result<()> {
     let mut config = TransportSelectorConfig::from_json(
         r#"{"policy":[{"name":"ordered","segment_type":"memory","transports":["tcp","rdma","nvlink"]}]}"#,
     )?;
-    assert!(!config.use_legacy_transport_selection);
     let mut pinned = req.clone();
     pinned.transport = Transport::Rdma;
-    for (legacy, force, unnamed, hint_ok) in [
-        (false, false, Transport::Tcp, true),
-        (true, false, Transport::Nvlink, true),
-        (true, true, Transport::Tcp, false),
-    ] {
-        config.use_legacy_transport_selection = legacy;
+    for (force, unnamed, hint_ok) in [(false, Transport::Tcp, true), (true, Transport::Tcp, false)]
+    {
         config.force_tcp = force;
         let selector = make_selector(&config)?;
         assert_eq!(ctx.select(Some(&selector), &req)?.transport, unnamed);

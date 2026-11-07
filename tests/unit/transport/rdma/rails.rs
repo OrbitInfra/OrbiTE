@@ -3,7 +3,7 @@ use crate::engine::tests::rdma_fixture_with_runtime;
 use crate::test_support::EVENTUAL_PROGRESS;
 use crate::transport::rdma::RdmaHostMemory;
 use crate::transport::rdma::tests::{self as fixture, on_requester_close};
-use crate::{MemEntry, MemType, NicEntry, NicType, Topology};
+use crate::{MemEntry, NicEntry, NicType, Topology, TopologyMemoryKind};
 use std::ffi::{CStr, c_char};
 use std::sync::{Arc, Mutex};
 
@@ -26,7 +26,7 @@ fn discover(
         mem_list: vec![MemEntry {
             name: "*".into(),
             pci_bus_id: None,
-            kind: MemType::Host,
+            kind: TopologyMemoryKind::Host,
             numa_node: None,
             device_list: Default::default(),
         }],
@@ -1957,8 +1957,8 @@ fn admission_uses_the_selected_rail_rate_and_drops_aliases_before_any_native_pos
             {
                 let j = requester.metrics().unwrap().json();
                 assert_eq!(j["orbite_queue_deadline_drops_total"], 1);
-                assert_eq!(j["tent_deadline_infeasible_total"], 1);
-                assert_eq!(j["tent_transport_attempts_total"], 0);
+                assert_eq!(j["orbite_deadline_infeasible_total"], 1);
+                assert_eq!(j["orbite_transport_attempts_total"], 0);
             }
             assert_eq!(stats.rdma.unwrap().opened_connections, 0);
             assert_eq!(source.stats()?.rdma.unwrap().receive_post_calls, 0);

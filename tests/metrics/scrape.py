@@ -20,21 +20,21 @@ with subprocess.Popen([sys.argv[1], "serve"], stdin=subprocess.PIPE, stdout=subp
             assert len(values) == 1, (name, labels, values)
             return values[0]
 
-        assert reading("tent_metrics_runtime_enabled", {}) == reading("tent_metrics_http_server_up", {}) == 1
-        assert reading("tent_metrics_http_start_failures_total", {}) == 0
-        assert reading("tent_metrics_serialization_attempts_total", {"format":"prometheus"}) == 1
-        assert reading("tent_metrics_last_success_timestamp_seconds", {"format":"prometheus"}) > 0
-        assert reading("tent_metrics_serialization_failures_total", {"format":"json"}) == 0
-        assert reading("tent_logical_requests_started_total", {"operation":"read"}) == 1
-        assert reading("tent_logical_request_outcomes_total", {"operation":"read","outcome":"success"}) == 1
-        assert reading("tent_transport_attempt_outcomes_total", {"transport":"tcp","operation":"read","outcome":"success"}) == 1
+        assert reading("orbite_metrics_runtime_enabled", {}) == reading("orbite_metrics_http_server_up", {}) == 1
+        assert reading("orbite_metrics_http_start_failures_total", {}) == 0
+        assert reading("orbite_metrics_serialization_attempts_total", {"format":"prometheus"}) == 1
+        assert reading("orbite_metrics_last_success_timestamp_seconds", {"format":"prometheus"}) > 0
+        assert reading("orbite_metrics_serialization_failures_total", {"format":"json"}) == 0
+        assert reading("orbite_logical_requests_started_total", {"operation":"read"}) == 1
+        assert reading("orbite_logical_request_outcomes_total", {"operation":"read","outcome":"success"}) == 1
+        assert reading("orbite_transport_attempt_outcomes_total", {"transport":"tcp","operation":"read","outcome":"success"}) == 1
         labels = {"transport": "tcp"}
-        assert reading("tent_read_bytes_total", labels) == 64
-        assert reading("tent_read_requests_total", labels) == 1
-        assert reading("tent_transport_attempts_total", {**labels, "operation": "read"}) == 1
-        for name in ["tent_read_latency_us", "tent_read_size_bytes", "tent_stage_queue_wait_us"]:
+        assert reading("orbite_read_bytes_total", labels) == 64
+        assert reading("orbite_read_requests_total", labels) == 1
+        assert reading("orbite_transport_attempts_total", {**labels, "operation": "read"}) == 1
+        for name in ["orbite_read_latency_us", "orbite_read_size_bytes", "orbite_stage_queue_wait_us"]:
             assert reading(name + "_count", labels) == reading(name + "_bucket", {**labels, "le": "+Inf"}) == 1
-        assert json.loads(fetch("/metrics/json"))["tent_read_size_bytes"]["count"] == 1
+        assert json.loads(fetch("/metrics/json"))["orbite_read_size_bytes"]["count"] == 1
         assert fetch("/health") == "OK"
         print(f"Parsed {len(samples)} samples from the loopback TCP consumer")
     finally:

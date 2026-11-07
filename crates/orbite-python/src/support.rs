@@ -32,7 +32,7 @@ pub(crate) fn local_topology(e: &engine::Engine) -> Result<String> {
         if !n.device_attrs.is_empty(){row["device_attrs"]=json!(n.device_attrs);}
         row
     }).collect();
-    let mems:Vec<_>=t.mem_list.iter().map(|m| json!({"name":m.name,"pci_bus_id":m.pci_bus_id.as_deref().unwrap_or(""),"numa_node":m.numa_node.map(i64::from).unwrap_or(-1),"type":match m.kind {orbite::MemType::Host=>0,orbite::MemType::Cuda=>1,_=>4},"device_list":{"rank0":m.device_list[0],"rank1":m.device_list[1],"rank2":m.device_list[2]}})).collect();
+    let mems:Vec<_>=t.mem_list.iter().map(|m| json!({"name":m.name,"pci_bus_id":m.pci_bus_id.as_deref().unwrap_or(""),"numa_node":m.numa_node.map(i64::from).unwrap_or(-1),"type":match m.kind {orbite::TopologyMemoryKind::Host=>0,orbite::TopologyMemoryKind::Cuda=>1,_=>4},"device_list":{"rank0":m.device_list[0],"rank1":m.device_list[1],"rank2":m.device_list[2]}})).collect();
     Ok(json!({"nics":nics,"mems":mems}).to_string())
 }
 

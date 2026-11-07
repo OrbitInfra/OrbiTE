@@ -77,7 +77,7 @@ pub use transport::io_uring::{IoUringConfig, IoUringStats};
 pub mod cuda;
 #[cfg(all(target_os = "linux", not(unsupported_native_target)))]
 pub use runtime::topology::{
-    DEVICE_PRIORITY_RANKS, MemEntry, MemType, NicEntry, NicType, Topology,
+    DEVICE_PRIORITY_RANKS, MemEntry, NicEntry, NicType, Topology, TopologyMemoryKind,
 };
 #[cfg(not(unsupported_native_target))]
 pub use transport::{
@@ -93,7 +93,7 @@ pub use {
 #[cfg(not(unsupported_native_target))]
 pub use {
     batch::{Batch, BatchId, BatchState, BatchStatus, SubmissionStatus, TaskState, TaskStatus},
-    config::{EngineConfig, RuntimeQueueConfig, TentSettings},
+    config::{EngineConfig, RuntimeQueueConfig},
     engine::{
         BatchReport, EngineStats, FileIoElement, Priority, RemoteEffect, TransferEngine,
         TransferFailure, TransferOp, TransferRequest, Transport,

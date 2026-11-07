@@ -557,21 +557,24 @@ mod native {
                 let m = p.engine.metrics().unwrap();
                 let j = m.json();
                 let text = m.prometheus();
-                assert_eq!(j["tent_logical_requests_started_total"], 2);
-                assert_eq!(j["tent_logical_request_outcomes_total"], 2);
-                assert_eq!(j["tent_logical_requests_inflight"], 0);
-                assert_eq!(j["tent_transport_attempt_outcomes_total"], 1 + budget);
-                assert_eq!(j["tent_inflight_attempts"], 0);
+                assert_eq!(j["orbite_logical_requests_started_total"], 2);
+                assert_eq!(j["orbite_logical_request_outcomes_total"], 2);
+                assert_eq!(j["orbite_logical_requests_inflight"], 0);
+                assert_eq!(j["orbite_transport_attempt_outcomes_total"], 1 + budget);
+                assert_eq!(j["orbite_inflight_attempts"], 0);
                 let outcome = if budget == 0 { "failed" } else { "success" };
-                assert!(text.contains(&format!(r#"tent_logical_request_outcomes_total{{operation="read",outcome="{outcome}"}} 2"#)));
-                assert!(text.contains(r#"tent_transport_attempt_outcomes_total{transport="rdma",operation="read",outcome="failed"} 1"#));
-                assert_eq!(j["tent_transport_attempts_total"], 1 + budget);
-                assert_eq!(j["tent_transport_attempt_failures_total"], 1);
-                assert_eq!(j["tent_transport_attempt_latency_us"]["count"], 1 + budget);
-                assert_eq!(j["tent_read_requests_total"], 1);
-                assert_eq!(j["tent_read_failures_total"], usize::from(budget == 0));
-                assert_eq!(j["tent_read_bytes_total"], 8 * budget);
-                assert_eq!(j["tent_transport_failover_total"], budget);
+                assert!(text.contains(&format!(r#"orbite_logical_request_outcomes_total{{operation="read",outcome="{outcome}"}} 2"#)));
+                assert!(text.contains(r#"orbite_transport_attempt_outcomes_total{transport="rdma",operation="read",outcome="failed"} 1"#));
+                assert_eq!(j["orbite_transport_attempts_total"], 1 + budget);
+                assert_eq!(j["orbite_transport_attempt_failures_total"], 1);
+                assert_eq!(
+                    j["orbite_transport_attempt_latency_us"]["count"],
+                    1 + budget
+                );
+                assert_eq!(j["orbite_read_requests_total"], 1);
+                assert_eq!(j["orbite_read_failures_total"], usize::from(budget == 0));
+                assert_eq!(j["orbite_read_bytes_total"], 8 * budget);
+                assert_eq!(j["orbite_transport_failover_total"], budget);
                 let nics = p.engine.nic_load_stats()?;
                 assert_eq!(j["orbite_rdma_inflight_bytes"], 0);
                 let charged = nics.iter().map(|nic| nic.allocated_bytes).sum::<u64>();
@@ -580,16 +583,18 @@ mod native {
                     "the original RDMA parent owned its exact slice charge"
                 );
                 assert_eq!(j["orbite_rdma_allocated_bytes_total"], charged);
-                assert_eq!(j["tent_inflight_attempts"], 0);
+                assert_eq!(j["orbite_inflight_attempts"], 0);
                 if budget == 0 {
                     assert!(text.contains(&format!(
-                        "tent_task_failures_total{{transport=\"rdma\",reason=\"{reason}\"}} 1"
+                        "orbite_task_failures_total{{transport=\"rdma\",reason=\"{reason}\"}} 1"
                     )));
                 } else {
                     assert!(
-                        text.contains("tent_transport_failover_total{from=\"rdma\",to=\"tcp\"} 1")
+                        text.contains(
+                            "orbite_transport_failover_total{from=\"rdma\",to=\"tcp\"} 1"
+                        )
                     );
-                    assert!(text.contains("tent_read_bytes_total{transport=\"tcp\"} 8"));
+                    assert!(text.contains("orbite_read_bytes_total{transport=\"tcp\"} 8"));
                 }
             }
         }

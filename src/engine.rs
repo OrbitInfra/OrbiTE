@@ -73,8 +73,8 @@ pub enum Transport {
 }
 
 impl Transport {
-    /// Frozen TENT transport discriminant, independent of the Rust enum layout.
-    pub fn tent_id(self) -> u8 {
+    /// Native metadata tag, independent of the Rust enum layout.
+    pub(crate) fn wire_id(self) -> u8 {
         match self {
             Self::Unspec => 0,
             Self::Rdma => 1,
@@ -89,7 +89,7 @@ impl Transport {
         }
     }
     /// Return a transport represented by a Rust owner. Installation is checked separately.
-    pub fn from_tent_id(id: u8) -> Option<Self> {
+    pub(crate) fn from_wire_id(id: u8) -> Option<Self> {
         Some(match id {
             0 => Self::Unspec,
             1 => Self::Rdma,
@@ -466,12 +466,6 @@ impl TransferEngine {
                 )
             })
             .transpose()?;
-        // The TENT loader installs RDMA only for an eligible discovered NIC.
-        #[cfg(feature = "rdma")]
-        let rdma = match rdma {
-            Some(owner) if config.tent.is_some() && owner.policy_devices()?.is_empty() => None,
-            owner => owner,
-        };
         #[cfg(feature = "cuda")]
         let mut nvlink = config
             .nvlink
@@ -637,9 +631,6 @@ impl TransferEngine {
             let metrics = engine.config.metrics.clone();
             engine.install_metrics(&metrics)?
         };
-        if let Some(settings) = &engine.config.tent {
-            settings.log_startup(&engine.config);
-        }
         Ok(engine)
     }
 
@@ -856,7 +847,7 @@ impl TransferEngine {
                 .map(|node| crate::MemEntry {
                     name: format!("cpu:{node}"),
                     pci_bus_id: None,
-                    kind: crate::MemType::Host,
+                    kind: crate::TopologyMemoryKind::Host,
                     numa_node: Some(node),
                     device_list: Default::default(),
                 })

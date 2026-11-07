@@ -4,7 +4,7 @@ use std::path::Path;
 
 use super::*;
 use crate::platform::pci;
-use crate::{MemEntry, MemType, Topology};
+use crate::{MemEntry, Topology, TopologyMemoryKind};
 
 pub(crate) fn discover(topology: &mut Topology, sys: &Path) -> Result<()> {
     let driver = match Driver::load() {
@@ -55,7 +55,7 @@ impl Driver {
             let mut entry = MemEntry {
                 name: format!("cuda:{ordinal}"),
                 pci_bus_id: Some(bus),
-                kind: MemType::Cuda,
+                kind: TopologyMemoryKind::Cuda,
                 numa_node: node,
                 device_list: Default::default(),
             };

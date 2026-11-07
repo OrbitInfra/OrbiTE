@@ -234,7 +234,6 @@ struct CompiledRule {
 pub(crate) struct TransportSelector {
     policies: Vec<CompiledRule>,
     force_tcp: bool,
-    legacy: bool,
     pub(crate) unresolved_devices: usize,
 }
 
@@ -334,7 +333,6 @@ impl TransportSelector {
         Ok(Self {
             policies,
             force_tcp: config.force_tcp,
-            legacy: config.use_legacy_transport_selection,
             unresolved_devices,
         })
     }
@@ -402,11 +400,8 @@ impl TransportSelector {
         let rules = selector.map_or(&[][..], |s| s.policies.as_slice());
         let named = request.policy_name.as_ref();
         let mut result = SelectionResult::plain(Transport::Unspec);
-        // Explicit binding always names one compiled rule. Legacy routing bypasses
-        // automatic matches; force_tcp overrides only memory routing.
-        let legacy = selector
-            .is_some_and(|s| s.legacy && !(s.force_tcp && ctx.segment == SegmentType::Memory));
-        let candidates = if rules.is_empty() || (legacy && named.is_none()) {
+        // Explicit binding names one compiled rule; empty rules use the native default order.
+        let candidates = if rules.is_empty() {
             result.policy.clone_from(&request.policy_name);
             defaults
         } else {

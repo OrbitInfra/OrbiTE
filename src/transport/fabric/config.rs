@@ -4,6 +4,8 @@ use std::time::Duration;
 /// Frozen TENT provider profiles. Auto tries EFA, never the software provider.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[non_exhaustive]
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum FabricProvider {
     #[default]
     Auto,
@@ -15,6 +17,8 @@ pub enum FabricProvider {
 /// Explicit opt-in libfabric configuration. `EngineConfig::fabric` defaults to None.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
+#[derive(serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct FabricConfig {
     pub provider: FabricProvider,
     pub fabric_name: String,

@@ -1,6 +1,6 @@
 use super::*;
 use crate::transport::rdma::RdmaConfig;
-use crate::{MemEntry, MemType, NicEntry, NicType};
+use crate::{MemEntry, NicEntry, NicType, TopologyMemoryKind};
 
 pub(in crate::transport::rdma) fn topology() -> Topology {
     let mut topology = Topology {
@@ -17,14 +17,14 @@ pub(in crate::transport::rdma) fn topology() -> Topology {
             MemEntry {
                 name: "cpu:0".into(),
                 pci_bus_id: None,
-                kind: MemType::Host,
+                kind: TopologyMemoryKind::Host,
                 numa_node: Some(0),
                 device_list: Default::default(),
             },
             MemEntry {
                 name: "*".into(),
                 pci_bus_id: None,
-                kind: MemType::Host,
+                kind: TopologyMemoryKind::Host,
                 numa_node: None,
                 device_list: Default::default(),
             },
@@ -165,7 +165,7 @@ fn gpu_priority_and_strict_numa_use_separate_tiers_and_eligibility() {
     topology.mem_list.push(MemEntry {
         name: "cuda:0".into(),
         pci_bus_id: None,
-        kind: MemType::Cuda,
+        kind: TopologyMemoryKind::Cuda,
         numa_node: Some(0),
         device_list: [vec![3], vec![2], vec![0, 1]],
     });

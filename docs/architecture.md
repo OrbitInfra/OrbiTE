@@ -117,47 +117,34 @@ prove native destroy is attempted once. The installed-wheel reopen control disti
 
 ## Configuration ownership
 
-Discovery, membership, KV indexes and etcd/Redis/HTTP stores live in the
-consumer. The P2P control service describes an already identified peer's
-segments, capabilities, registration keys and epochs; it does not find peers
-or replace the consumer's authoritative epoch. This deliberately excludes
-TENT's external metastore plugins. The configuration and installed Python
-negative controls reject those types and server URIs, including through
-`MC_TENT_CONF` and legacy overrides, before binding an engine or resolving
-a hostname. Diagnostics name the endpoint/epoch migration without echoing
-server credentials.
+The [wire and consumer boundary](tent-parity.md#wire-and-consumer-boundaries)
+separates the design reference from OrbiTE's own public interfaces. Consumers
+publish endpoint and epoch; no metastore types, URI schemes or credentials are
+configuration inputs.
 
-`EngineConfig::from_tent_env`, `from_tent_json` and `from_tent_file` resolve
-a bounded document into the typed owners before any engine starts. Metrics
-keeps its file-before-environment precedence. The selector, QoS, QP layout
-and HP-TCP use their existing schemas. Both constructors capture custom RDMA
-topology file contents. The TENT loader also resolves the RPC hostname once.
-Device discovery still
-checks those settings against the host when the engine starts.
+`EngineConfig::from_json`, `from_file` and `from_env` resolve one bounded,
+strict document into typed owners. Only `from_env` reads `ORBITE_CONF`.
+Explicit input takes precedence by choosing that entry point; there are no
+field-level environment overrides. Both typed and JSON constructors capture
+custom RDMA topology files before engine construction; hardware discovery
+validates physical capabilities when the owner starts. No process environment
+is changed. `config::json::tests` rejects compatibility keys, unknown fields,
+wrong types and duplicate keys, and uses children to prove snapshot isolation.
 
-TENT installs process-wide glog settings. OrbiTE leaves the log filter with
-the application and rejects `log_level`. Legacy CUDA IPC still requires an
-explicit opt-in for cooperative peers. RPC workers are capped at 128 and
-RDMA send queues at 64 work requests. The endpoint budget counts OrbiTE's
-retained native owners and has a ceiling of 4096. Unsupported verbs
-parameters and TCP retry knobs return configuration errors. The CPU controls
-exercise these differences and the captured environment without changing a
-process variable.
+The Python crate retains the same native memory and batch owners behind
+`Memory`, `RegisteredMemory`, `RemoteSegment`, `FileSegment` and `Batch`.
+Blocking calls detach the GIL inside the existing panic barrier. Native errors
+retain their Rust variants instead of collapsing to TENT integer status codes.
+The installed-wheel held-reply and CUDA-export tests check early drop, timeout,
+cancel and sticky cleanup; these interface changes supply no new release receipt.
+Metrics use `orbite_` names with the same recording cells and histogram buckets.
 
-TENT's `closeSegment` removes a name/ID mapping in `SegmentManager` and bumps
-its cache version; shared descriptors already in use survive. OrbiTE's Python
-close preserves that reversible handle contract. Rust `close_segment` fences
-an endpoint/epoch, drains admitted work and retires matching transport caches;
-a timeout or failed native cleanup retains owners and charges. See the
-[discovery boundary](rust-api.md#discovery-boundary).
 
 ## Engine and transport boundary
 
-S16 keeps the upstream serializer and headers inside the frozen CPU oracle.
-The [acceptance inventory](https://github.com/OrbitInfra/OrbiTE/tree/main/tests/reference/inventory)
-connects each public field or message to its source, owner, test trigger and
-expected result. The oracle captures the two YLT envelope layers separately
-from TENT's attachments. The Rust control plane uses its existing codec.
+The CPU oracle and three frozen TENT RPC request prefixes remain test inputs.
+Compatibility inventories and unused serializer captures are removed. The Rust
+control plane retains its own codec and in-source fixtures.
 The [wire and consumer boundary](tent-parity.md#wire-and-consumer-boundaries)
 excludes S23. The native acceptor has one listener and no profile dispatch.
 It rejects a foreign magic prefix before waiting for the rest of the header;

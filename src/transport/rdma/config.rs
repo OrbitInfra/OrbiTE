@@ -7,6 +7,8 @@ use crate::{Error, Result};
 /// Host-memory registration policy.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[non_exhaustive]
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RdmaHostMemory {
     /// Register the actual host range. Registration errors never select staging.
     #[default]
@@ -18,6 +20,8 @@ pub enum RdmaHostMemory {
 /// NVIDIA device-memory policy. Direct requires native GPU registration support.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[non_exhaustive]
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RdmaCudaMemory {
     #[default]
     Staged,
@@ -29,6 +33,8 @@ pub enum RdmaCudaMemory {
 /// Shared CQ progress policy. The frozen TENT polling path remains the default.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[non_exhaustive]
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum RdmaProgressMode {
     #[default]
     Polling,
@@ -39,6 +45,8 @@ pub enum RdmaProgressMode {
 /// Automatic or pinned NIC discovery and bounded request-level rail selection.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
+#[derive(serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct RdmaConfig {
     /// None discovers an accessible provider device; Some is a strict pin.
     pub device: Option<String>,
@@ -66,8 +74,20 @@ pub struct RdmaConfig {
     pub device_mask: u64,
     /// Frozen TENT rail circuit settings, per local/remote NIC pair.
     pub rail_error_threshold: u32,
+    #[serde(
+        rename = "rail_error_window_us",
+        deserialize_with = "crate::config::json::duration"
+    )]
     pub rail_error_window: Duration,
+    #[serde(
+        rename = "rail_cooldown_us",
+        deserialize_with = "crate::config::json::duration"
+    )]
     pub rail_cooldown: Duration,
+    #[serde(
+        rename = "rail_probe_interval_us",
+        deserialize_with = "crate::config::json::duration"
+    )]
     pub rail_probe_interval: Duration,
     /// Maximum distinct active or unhealthy pair identities retained by this engine.
     pub max_rail_pairs: usize,
@@ -79,12 +99,20 @@ pub struct RdmaConfig {
     /// tier and NIC by predicted completion time / remaining deadline. Off by default.
     pub deadline_bw_arbitration: bool,
     /// TENT aging threshold, measured from the original enqueue (default 10 ms).
+    #[serde(
+        rename = "priority_promotion_timeout_us",
+        deserialize_with = "crate::config::json::duration"
+    )]
     pub priority_promotion_timeout: Duration,
     /// False preserves TENT's head-only tier promotion; true checks each entry.
     pub priority_promotion_per_entry: bool,
     /// Optional POSIX shared-memory name, e.g. /orbite-rdma-slots. Disabled by default.
     pub shared_quota_shm_path: Option<String>,
     /// Shared High / High+Medium / all rotation; matching participants must agree.
+    #[serde(
+        rename = "slot_rotation_interval_us",
+        deserialize_with = "crate::config::json::duration"
+    )]
     pub slot_rotation_interval: Duration,
     pub progress_mode: RdmaProgressMode,
     /// TENT lane count: transport workers and SQ/RQ CQ pairs per context (1..=64).
@@ -191,31 +219,10 @@ impl RdmaConfig {
         }
     }
 
-    pub(crate) fn resolve_switches(
-        mut self,
-        mut get: impl FnMut(&str) -> Option<std::ffi::OsString>,
-    ) -> Self {
-        for (name, flag) in [
-            (
-                "MC_DISABLE_GPU_DIRECT_RDMA",
-                &mut self.disable_gpu_direct_rdma,
-            ),
-            ("MC_LOG_RDMA_SLICE_AFFINITY", &mut self.log_slice_affinity),
-        ] {
-            if let Some(value) = get(name) {
-                match value.to_str().and_then(crate::config::legacy_bool) {
-                    Some(enabled) => *flag = enabled,
-                    _ => log::warn!("invalid {name}, retaining configured value"),
-                }
-            }
-        }
-        self
-    }
-
     pub(crate) fn validate(&self) -> Result<()> {
         if self.disable_gpu_direct_rdma && self.cuda_memory == RdmaCudaMemory::Direct {
             return Err(Error::InvalidConfig(
-                "MC_DISABLE_GPU_DIRECT_RDMA conflicts with direct CUDA memory",
+                "disable_gpu_direct_rdma conflicts with direct CUDA memory",
             ));
         }
         if self.signal_interval == 0 {

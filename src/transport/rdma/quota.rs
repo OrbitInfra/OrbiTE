@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex, Weak};
 
-use crate::{Error, MemType, MemoryLocation, Result, Topology};
+use crate::{Error, MemoryLocation, Result, Topology, TopologyMemoryKind};
 
 mod allocation;
 mod bandwidth;
@@ -122,13 +122,13 @@ impl DeviceSelector {
         let mut priorities = BTreeMap::new();
         for memory in &topology.mem_list {
             let location = match memory.kind {
-                MemType::Host if memory.name == "*" => Some(MemoryLocation::Cpu(None)),
-                MemType::Host => memory
+                TopologyMemoryKind::Host if memory.name == "*" => Some(MemoryLocation::Cpu(None)),
+                TopologyMemoryKind::Host => memory
                     .name
                     .strip_prefix("cpu:")
                     .and_then(|node| node.parse().ok())
                     .map(|node| MemoryLocation::Cpu(Some(node))),
-                MemType::Cuda => memory
+                TopologyMemoryKind::Cuda => memory
                     .name
                     .strip_prefix("cuda:")
                     .and_then(|device| device.parse::<i32>().ok())

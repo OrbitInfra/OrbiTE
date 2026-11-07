@@ -12,10 +12,10 @@ pub enum NicType {
     Rdma,
 }
 
-/// TENT Topology::MemType: a topology location kind, not a registration backing.
+/// TENT Topology::TopologyMemoryKind: a topology location kind, not a registration backing.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
-pub enum MemType {
+pub enum TopologyMemoryKind {
     Host,
     Cuda,
 }
@@ -39,7 +39,7 @@ pub struct NicEntry {
 pub struct MemEntry {
     pub name: String,
     pub pci_bus_id: Option<String>,
-    pub kind: MemType,
+    pub kind: TopologyMemoryKind,
     pub numa_node: Option<u32>,
     pub device_list: [Vec<usize>; DEVICE_PRIORITY_RANKS],
 }
@@ -58,7 +58,7 @@ impl Topology {
         for memory in self
             .mem_list
             .iter_mut()
-            .filter(|entry| entry.kind == MemType::Host)
+            .filter(|entry| entry.kind == TopologyMemoryKind::Host)
         {
             memory.device_list = Default::default();
             for (index, nic) in self.nic_list.iter().enumerate() {
@@ -89,7 +89,7 @@ impl NicEntry {
 impl MemEntry {
     /// Describe a memory location with no eligible NICs until device_list is set.
     /// Each list contains indices into the containing topology's nic_list.
-    pub fn new(name: impl Into<String>, kind: MemType) -> Self {
+    pub fn new(name: impl Into<String>, kind: TopologyMemoryKind) -> Self {
         Self {
             name: name.into(),
             pci_bus_id: None,
