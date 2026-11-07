@@ -1,7 +1,7 @@
 //! Owned CPU/NVIDIA memory, fenced TCP/direct or staged RDMA transfers and notifications.
 //!
 //! Follows TENT's engine, segment/control-plane and transport ownership boundaries.
-//! Rust is the primary API; Python covers TENT's P2P subset. Peers use OrbiTE's
+//! Rust is the primary API; Python mirrors OrbiTE's retained owners. Peers use OrbiTE's
 //! native protocol and must run the same build. Hardware qualification is separate.
 //! See the repository's completion plan for qualification and integration gates.
 //!

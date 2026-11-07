@@ -14,8 +14,8 @@ from `7cc48490`. The beta.1 version is spelled `0.1.0b1` on PyPI.
 ### Changes since 0.1.0-alpha.1
 
 - Rust is the primary interface. Python lives in the separate
-  `orbite-python` packaging crate and exposes the frozen `mooncake.tent`
-  P2P subset as `import orbite as tent`. Installed wheels cover CPython
+  `orbite-python` packaging crate and mirrors the Rust API with PEP 8 names.
+  Installed wheels cover CPython
   3.10–3.14 on Linux x86_64/aarch64; blocking calls release the GIL.
   Buffer exporters and CUDA Array Interface/DLPack owners stay retained
   through native drain, including cancellation and uncertain cleanup.
@@ -59,6 +59,22 @@ against the [named jobs and tests](qualification.md#linux-ci-release-profiles).
 HP-TCP loopback, same-host SHM and ext4/tmpfs io_uring retain their bounded
 Linux CI qualification.
 
+### Independent interfaces
+
+TENT remains the frozen design reference, CPU oracle and performance baseline.
+Wire, API, configuration and naming compatibility are out of scope. The
+compatibility loaders, MC_/NCCL/MOONCAKE aliases and S16 compatibility inventories
+are removed. Rust exposes `EngineConfig::from_json/from_file/from_env`;
+only `ORBITE_CONF` configures the environment loader. Python now mirrors Rust
+owners with PEP 8 methods and an `orbite.Error` hierarchy. Exporter retention,
+GIL release, cancellation and physical drain guarantees are unchanged.
+
+Metrics use the `orbite_` prefix. Public TENT transport-ID conversion methods
+and excluded Python transport identities are removed; diagnostics reports only
+OrbiTE transports. `TopologyMemoryKind` replaces `MemType`, distinct from
+registration `MemoryType`. Native comparison jobs have 120-minute headroom;
+the 480 byte-checked rows and sample counts are unchanged.
+
 ### Known limitations
 
 Every **current GPU, RDMA, GDS, MNNVL/EGM, EFA and CXL profile is unqualified**.
@@ -90,19 +106,3 @@ release receipt. Uncertain cleanup retains owners; uncertain WRITEs are never
 replayed. Before `0.1.0`, peers must run the same build. The explicit
 compatibility policy and hardware gates start at the
 [stable release boundary](completion-plan.md#release-ladder).
-
-### Independent interfaces
-
-TENT remains the frozen design reference, CPU oracle and performance baseline.
-Wire, API, configuration and naming compatibility are out of scope. The
-compatibility loaders, MC_/NCCL/MOONCAKE aliases and S16 compatibility inventories
-are removed. Rust exposes `EngineConfig::from_json/from_file/from_env`;
-only `ORBITE_CONF` configures the environment loader. Python now mirrors Rust
-owners with PEP 8 methods and an `orbite.Error` hierarchy. Exporter retention,
-GIL release, cancellation and physical drain guarantees are unchanged.
-
-Metrics use the `orbite_` prefix. Public TENT transport-ID conversion methods
-and excluded Python transport identities are removed; diagnostics reports only
-OrbiTE transports. `TopologyMemoryKind` replaces `MemType`, distinct from
-registration `MemoryType`. Native comparison jobs have 120-minute headroom;
-the 480 byte-checked rows and sample counts are unchanged.

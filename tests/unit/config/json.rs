@@ -193,7 +193,102 @@ fn native_settings_are_typed_and_topology_file_is_captured() {
     assert!(r.disable_gpu_direct_rdma && r.log_slice_affinity);
     assert_eq!(r.rail_cooldown, Duration::from_millis(500));
     assert_eq!(r.scheduling.default_bandwidth_gbps, 100.0);
-    for text in [r#"{"rdma":{"num_lanes":"2"}}"#, r#"{"rdma":{"bogus":1}}"#] {
+    for text in [
+        r#"{"rdma":{"num_lanes":"2"}}"#,
+        r#"{"rdma":{"bogus":1}}"#,
+        r#"{"rdma":{"scheduling":[]}}"#,
+    ] {
         assert!(EngineConfig::from_json(text).is_err());
+    }
+}
+
+#[test]
+fn provider_settings_reach_the_typed_snapshot_without_loading_native_libraries() {
+    #[cfg(feature = "fabric")]
+    {
+        let c = EngineConfig::from_json(r#"{"fabric":{"provider":"tcp","slice_size":65536,"max_pending_ops":64,"max_peer_addresses":4,"max_domains":2}}"#).unwrap();
+        let f = c.fabric.unwrap();
+        assert_eq!(f.provider, crate::FabricProvider::Tcp);
+        assert_eq!(
+            (
+                f.slice_size,
+                f.max_pending_ops,
+                f.max_peer_addresses,
+                f.max_domains
+            ),
+            (65536, 64, 4, 2)
+        );
+    }
+    #[cfg(feature = "metrics")]
+    {
+        let c = EngineConfig::from_json(r#"{"metrics":{"enabled":false,"http_host":"127.0.0.1","http_port":9123,"http_server_threads":1,"report_interval_seconds":0}}"#).unwrap();
+        assert!(!c.metrics.enabled);
+        assert_eq!(
+            (
+                c.metrics.http_port,
+                c.metrics.http_server_threads,
+                c.metrics.report_interval_seconds
+            ),
+            (9123, 1, 0)
+        );
+    }
+    #[cfg(feature = "cuda")]
+    {
+        let c = EngineConfig::from_json(
+            r#"{"nvlink":false,"nvlink_async_memcpy_threshold_kb":32,
+            "nvlink_cache_entries":7,"nvlink_stream_count":2,"staging_chunk_size":4096,
+            "staging_chunk_count":3,"staging_pipeline_depth":2,"staging_location":"any",
+            "remote_staging":false,"mnnvl":{"egm":true,"host_register":false,"fabric_domain":"0102030405060708090a0b0c0d0e0f10"}}"#,
+        )
+        .unwrap();
+        assert!(!c.nvlink && !c.remote_staging);
+        assert_eq!(
+            (
+                c.staging_chunk_size,
+                c.staging_chunk_count,
+                c.staging_pipeline_depth
+            ),
+            (4096, 3, 2)
+        );
+        assert_eq!(
+            (
+                c.nvlink_cache_entries,
+                c.nvlink_stream_count,
+                c.nvlink_async_memcpy_threshold_kb
+            ),
+            (7, 2, 32)
+        );
+        assert!(c.mnnvl.unwrap().egm);
+    }
+    #[cfg(feature = "io-uring")]
+    {
+        let c = EngineConfig::from_json(
+            r#"{"io_uring_enabled":false,"io_uring":{"staging_slot_kb":8,"staging_slots":3}}"#,
+        )
+        .unwrap();
+        assert!(!c.io_uring_enabled);
+        assert_eq!(
+            (c.io_uring.staging_slot_kb, c.io_uring.staging_slots),
+            (8, 3)
+        );
+    }
+    #[cfg(feature = "gds")]
+    {
+        let c = EngineConfig::from_json(
+            r#"{"gds_enabled":false,"gds_batch_depth":8,"gds_require_native":true}"#,
+        )
+        .unwrap();
+        assert!(!c.gds_enabled && c.gds_require_native);
+        assert_eq!(c.gds_batch_depth, 8);
+    }
+    #[cfg(feature = "rdma")]
+    {
+        let p =
+            std::env::temp_dir().join(format!("orbite-topology-snapshot-{}", std::process::id()));
+        std::fs::write(&p, "{}").unwrap();
+        let c =
+            EngineConfig::from_json(&json!({"rdma":{"custom_json_path":p}}).to_string()).unwrap();
+        std::fs::remove_file(p).unwrap();
+        assert_eq!(c.rdma.unwrap().custom_topology_json.as_deref(), Some("{}"));
     }
 }

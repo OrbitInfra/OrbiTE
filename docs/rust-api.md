@@ -116,7 +116,8 @@ records use their typed field names and defaults. An optional provider object
 opts in; `null` disables it. `hp_tcp.enable` and `shm.enable` remain explicit.
 Duration fields have an `_us` suffix and take integer microseconds; fields already
 naming a unit, such as `connect_timeout_ms`, retain that unit. Other sizes are
-bytes except explicitly named KiB settings. Selector rules and QoS contracts
+bytes except explicitly named KiB settings. MNNVL `fabric_domain` uses the
+32-hex-digit `SourceEpoch` representation or `null`. Selector rules and QoS contracts
 live under `selector` and `qos`; receiver budgets under `receiver_credit`.
 
 ```json

@@ -94,6 +94,7 @@ pub struct RdmaConfig {
     /// Optional TENT rail topology JSON with all/direct named pairs.
     pub rail_topology: Option<String>,
     /// TENT bandwidth-aware selection and payload transmit meter.
+    #[serde(deserialize_with = "crate::runtime::config::object")]
     pub scheduling: super::SchedulingParams,
     /// TENT deadline_bw_arbitration: reorder ready payloads within a priority
     /// tier and NIC by predicted completion time / remaining deadline. Off by default.

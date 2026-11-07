@@ -35,7 +35,7 @@ pub(crate) use metadata::SegmentMetadata;
 use crate::{Error, MemoryType, Permission, Result};
 
 /// Random source-instance identity, not an authentication credential.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct SourceEpoch(pub(crate) [u8; 16]);
 
 impl SourceEpoch {
@@ -128,7 +128,7 @@ impl RegionProfile {
 }
 
 impl RemoteRegion {
-    /// TENT buffer location as published by its allocation owner.
+    /// Buffer location as published by its allocation owner.
     pub fn location_name(&self) -> String {
         match (self.memory_type, self.profile.node) {
             (MemoryType::Cpu, None) => "*".into(),

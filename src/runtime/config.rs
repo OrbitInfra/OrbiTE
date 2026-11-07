@@ -4,7 +4,7 @@ use std::marker::PhantomData;
 use serde::de::{self, MapAccess, Visitor};
 use serde::{Deserialize, Deserializer};
 
-// Serde structs also accept positional sequences; TENT policy nodes must be objects.
+// Serde structs also accept positional sequences; OrbiTE configuration nodes must be objects.
 #[derive(Default)]
 pub(crate) struct Object<T>(pub(crate) T);
 
@@ -25,4 +25,10 @@ impl<'de, T: Deserialize<'de>> Deserialize<'de> for Object<T> {
         }
         deserializer.deserialize_map(ObjectVisitor(PhantomData))
     }
+}
+
+/// Reject positional record arrays even when Serde's derived struct visitor accepts them.
+#[cfg(feature = "rdma")]
+pub(crate) fn object<'de, T: Deserialize<'de>, D: Deserializer<'de>>(d: D) -> Result<T, D::Error> {
+    Object::<T>::deserialize(d).map(|Object(value)| value)
 }

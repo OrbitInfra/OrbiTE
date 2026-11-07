@@ -1,4 +1,4 @@
-//! Cold-path loading of the supported TENT `qos` configuration section.
+//! Cold-path loading of the OrbiTE `qos` configuration section.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -18,8 +18,8 @@ use crate::{Error, Priority, Result};
 
 const MAX_JSON_BYTES: usize = 1 << 20;
 
-// Other engine settings are outside this loader's responsibility.
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct EngineDocument {
     #[serde(default)]
     qos: Option<Object<QosDocument>>,
@@ -71,9 +71,9 @@ struct Tenant {
 }
 
 impl QosConfig {
-    /// Load only the `qos` section of a TENT-format engine JSON document.
+    /// Load a JSON object containing the OrbiTE `qos` section.
     /// Missing/null QoS, an empty object, or version alone returns None.
-    /// Other engine settings are ignored; unknown/unimplemented QoS fields fail.
+    /// Unknown wrapper keys and unknown/unimplemented QoS fields fail.
     /// At most 1 MiB is accepted. No engine state or files are changed.
     pub fn from_json(json: &str) -> Result<Option<Self>> {
         if json.len() > MAX_JSON_BYTES {

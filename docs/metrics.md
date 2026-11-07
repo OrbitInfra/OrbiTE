@@ -25,7 +25,7 @@ periodic reporter and recording cells.
 | `http_server_threads` | `2` |
 | `report_interval_seconds` | `30`; zero disables periodic logging |
 
-Use typed `EngineConfig.metrics` or the [OrbiTE loader](rust-api.md#loading-configuration).
+Use typed `EngineConfig.metrics` or the [OrbiTE loader](rust-api.md#configuration-loading).
 There are no per-field environment aliases or secondary metrics files. Unknown
 fields and wrong types fail. The host accepts an IP literal or DNS hostname;
 ports range from 1 to 65535 and the bounded HTTP pool has 1–64 threads.

@@ -43,8 +43,7 @@ fn packaged_cli_contract_and_compiled_feature_flags() {
     ] {
         let output = Command::new(env!("CARGO_BIN_EXE_orbite"))
             .args(&args)
-            .env("TENT_METRICS_HTTP_HOST", "invalid.invalid")
-            .env("TENT_METRICS_HTTP_PORT", "invalid")
+            .env("ORBITE_CONF", "invalid/offline/config/path")
             .env("CUDA_VISIBLE_DEVICES", "")
             .output()
             .unwrap();
@@ -65,7 +64,7 @@ fn packaged_cli_contract_and_compiled_feature_flags() {
             for (name, active) in [
                 ("rdma", cfg!(feature = "rdma")),
                 ("cuda", cfg!(feature = "cuda")),
-                ("uring", cfg!(feature = "io-uring")),
+                ("io-uring", cfg!(feature = "io-uring")),
                 ("metrics", cfg!(feature = "metrics")),
                 ("rdma-adaptive", cfg!(feature = "rdma-adaptive")),
                 ("gds", cfg!(feature = "gds")),

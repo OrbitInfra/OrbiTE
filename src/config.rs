@@ -80,7 +80,7 @@ pub struct EngineConfig {
     #[cfg(feature = "io-uring")]
     pub io_uring_enabled: bool,
     pub shm: crate::ShmConfig,
-    /// Typed metrics defaults. The metrics loader resolves overrides at engine construction.
+    /// Metrics snapshot; recording is opt-in through the metrics build feature.
     #[cfg(feature = "metrics")]
     pub metrics: crate::metrics::MetricsConfig,
     /// Merge adjacent requests within the same pair of registered ranges.
