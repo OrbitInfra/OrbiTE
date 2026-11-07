@@ -48,7 +48,7 @@ artifacts and hardware profiles.
 | P6 | Routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | Complete at source level. Installed RDMA profiles remain in the verification queue |
 | P7 | File, io_uring and GDS paths | P2; GDS also P5 | S1–S5 complete at source level. DRAM/file io_uring qualified in Linux CI. Installed CUDA staging and native GDS gates unrun |
 | P8 | Additional CPU/NVIDIA-compatible network providers | P1/P2; relevant P4–P6 | P8.2 libfabric implemented; EFA unqualified. P8.1 MPComm is deferred: no consumer; provider unavailable |
-| P9 | Rust/Python APIs and operations | P0/P2/P6 | OrbiTE configuration and Python API implemented; new CI qualification pending; S19/S20/S22 removed and out of scope |
+| P9 | Rust/Python APIs and operations | P0/P2/P6 | OrbiTE configuration and Python CPU/TCP qualified on Linux CI; S19/S20/S22 removed and out of scope |
 | P10 | Cross-backend fault and lifetime acceptance | Relevant P3–P9 deliveries | CPU fixture matrix implemented; installed acceptance remains open |
 | P11 | Consumer integration, matched performance and release | Accepted P2–P10 profiles | Scoped CPU comparisons implemented; consumer/hardware release gates remain open |
 

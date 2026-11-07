@@ -62,10 +62,15 @@ The full-feature jobs' `P10 CPU fault matrix and real peer kills` step repeats
 the new real-process kill controls 50 times per toolchain. This is lifetime
 and byte evidence, not a physical-network latency or throughput claim.
 
-The new OrbiTE configuration and Python APIs are **Implemented; CI qualification
-pending**. The current controls are `config::json::tests` (all typed fields,
-strict rejection, file/inline precedence and child-process snapshot immutability)
-and the installed-wheel cases listed below. Only `ORBITE_CONF` is read;
+The independent OrbiTE APIs are **Qualified on Linux CI** at
+`6c94bf4999d334c3afd80f047b11381782f6df57`, in these bounded CPU profiles:
+
+| Profile | Exact workflow / jobs | Controls and limits |
+| --- | --- | --- |
+| OrbiTE configuration | `CI`: [stable default](https://github.com/OrbitInfra/OrbiTE/actions/runs/42402308030/job/128492534553), [1.85 default](https://github.com/OrbitInfra/OrbiTE/actions/runs/42402308030/job/128492534617), [stable all features](https://github.com/OrbitInfra/OrbiTE/actions/runs/42402308030/job/128492534493), [1.85 all features](https://github.com/OrbitInfra/OrbiTE/actions/runs/42402308030/job/128492534634); step `Test CPU TCP and ownership` | `config::json::tests`: all 49 engine fields bound; typed provider snapshots; wrong-type, unknown/duplicate key and root rejection; file/inline/env precedence; child-process immutability. No native device is qualified by parsing. |
+| OrbiTE Python CPU/TCP | `Python wheels`: [x86_64 stable 3.13](https://github.com/OrbitInfra/OrbiTE/actions/runs/42402308037/job/128492534377), [x86_64 1.85 3.13](https://github.com/OrbitInfra/OrbiTE/actions/runs/42402308037/job/128492534538), [aarch64 stable 3.13](https://github.com/OrbitInfra/OrbiTE/actions/runs/42402308037/job/128492534560), [aarch64 1.85 3.13](https://github.com/OrbitInfra/OrbiTE/actions/runs/42402308037/job/128492534466); all 20 matrix jobs passed | Installed CPU and combined wheels on CPython 3.10–3.14, both architectures/toolchains; sdist rebuild and the [wheel cases](#python-wheels). CPU/TCP only; CUDA tests are driver shims. |
+
+Only `ORBITE_CONF` is read;
 metadata-server keys are unknown. No external store or discovery service is
 part of this profile. Rust per-peer retirement is implemented with real TCP,
 HP-TCP and SHM controls on Linux, and CUDA/verbs table controls. The
@@ -129,8 +134,8 @@ EFA DMA, fabric performance or physical multi-rail qualification.
 
 ## Python wheels
 
-**Implemented; new API CI qualification pending**. Historical evidence is
-recorded in [release evidence](#linux-ci-release-profiles).
+**Qualified on Linux CI for the OrbiTE CPU/TCP API**, with the exact current
+and historical jobs in [release evidence](#linux-ci-release-profiles).
 
 The `Python wheels` workflow builds and installs CPU and combined-feature
 wheels for CPython 3.10–3.14 on Linux x86_64 and aarch64, with stable and Rust

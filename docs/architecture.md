@@ -8,15 +8,15 @@ places test consolidation after the beta API freeze and a NIXL-based P/D
 design after installed GDR/NVLink qualification. Neither adds a current
 transport, connector or performance claim.
 The beta.1 [Rust surface review](rust-api.md#beta1-freeze-candidate) and
-[Python inventory](python.md#surface-and-defaults) define the API freeze
+[Python surface](python.md#surface-and-defaults) define the API freeze
 boundary. Public enums and field records are non-exhaustive except binary
 `TransferOp`; configs use defaults and field assignment. Documented primary
 helpers are stable candidates. Hidden owner helpers are release-private, so the
 Python packaging crate pins the exact core version. The hidden adaptive core
 has no stability promise. Remaining missing docs close before `0.1.0`; source
 readiness does not qualify a native device.
-Architectural alignment does not by itself establish behavior, ABI, wire or
-performance parity. See [capabilities](capabilities.md) for support and the
+API, configuration and wire compatibility are out of scope. Architectural
+alignment alone establishes no behavior or performance result. See [capabilities](capabilities.md) for support and the
 [completion plan](completion-plan.md#p4-remaining-delivery) for open work.
 
 :::{image} _static/architecture.svg

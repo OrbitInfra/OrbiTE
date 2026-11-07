@@ -4,9 +4,8 @@ This guide describes the current source. See [Build](build.md) for provider
 dependencies, [Architecture](architecture.md#source-reading-order) for the code
 layout and [Qualification](qualification.md) for executed hardware profiles.
 
-RDMA install reads `MC_DISABLE_GPU_DIRECT_RDMA` and `MC_LOG_RDMA_SLICE_AFFINITY`
-once. Both accept `1/0`, `true/false`, `yes/no` and `on/off` without case
-sensitivity. An invalid value logs a warning and preserves the configured value.
+Set `RdmaConfig.disable_gpu_direct_rdma` and `log_slice_affinity` in the
+immutable typed or JSON configuration. JSON switches require booleans.
 Disabling GPU Direct while explicitly requiring `RdmaCudaMemory::Direct`
 returns a configuration error. Affinity diagnostics log each selected NIC pair
 and slice length through the `log` facade at debug level.

@@ -43,7 +43,6 @@ fn intent<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Option<IntentT
     ];
     let value = Value::deserialize(d)?;
     let intent = match &value {
-        Value::String(s) if s.eq_ignore_ascii_case("intent_unspec") => Some(Unspec),
         Value::String(s) => names
             .iter()
             .find(|(name, _)| s.eq_ignore_ascii_case(name))

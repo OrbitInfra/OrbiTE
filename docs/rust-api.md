@@ -16,8 +16,8 @@ This is the public surface and stability boundary for `0.1.0-beta.1`.
 Hardware qualification is separate. Rust is the primary API.
 The following names and their public methods/fields are the candidate; private
 transport owners, native function tables and test shims are not public APIs.
-Full signatures come from rustdoc for the chosen feature set, not from the
-the independent OrbiTE API; TENT compatibility surfaces are out of scope.
+Full signatures come from rustdoc for the chosen feature set. TENT
+compatibility surfaces are out of scope.
 
 | Area | Public surface |
 | --- | --- |

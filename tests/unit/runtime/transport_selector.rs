@@ -421,11 +421,17 @@ fn transport_selector_public_sync_async_and_atomic_preflight() {
 
 #[test]
 fn intent_names_binding_and_force_tcp() -> Result<()> {
+    assert!(
+        TransportSelectorConfig::from_json(
+            r#"{"policy":[{"segment_type":"memory","intent_type":"INTENT_UNSPEC"}]}"#
+        )
+        .is_err()
+    );
     use IntentType::*;
     let remote = region(MemoryType::Cpu, false);
     let ctx = context(&remote);
     let intents = [
-        ("INTENT_UNSPEC", Unspec),
+        ("UNSPEC", Unspec),
         ("foreground_get", ForegroundGet),
         ("BACKGROUND_PREFETCH", BackgroundPrefetch),
         ("migration", Migration),

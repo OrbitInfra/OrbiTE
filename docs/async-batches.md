@@ -322,8 +322,9 @@ behavior is OrbiTE's extension. See
 ### JSON QoS configuration
 
 `QosConfig::from_json(&str)` and `QosConfig::from_json_file(path)` read the `qos`
-section of a TENT-format engine document and return `Result<Option<QosConfig>>`
-for `EngineConfig::qos`. Other sections are ignored.
+section of an OrbiTE JSON object and return `Result<Option<QosConfig>>`
+for `EngineConfig::qos`. Unknown wrapper keys are errors; use
+`EngineConfig::from_json` for a complete engine document.
 
 ```json
 {
