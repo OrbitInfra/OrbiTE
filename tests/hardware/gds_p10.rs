@@ -25,9 +25,10 @@ fn exercise(path: &Path) -> Result<()> {
         .ok_or(Error::InvalidConfig("missing installed observer control"))?;
     let control = Path::new(&control);
     let quarantine = std::env::var("ORBITE_GDS_P10_MODE").as_deref() == Ok("quarantine");
-    let engine = Arc::new(TransferEngine::new(EngineConfig {
-        gds_require_native: true,
-        ..Default::default()
+    let engine = Arc::new(TransferEngine::new({
+        let mut config = EngineConfig::default();
+        config.gds_require_native = true;
+        config
     })?);
     let mut image = vec![0x39; LEN + 2 * PAGE];
     for (i, byte) in image[PAGE..PAGE + LEN].iter_mut().enumerate() {

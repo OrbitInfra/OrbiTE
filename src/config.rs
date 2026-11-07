@@ -17,6 +17,7 @@ pub use tent::TentSettings;
 /// Host staging location, resolved independently by each GPU owner.
 #[cfg(feature = "cuda")]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum StagingLocation {
     /// Preserve CUDA driver allocation; no NUMA placement claim.
     #[default]
@@ -30,6 +31,7 @@ pub enum StagingLocation {
 /// Opt-in runtime dispatch window across all outgoing data submissions.
 /// Total retained work remains bounded by EngineConfig's inflight budgets.
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub struct RuntimeQueueConfig {
     /// Total queued and dispatching physical owners and their bytes.
     pub max_outstanding_owners: usize,
@@ -70,6 +72,7 @@ impl Default for RuntimeQueueConfig {
 
 /// Immutable per-engine budgets and optional provider configuration.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct EngineConfig {
     /// Present for a configuration resolved by the TENT loader. Provider overrides
     /// have already been consumed and must not be read again at startup.

@@ -210,28 +210,31 @@ fn run(p: &Parameters) -> Result<()> {
         "shm" => Transport::Shm,
         _ => Transport::IoUring,
     };
-    let config = EngineConfig {
-        handler_threads: p.workers,
-        merge_requests: true,
-        max_failover_attempts: 0,
-        max_transfer_bytes: LIMIT,
-        max_inflight_bytes: LIMIT,
-        hp_tcp: orbite::HpTcpConfig {
-            enable: transport == Transport::HpTcp,
-            worker_count: p.workers,
-            rail_addresses: vec![
+    let config = {
+        let mut config = EngineConfig::default();
+        config.handler_threads = p.workers;
+        config.merge_requests = true;
+        config.max_failover_attempts = 0;
+        config.max_transfer_bytes = LIMIT;
+        config.max_inflight_bytes = LIMIT;
+        config.hp_tcp = {
+            let mut config = orbite::HpTcpConfig::default();
+            config.enable = transport == Transport::HpTcp;
+            config.worker_count = p.workers;
+            config.rail_addresses = vec![
                 "127.0.0.1".parse().map_err(|_| Error::InvalidRange)?,
                 "127.0.0.2".parse().map_err(|_| Error::InvalidRange)?,
-            ],
-            connections_per_peer: 2,
-            ..Default::default()
-        },
-        tcp: transport != Transport::HpTcp,
-        shm: orbite::ShmConfig {
-            enable: transport == Transport::Shm,
-            ..Default::default()
-        },
-        ..Default::default()
+            ];
+            config.connections_per_peer = 2;
+            config
+        };
+        config.tcp = transport != Transport::HpTcp;
+        config.shm = {
+            let mut config = orbite::ShmConfig::default();
+            config.enable = transport == Transport::Shm;
+            config
+        };
+        config
     };
     let source = TransferEngine::new(config.clone())?;
     let requester = Arc::new(TransferEngine::new(config)?);

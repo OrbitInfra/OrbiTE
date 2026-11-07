@@ -6,6 +6,7 @@ use crate::{Error, Result};
 /// One contiguous group of RDMA endpoint QPs. Unset link attributes inherit the RDMA defaults.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[non_exhaustive]
 pub struct QpPool {
     pub name: String,
     pub num_qp: usize,
@@ -13,6 +14,18 @@ pub struct QpPool {
     pub service_level: Option<u8>,
     #[serde(default, deserialize_with = "link_attribute")]
     pub traffic_class: Option<u8>,
+}
+
+impl Default for QpPool {
+    /// One QP inheriting the engine's link attributes. Set a unique name before use.
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            num_qp: 1,
+            service_level: None,
+            traffic_class: None,
+        }
+    }
 }
 
 fn link_attribute<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Option<u8>, D::Error> {

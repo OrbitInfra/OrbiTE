@@ -1,5 +1,6 @@
 /// Capabilities and effective READ depths of the most recently connected local RC QP.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct QpReadDepths {
     pub supports_atomics: bool,
     pub initiator_limit: u8,
@@ -11,6 +12,7 @@ pub struct QpReadDepths {
 /// A retained endpoint is charged and blocks further RDMA admission. It can
 /// still own pinned pages or RNIC resources after native teardown failed.
 #[derive(Clone, Copy, Debug, Default)]
+#[non_exhaustive]
 pub struct RdmaStats {
     pub last_connected_qp: Option<QpReadDepths>,
     /// Pair-level failures, trial admissions and confirmed recoveries.

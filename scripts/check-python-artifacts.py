@@ -9,6 +9,11 @@ import tarfile
 import zipfile
 
 
+def require(condition, message):
+    if not condition:
+        raise ValueError(message)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("artifacts", nargs="+", type=Path)
@@ -20,28 +25,28 @@ def main():
     ))
     packages = {p["name"]: p for p in metadata["packages"]}
     rust = packages["orbite"]["version"]
-    assert packages["orbite-python"]["version"] == rust, "workspace version drift"
+    require(packages["orbite-python"]["version"] == rust, "workspace version drift")
     dependency = next(d for d in packages["orbite-python"]["dependencies"] if d["name"] == "orbite")
-    assert dependency["req"] == "^" + rust, "Python's core dependency minimum drifted"
+    require(dependency["req"] == "=" + rust, "Python's exact core dependency drifted")
     match = re.fullmatch(r"(\d+\.\d+\.\d+)(?:-(alpha|beta|rc)\.(\d+))?", rust)
-    assert match, f"unhandled release version: {rust}"
+    require(match is not None, f"unhandled release version: {rust}")
     pep440 = match[1] + ({"alpha": "a", "beta": "b", "rc": "rc"}[match[2]] + match[3] if match[2] else "")
     for path in args.artifacts:
         if path.suffix == ".whl":
             with zipfile.ZipFile(path) as archive:
                 names = [n for n in archive.namelist() if n.endswith(".dist-info/METADATA")]
-                assert len(names) == 1, f"ambiguous wheel metadata: {path}"
+                require(len(names) == 1, f"ambiguous wheel metadata: {path}")
                 data = archive.read(names[0])
-            assert path.name.startswith(f"orbite-{pep440}-"), path
+            require(path.name.startswith(f"orbite-{pep440}-"), f"wrong wheel filename: {path}")
         else:
-            assert path.name == f"orbite-{pep440}.tar.gz", path
+            require(path.name == f"orbite-{pep440}.tar.gz", f"wrong sdist filename: {path}")
             with tarfile.open(path) as archive:
                 member = archive.extractfile(f"orbite-{pep440}/PKG-INFO")
-                assert member is not None, f"missing source metadata: {path}"
+                require(member is not None, f"missing source metadata: {path}")
                 data = member.read()
         info = Parser().parsestr(data.decode("utf-8"))
-        assert info["Name"] == "orbite", path
-        assert info["Version"] == pep440, (path, info["Version"], pep440)
+        require(info["Name"] == "orbite", f"wrong package name: {path}")
+        require(info["Version"] == pep440, f"wrong package version: {path}: {info['Version']} != {pep440}")
         print(f"{path.name}: Rust {rust}, Python {pep440}")
 
 

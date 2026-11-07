@@ -43,8 +43,8 @@ impl CopyBatch {
             .map_err(|_| Error::ResourceExhausted)?;
         for copy in copies {
             let local = match &copy.memory {
-                Allocation::Cuda(memory) => memory.address,
-                Allocation::Host(memory) => memory.base_address(),
+                MemoryBacking::Cuda(memory) => memory.address,
+                MemoryBacking::Host(memory) => memory.base_address(),
             }
             .checked_add(copy.local_offset as u64)
             .ok_or(Error::InvalidRange)?;

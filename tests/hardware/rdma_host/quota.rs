@@ -14,25 +14,30 @@ pub(super) fn run() -> Result<()> {
     if id > 1 {
         return Err("invalid quota participant".into());
     }
-    let rdma = RdmaConfig {
-        shared_quota_shm_path: Some(slots),
-        ..RdmaConfig::new(nic.clone())
+    let rdma = {
+        let mut config: RdmaConfig = RdmaConfig::new(nic.clone());
+        config.shared_quota_shm_path = Some(slots);
+        config
     };
-    let config = EngineConfig {
-        rdma: Some(rdma),
-        ..Default::default()
+    let config = {
+        let mut config = EngineConfig::default();
+        config.rdma = Some(rdma);
+        config
     };
-    let source = TransferEngine::new(EngineConfig {
-        receiver_credit: Some(ReceiverCreditConfig {
-            bytes_per_sender: 8,
-            requests_per_sender: 1,
-            ..Default::default()
-        }),
-        ..config.clone()
+    let source = TransferEngine::new({
+        let mut config: EngineConfig = config.clone();
+        config.receiver_credit = Some({
+            let mut config = ReceiverCreditConfig::default();
+            config.bytes_per_sender = 8;
+            config.requests_per_sender = 1;
+            config
+        });
+        config
     })?;
-    let requester = TransferEngine::new(EngineConfig {
-        max_receiver_credit_sessions: 1,
-        ..config
+    let requester = TransferEngine::new({
+        let mut config: EngineConfig = config;
+        config.max_receiver_credit_sessions = 1;
+        config
     })?;
     let remote = source.register_memory(vec![0xab; 10].into(), Permission::RemoteReadWrite)?;
     let local = requester.register_memory(vec![0xef; 10].into(), Permission::LocalOnly)?;

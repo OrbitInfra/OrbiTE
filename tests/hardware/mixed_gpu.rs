@@ -95,10 +95,7 @@ fn requester(
             expected = image(121);
             view.write(0, &expected)?;
         }
-        let note = Notification {
-            name: name.into(),
-            message: leg.into(),
-        };
+        let note = Notification::new(name, leg);
         let mut batch = engine.submit_async(op, peer, &requests, Some(&note), WAIT)?;
         let done = batch.wait(WAIT)?;
         if !done.locally_drained || done.completed_tasks != 4 || done.transferred_bytes != 27 {
@@ -156,14 +153,15 @@ fn main() -> Result<()> {
     rdma.cuda_memory = RdmaCudaMemory::Direct;
     rdma.host_memory = RdmaHostMemory::Direct;
     rdma.gpu_source_reuse = false;
-    let engine = Arc::new(TransferEngine::new(EngineConfig {
-        bind_addr: bind.parse()?,
-        rdma: Some(rdma),
-        remote_staging: role == "source",
-        max_failover_attempts: 0,
-        staging_chunk_count: 2,
-        staging_chunk_size: 64,
-        ..Default::default()
+    let engine = Arc::new(TransferEngine::new({
+        let mut config = EngineConfig::default();
+        config.bind_addr = bind.parse()?;
+        config.rdma = Some(rdma);
+        config.remote_staging = role == "source";
+        config.max_failover_attempts = 0;
+        config.staging_chunk_count = 2;
+        config.staging_chunk_size = 64;
+        config
     })?);
     let gpu = Arc::new(CudaMemory::allocate(0, LEN)?);
     let permission = if role == "source" {

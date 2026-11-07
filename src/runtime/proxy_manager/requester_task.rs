@@ -10,7 +10,7 @@ use super::stage_registration::{PinnedStage, StageRegistration};
 use super::staging_task::{Command, StagingTask, WORKER_STOPPED, receive};
 use super::worker_shard::{TaskHandle, Terminal};
 use crate::engine::{PreparedTransfer, Source, remaining};
-use crate::memory::Allocation;
+use crate::memory::MemoryBacking;
 use crate::runtime::control_plane::buffer;
 use crate::{Error, HostMemory, RemoteEffect, TransferOp};
 
@@ -99,7 +99,7 @@ impl ProxyManager {
                 .local
                 .allocation_range(request.local_offset, request.length)?;
             match allocation {
-                Allocation::Cuda(gpu) => {
+                MemoryBacking::Cuda(gpu) => {
                     let width = source
                         .staging_pipeline_depth
                         .min(request.length.div_ceil(self.chunk_size));
@@ -118,7 +118,7 @@ impl ProxyManager {
                         stages.finish(result)
                     })
                 }
-                Allocation::Host(_) => {
+                MemoryBacking::Host(_) => {
                     let payload = buffer(self.chunk_size.min(request.length))?;
                     let host = Arc::new(HostMemory::new(payload.into_boxed_slice())?);
                     let mut stages = StageBufferCache::Host(StageRegistration::new(

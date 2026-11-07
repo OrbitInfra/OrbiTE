@@ -56,6 +56,7 @@ impl PinnedHostRegistration {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum CopyDirection {
     HostToDevice,
     DeviceToHost,
@@ -69,6 +70,7 @@ impl CopyDirection {
     }
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum LocalCopyBackend {
     Auto,
     Dma,
@@ -76,6 +78,7 @@ pub enum LocalCopyBackend {
 }
 
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub struct LocalCopyConfig {
     pub backend: LocalCopyBackend,
     /// Minimum number of DMA operations after contiguous and strided coalescing.
@@ -166,6 +169,7 @@ pub struct LocalCopyEngine {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct LocalCopyStats {
     pub active: usize,
     pub retained: usize,

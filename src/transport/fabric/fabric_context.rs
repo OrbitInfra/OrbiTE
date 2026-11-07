@@ -19,6 +19,7 @@ use std::{
 };
 
 #[derive(Clone, Copy, Debug, Default)]
+#[non_exhaustive]
 pub struct FabricStats {
     pub domains: usize,
     pub workers: usize,

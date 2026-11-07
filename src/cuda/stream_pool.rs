@@ -2,7 +2,7 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::time::Instant;
 
 use super::CopyStream;
-use crate::memory::Allocation;
+use crate::memory::MemoryBacking;
 use crate::{Error, Result};
 
 enum Slot {
@@ -50,7 +50,7 @@ impl CUDAStreamPool {
 
     pub(crate) fn acquire(
         self: &Arc<Self>,
-        memory: &Allocation,
+        memory: &MemoryBacking,
         deadline: Instant,
     ) -> Result<CUDAStreamHandle> {
         // No allocation access lock is held while waiting for a pool slot.

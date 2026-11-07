@@ -1,6 +1,6 @@
 use super::*;
 use crate::cuda::ipc::{IpcExport, IpcMapping};
-use crate::memory::Allocation;
+use crate::memory::MemoryBacking;
 use crate::test_support::EVENTUAL_PROGRESS;
 
 pub(super) fn owned(device: &Arc<Device>, exportable: bool) -> Arc<CudaMemory> {
@@ -212,7 +212,7 @@ fn ipc_public_requester_retains_real_owners_and_reports_partial_writes() {
 impl IpcMapping {
     pub(super) fn copy_one(
         &mut self,
-        memory: &Allocation,
+        memory: &MemoryBacking,
         pool: &Arc<CUDAStreamPool>,
         remote_offset: usize,
         local_offset: usize,
@@ -243,7 +243,7 @@ fn copy_ipc(
     handle: [u8; 64],
     to_remote: bool,
 ) -> Result<()> {
-    let local = Allocation::Cuda(local.clone());
+    let local = MemoryBacking::Cuda(local.clone());
     let mut mapping = IpcMapping::new(&local, super::ipc::deadline())?;
     let result = mapping
         .open(handle)
@@ -310,7 +310,7 @@ fn ipc_subbatch_reuses_relocation_and_reports_every_affected_task() {
                 _ => (),
             }
             crate::transport::nvlink::tests::subbatch::run_case(
-                local.into_iter().map(Allocation::Cuda).collect(),
+                local.into_iter().map(MemoryBacking::Cuda).collect(),
                 owned(&source, true),
                 case,
                 asynchronous,
@@ -361,10 +361,10 @@ fn ipc_mapping_owns_all_touched_allocations_until_explicit_close() {
         let mut export = IpcExport::new(remote).unwrap();
         export.expose();
         let mut mapping =
-            IpcMapping::new(&Allocation::Cuda(local.clone()), super::ipc::deadline()).unwrap();
+            IpcMapping::new(&MemoryBacking::Cuda(local.clone()), super::ipc::deadline()).unwrap();
         mapping.open(export.handle).unwrap();
         mapping
-            .copy_one(&Allocation::Cuda(local.clone()), &pool, 11, 7, 17, false)
+            .copy_one(&MemoryBacking::Cuda(local.clone()), &pool, 11, 7, 17, false)
             .unwrap();
         drop(local);
         assert!(weak.upgrade().is_some());

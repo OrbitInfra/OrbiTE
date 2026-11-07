@@ -15,6 +15,7 @@ pub struct FileSegment(Weak<Entry>);
 
 /// Snapshot of TENT's single regular-file buffer. Its base offset is zero.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub struct FileSegmentInfo {
     pub segment_type: SegmentType,
     pub path: Arc<str>,

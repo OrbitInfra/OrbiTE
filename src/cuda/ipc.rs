@@ -3,14 +3,14 @@
 use std::time::Instant;
 
 use super::*;
-use crate::memory::Allocation;
+use crate::memory::MemoryBacking;
 
 mod batch;
 mod copy;
 pub(crate) use copy::{IpcCopy, IpcCopyCompletion, IpcCopyGroup};
 
 pub(crate) struct IpcExport {
-    memory: Option<Allocation>,
+    memory: Option<MemoryBacking>,
     pub(crate) handle: [u8; 64],
     pub(crate) extent: usize,
     exposed: bool,
@@ -41,7 +41,7 @@ impl IpcExport {
         allocation.dma.push(0..memory.length);
         drop(allocation);
         Ok(Self {
-            memory: Some(Allocation::Cuda(memory)),
+            memory: Some(MemoryBacking::Cuda(memory)),
             handle: handle.reserved.map(|b| b.to_ne_bytes()[0]),
             extent,
             exposed: false,
@@ -49,18 +49,18 @@ impl IpcExport {
     }
 
     pub(crate) fn fabric(
-        memory: Allocation,
+        memory: MemoryBacking,
         share: &super::fabric::Share,
         deadline: Instant,
     ) -> Result<Self> {
         match &memory {
-            Allocation::Cuda(m) => {
+            MemoryBacking::Cuda(m) => {
                 let mut a = m.lock_ipc(deadline)?;
                 a.prepare_access(&(0..m.len()))?;
                 a.dma.try_reserve(1).map_err(|_| Error::ResourceExhausted)?;
                 a.dma.push(0..m.len());
             }
-            Allocation::Host(m) => m.lock_cuda_pinned(deadline)?.begin_ipc(),
+            MemoryBacking::Host(m) => m.lock_cuda_pinned(deadline)?.begin_ipc(),
         }
         Ok(Self {
             memory: Some(memory),
@@ -86,9 +86,9 @@ impl Drop for IpcExport {
             if self.exposed {
                 RETAINED_EXPORT.fetch_add(1, Ordering::AcqRel);
                 std::mem::forget(memory);
-            } else if let Allocation::Host(host) = memory {
+            } else if let MemoryBacking::Host(host) = memory {
                 host.release_ipc();
-            } else if let Allocation::Cuda(memory) = memory {
+            } else if let MemoryBacking::Cuda(memory) = memory {
                 memory
                     .allocation
                     .lock()
@@ -106,11 +106,11 @@ pub(crate) struct IpcMapping {
     address: u64,
     pending: bool,
     uncertain: bool,
-    memories: Vec<Allocation>,
+    memories: Vec<MemoryBacking>,
 }
 
 impl IpcMapping {
-    pub(crate) fn new(memory: &Allocation, deadline: Instant) -> Result<Self> {
+    pub(crate) fn new(memory: &MemoryBacking, deadline: Instant) -> Result<Self> {
         let context = memory.ipc_owner_context(deadline)?;
         Ok(Self {
             context,
@@ -236,14 +236,14 @@ impl Drop for IpcMapping {
             }
             for memory in &self.memories {
                 match memory {
-                    Allocation::Cuda(memory) => {
+                    MemoryBacking::Cuda(memory) => {
                         memory
                             .allocation
                             .lock()
                             .unwrap_or_else(|p| p.into_inner())
                             .uncertain = true
                     }
-                    Allocation::Host(memory) => memory.fence_cuda(),
+                    MemoryBacking::Host(memory) => memory.fence_cuda(),
                 }
             }
             std::mem::forget(self.fabric.take());
@@ -286,7 +286,7 @@ impl CudaMemory {
     }
 }
 
-impl Allocation {
+impl MemoryBacking {
     pub(super) fn ipc_owner_context(&self, deadline: Instant) -> Result<Arc<Context>> {
         match self {
             Self::Cuda(memory) => {

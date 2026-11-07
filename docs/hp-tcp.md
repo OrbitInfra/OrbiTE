@@ -10,17 +10,19 @@ Select the payload transport on both peers. HP-TCP is built into the crate and s
 use orbite::{EngineConfig, HpTcpConfig, TransferEngine};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-let engine = TransferEngine::new(EngineConfig {
-    tcp: false,
-    hp_tcp: HpTcpConfig {
-        enable: true,
-        rail_addresses: vec!["127.0.0.1".parse()?, "127.0.0.2".parse()?],
-        ..Default::default()
-    },
-    ..Default::default()
-})?;
-engine.close(std::time::Duration::from_secs(5))?;
-Ok(())
+    let engine = TransferEngine::new({
+        let mut config = EngineConfig::default();
+        config.tcp = false;
+        config.hp_tcp = {
+            let mut config = HpTcpConfig::default();
+            config.enable = true;
+            config.rail_addresses = vec!["127.0.0.1".parse()?, "127.0.0.2".parse()?];
+            config
+        };
+        config
+    })?;
+    engine.close(std::time::Duration::from_secs(5))?;
+    Ok(())
 }
 ```
 

@@ -81,7 +81,7 @@ fn notification(
         {
             return Err(error(FULL, "notification capacity"));
         }
-        Ok(orbite::Notification { name, message })
+        Ok(orbite::Notification::new(name, message))
     })
     .transpose()
 }

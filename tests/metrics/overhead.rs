@@ -5,17 +5,20 @@ use std::time::{Duration, Instant};
 
 fn engine(_enabled: bool, transport: Transport) -> Result<TransferEngine> {
     let hp = transport == Transport::HpTcp;
-    let base = EngineConfig {
-        tcp: !hp,
-        shm: orbite::ShmConfig {
-            enable: transport == Transport::Shm,
-            ..Default::default()
-        },
-        hp_tcp: orbite::HpTcpConfig {
-            enable: hp,
-            ..Default::default()
-        },
-        ..Default::default()
+    let base = {
+        let mut config = EngineConfig::default();
+        config.tcp = !hp;
+        config.shm = {
+            let mut config = orbite::ShmConfig::default();
+            config.enable = transport == Transport::Shm;
+            config
+        };
+        config.hp_tcp = {
+            let mut config = orbite::HpTcpConfig::default();
+            config.enable = hp;
+            config
+        };
+        config
     };
     #[cfg(feature = "metrics")]
     {
@@ -23,15 +26,17 @@ fn engine(_enabled: bool, transport: Transport) -> Result<TransferEngine> {
             let port = std::net::TcpListener::bind(("127.0.0.1", 0))?
                 .local_addr()?
                 .port();
-            let config = EngineConfig {
-                metrics: orbite::metrics::MetricsConfig {
-                    enabled: _enabled,
-                    http_host: "127.0.0.1".into(),
-                    http_port: port,
-                    report_interval_seconds: 0,
-                    ..Default::default()
-                },
-                ..base.clone()
+            let config = {
+                let mut config: EngineConfig = base.clone();
+                config.metrics = {
+                    let mut config = orbite::metrics::MetricsConfig::default();
+                    config.enabled = _enabled;
+                    config.http_host = "127.0.0.1".into();
+                    config.http_port = port;
+                    config.report_interval_seconds = 0;
+                    config
+                };
+                config
             };
             let e = TransferEngine::new(config)?;
             if !_enabled || e.metrics().is_some_and(|m| m.http_port() != 0) {

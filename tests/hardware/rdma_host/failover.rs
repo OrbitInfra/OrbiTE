@@ -6,9 +6,10 @@ use std::sync::Arc;
 
 pub(super) fn run() -> Result<()> {
     let nic = env::var("ORBITE_FAILOVER_NIC")?;
-    let config = EngineConfig {
-        rdma: Some(RdmaConfig::new(nic)),
-        ..Default::default()
+    let config = {
+        let mut config = EngineConfig::default();
+        config.rdma = Some(RdmaConfig::new(nic));
+        config
     };
     let src = TransferEngine::new(config.clone())?;
     let dst = Arc::new(TransferEngine::new(config)?);

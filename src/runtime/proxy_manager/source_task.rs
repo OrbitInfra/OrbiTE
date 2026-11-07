@@ -8,7 +8,7 @@ use super::{ProxyManager, StageBufferLease};
 use crate::CreditResource;
 use crate::cuda::StagingCopy;
 use crate::engine::Source;
-use crate::memory::Allocation;
+use crate::memory::MemoryBacking;
 use crate::runtime::control_plane::{ControlChannel, Operation, PIN_HELLO_SIZE, Request};
 use crate::runtime::receiver_credit::protocol::PinCredit;
 use crate::transport::tcp::TcpTransport;
@@ -164,7 +164,7 @@ impl ProxyManager {
             _ => 1,
         };
         let (allocation, base) = memory.allocation_range(request.offset as usize, total)?;
-        let Allocation::Cuda(gpu) = allocation else {
+        let MemoryBacking::Cuda(gpu) = allocation else {
             return Err(Error::Unavailable(
                 "remote staging requires CUDA source memory",
             ));

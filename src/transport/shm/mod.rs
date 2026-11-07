@@ -4,6 +4,7 @@ use std::path::PathBuf;
 
 #[derive(Clone, Debug, Default, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
+#[non_exhaustive]
 pub struct ShmConfig {
     pub enable: bool,
     /// Empty selects POSIX shared memory. Otherwise both peers specify their local mount.

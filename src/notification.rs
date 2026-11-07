@@ -11,12 +11,21 @@ use crate::{Error, Result};
 /// An application-defined name and message, matching TENT's notification fields.
 /// Strings may be empty; their UTF-8 byte lengths count against engine budgets.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub struct Notification {
     pub name: String,
     pub message: String,
 }
 
 impl Notification {
+    /// Build a notification. UTF-8 byte limits are checked when it is submitted.
+    pub fn new(name: impl Into<String>, message: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            message: message.into(),
+        }
+    }
+
     pub(crate) fn byte_len(&self) -> Result<usize> {
         self.name
             .len()
@@ -26,6 +35,7 @@ impl Notification {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum NotificationEffect {
     /// No notification could have been enqueued by this attempt.
     None,
@@ -34,6 +44,7 @@ pub enum NotificationEffect {
 }
 
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct NotificationFailure {
     pub error: Error,
     pub effect: NotificationEffect,
@@ -62,6 +73,7 @@ impl std::error::Error for NotificationFailure {
 
 /// Notification completion is separate from committed transfer bytes.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum NotificationStatus {
     NotRequested,
     /// An attached notification was skipped for an empty or failed batch.

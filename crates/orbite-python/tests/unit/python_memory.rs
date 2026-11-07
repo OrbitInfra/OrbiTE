@@ -7,9 +7,10 @@ use pyo3::{
 
 #[test]
 fn each_export_lease_is_charged_even_for_duplicate_registration_aliases() {
-    let e = TransferEngine::new(orbite::EngineConfig {
-        max_registered_regions: 2,
-        ..Default::default()
+    let e = TransferEngine::new({
+        let mut config = orbite::EngineConfig::default();
+        config.max_registered_regions = 2;
+        config
     })
     .unwrap();
     let mut storage = Box::new([7u8; 16]);

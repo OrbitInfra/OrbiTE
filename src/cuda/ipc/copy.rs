@@ -6,7 +6,7 @@ use crate::memory::CudaHostAccess;
 
 /// A resolved copy keeps the actual allocation owner, including alias offsets.
 pub(crate) struct IpcCopy {
-    pub(crate) memory: Allocation,
+    pub(crate) memory: MemoryBacking,
     pub(crate) local_offset: usize,
     pub(crate) remote_offset: usize,
     pub(crate) length: usize,
@@ -22,7 +22,7 @@ pub(crate) struct IpcCopyCompletion {
 pub(crate) struct IpcCopyGroup {
     stream: Option<CUDAStreamHandle>,
     // Unique whole-allocation loans; the flag distinguishes touched owners.
-    loans: Vec<(Allocation, bool)>,
+    loans: Vec<(MemoryBacking, bool)>,
     shared: Vec<crate::transport::shm::RangeLock>,
     pending: bool,
     pub(crate) attempted: usize,
@@ -86,7 +86,7 @@ impl Drop for IpcCopyGroup {
         for (memory, touched) in self.loans.drain(..) {
             let retain = self.pending && touched;
             match &memory {
-                Allocation::Cuda(memory) => {
+                MemoryBacking::Cuda(memory) => {
                     let mut allocation =
                         memory.allocation.lock().unwrap_or_else(|p| p.into_inner());
                     if retain {
@@ -97,7 +97,7 @@ impl Drop for IpcCopyGroup {
                     }
                     memory.ipc_idle.notify_all();
                 }
-                Allocation::Host(memory) => {
+                MemoryBacking::Host(memory) => {
                     if retain {
                         memory.fence_cuda();
                     } else {
@@ -133,10 +133,10 @@ impl CopyAccess<'_> {
     }
 }
 
-fn owner_key(memory: &Allocation) -> usize {
+fn owner_key(memory: &MemoryBacking) -> usize {
     match memory {
-        Allocation::Cuda(memory) => Arc::as_ptr(memory) as usize,
-        Allocation::Host(memory) => Arc::as_ptr(memory) as usize,
+        MemoryBacking::Cuda(memory) => Arc::as_ptr(memory) as usize,
+        MemoryBacking::Host(memory) => Arc::as_ptr(memory) as usize,
     }
 }
 
@@ -205,7 +205,7 @@ impl IpcMapping {
                 .map_err(|_| Error::ResourceExhausted)?;
             for memory in &owners {
                 let access = match memory {
-                    Allocation::Cuda(memory) => {
+                    MemoryBacking::Cuda(memory) => {
                         let mut allocation = memory.lock_ipc(deadline)?;
                         if !allocation.owned {
                             return Err(Error::Unavailable(
@@ -215,7 +215,7 @@ impl IpcMapping {
                         allocation.prepare_access(&(0..memory.length))?;
                         CopyAccess::Device(allocation)
                     }
-                    Allocation::Host(memory) => {
+                    MemoryBacking::Host(memory) => {
                         CopyAccess::Host(memory.lock_cuda_pinned(deadline)?)
                     }
                 };
@@ -288,7 +288,7 @@ impl IpcMapping {
                     let copy_code = unsafe { (driver.copy_sync)(dst, src, copy.length) };
                     // cuMemcpy may return before a DtoD finishes. Drain its legacy
                     // stream before detaching the mapping, also after any failed copy.
-                    if matches!(copy.memory, Allocation::Cuda(_)) || copy_code != SUCCESS {
+                    if matches!(copy.memory, MemoryBacking::Cuda(_)) || copy_code != SUCCESS {
                         // SAFETY: the unsuffixed cuMemcpy uses this context's legacy stream.
                         let code = unsafe { (driver.stream_synchronize)(std::ptr::null_mut()) };
                         if code != SUCCESS {
@@ -345,7 +345,7 @@ impl IpcMapping {
                             (driver.copy_device)(dst, src, copy.length, stream)
                         } else {
                             match &copy.memory {
-                                Allocation::Cuda(memory) => {
+                                MemoryBacking::Cuda(memory) => {
                                     let local = memory.address + copy.local_offset as u64;
                                     let (destination, source) = if to_remote {
                                         (remote, local)
@@ -354,7 +354,7 @@ impl IpcMapping {
                                     };
                                     (driver.copy_device)(destination, source, copy.length, stream)
                                 }
-                                Allocation::Host(memory) => {
+                                MemoryBacking::Host(memory) => {
                                     let host = (memory.base_address() + copy.local_offset as u64)
                                         as usize
                                         as *mut std::ffi::c_void;
