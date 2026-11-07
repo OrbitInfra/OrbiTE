@@ -3,6 +3,7 @@ use crate::{Error, Result};
 use std::ffi::OsString;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Mode {
     #[default]
     Off,
@@ -11,6 +12,7 @@ pub enum Mode {
 }
 
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub struct Config {
     pub mode: Mode,
     pub min_window_bytes: u64,

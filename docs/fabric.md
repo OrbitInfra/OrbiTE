@@ -15,13 +15,15 @@ loads `libfabric.so.1` only when `EngineConfig::fabric` is `Some`.
 ```rust
 use orbite::{EngineConfig, FabricConfig, FabricProvider, TransferEngine};
 
-let engine = TransferEngine::new(EngineConfig {
-    fabric: Some(FabricConfig {
-        provider: FabricProvider::Tcp,
-        devices: vec!["lo".into()], // Explicit loopback domain for this example.
-        ..Default::default()
-    }),
-    ..Default::default()
+let engine = TransferEngine::new({
+    let mut config = EngineConfig::default();
+    config.fabric = Some({
+        let mut config = FabricConfig::default();
+        config.provider = FabricProvider::Tcp;
+        config.devices = vec!["lo".into()];
+        config
+    });
+    config
 })?;
 # Ok::<(), orbite::Error>(())
 ```

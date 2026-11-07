@@ -6,6 +6,7 @@ use crate::{Error, Result};
 
 /// Host-memory registration policy.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum RdmaHostMemory {
     /// Register the actual host range. Registration errors never select staging.
     #[default]
@@ -16,6 +17,7 @@ pub enum RdmaHostMemory {
 
 /// NVIDIA device-memory policy. Direct requires native GPU registration support.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum RdmaCudaMemory {
     #[default]
     Staged,
@@ -26,6 +28,7 @@ pub enum RdmaCudaMemory {
 
 /// Shared CQ progress policy. The frozen TENT polling path remains the default.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum RdmaProgressMode {
     #[default]
     Polling,
@@ -35,6 +38,7 @@ pub enum RdmaProgressMode {
 
 /// Automatic or pinned NIC discovery and bounded request-level rail selection.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct RdmaConfig {
     /// None discovers an accessible provider device; Some is a strict pin.
     pub device: Option<String>,

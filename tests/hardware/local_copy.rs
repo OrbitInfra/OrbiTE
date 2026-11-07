@@ -108,17 +108,13 @@ fn main() -> GateResult<()> {
             // SAFETY: this caller owns the retained primary context and its default
             // stream. No capture, mutation or external access overlaps a flight.
             Ok::<_, Box<dyn Error>>(unsafe {
-                LocalCopyEngine::bind(
-                    &g,
-                    stream.cu_stream().cast(),
-                    stream.clone(),
-                    LocalCopyConfig {
-                        backend,
-                        max_descriptors: blocks,
-                        max_inflight: 1,
-                        ..Default::default()
-                    },
-                )
+                LocalCopyEngine::bind(&g, stream.cu_stream().cast(), stream.clone(), {
+                    let mut config = LocalCopyConfig::default();
+                    config.backend = backend;
+                    config.max_descriptors = blocks;
+                    config.max_inflight = 1;
+                    config
+                })
             }?)
         })
         .collect::<Result<_, _>>()?;

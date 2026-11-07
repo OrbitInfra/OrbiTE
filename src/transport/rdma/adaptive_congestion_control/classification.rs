@@ -2,6 +2,7 @@
 use ibverbs_sys as ffi;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Outcome {
     Success,
     Congestion,
@@ -13,6 +14,7 @@ pub enum Outcome {
     Fatal,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum FailureScope {
     Operation,
     Qp,
@@ -22,6 +24,7 @@ pub enum FailureScope {
     Device,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Classification {
     pub outcome: Outcome,
     pub scope: FailureScope,

@@ -100,12 +100,13 @@ enum WeakBacking {
     Cuda(Weak<orbite::cuda::CudaMemory>),
 }
 impl WeakBacking {
-    fn new(m: &MemoryBacking) -> Self {
-        match m {
+    fn new(m: &MemoryBacking) -> Result<Self> {
+        Ok(match m {
             MemoryBacking::Host(v) => Self::Host(Arc::downgrade(v)),
             #[cfg(feature = "cuda")]
             MemoryBacking::Cuda(v) => Self::Cuda(Arc::downgrade(v)),
-        }
+            _ => return Err(UNSUPPORTED),
+        })
     }
     fn upgrade(&self) -> Option<MemoryBacking> {
         match self {
@@ -149,12 +150,13 @@ fn bounds(p: *mut c_void, n: usize) -> Result<(usize, usize)> {
     let start = checked(p.cast::<u8>(), n)?.as_ptr() as usize;
     Ok((start, start + n))
 }
-fn base(m: &MemoryBacking) -> usize {
-    match m {
+fn base(m: &MemoryBacking) -> Result<usize> {
+    Ok(match m {
         MemoryBacking::Host(v) => v.base_address() as usize,
         #[cfg(feature = "cuda")]
         MemoryBacking::Cuda(v) => v.base_address() as usize,
-    }
+        _ => return Err(UNSUPPORTED),
+    })
 }
 fn foreign(
     p: *mut c_void,
@@ -291,11 +293,12 @@ fn resolve(
     };
     #[cfg(not(feature = "cuda"))]
     let m = foreign(p, n, loc, keep)?;
-    let span_start = base(&m);
+    let span_start = base(&m)?;
     let span_end = match &m {
         MemoryBacking::Host(v) => span_start.checked_add(v.len()),
         #[cfg(feature = "cuda")]
         MemoryBacking::Cuda(v) => span_start.checked_add(v.len()),
+        _ => return Err(UNSUPPORTED),
     }
     .ok_or(INVALID)?;
     // Do not create partially overlapping native owners from different exports.
@@ -310,7 +313,7 @@ fn resolve(
         Span {
             fenced: false,
             end: span_end,
-            owner: WeakBacking::new(&m),
+            owner: WeakBacking::new(&m)?,
             foreign: Some(receipt.clone()),
             retained,
         },
@@ -479,7 +482,7 @@ impl Memory {
                 }
             }
         };
-        let address = base(&m);
+        let address = base(&m)?;
         let end = address.checked_add(n).ok_or(INVALID)?;
         if let Some((_, prior)) = all.range_mut(..end).next_back() {
             if prior.end > address {
@@ -496,7 +499,7 @@ impl Memory {
             Span {
                 fenced: false,
                 end,
-                owner: WeakBacking::new(&m),
+                owner: WeakBacking::new(&m)?,
                 foreign: None,
                 retained: true,
             },
@@ -528,6 +531,7 @@ impl Memory {
             MemoryBacking::Host(v) => Arc::strong_count(v),
             #[cfg(feature = "cuda")]
             MemoryBacking::Cuda(v) => Arc::strong_count(v),
+            _ => return Err(UNSUPPORTED),
         };
         if count != 1 {
             return Err(FULL);
@@ -545,6 +549,11 @@ impl Memory {
                 .release_owned(),
             #[cfg(feature = "cuda")]
             (MemoryBacking::Cuda(g), _) => g.release_owned(),
+            (other, _) => {
+                // No destroy was attempted; preserve the allocation and its charge.
+                a.memory = Some(other);
+                return Err(UNSUPPORTED);
+            }
         };
         if let Err(error) = result {
             if let Some(s) = all.get_mut(&addr) {
@@ -631,8 +640,10 @@ impl Memory {
                         };
                         if let Err(error) = result {
                             if matches!(error, orbite::Error::Unquiesced { .. }) {
-                                if let Some(s) = lock(spans())?.get_mut(&base(&memory)) {
-                                    s.fenced = true;
+                                if let Ok(address) = base(&memory) {
+                                    if let Some(s) = lock(spans())?.get_mut(&address) {
+                                        s.fenced = true;
+                                    }
                                 }
                                 self.quarantine.push(memory);
                                 self.quarantine_owners.push(owner.keep.clone());
@@ -653,6 +664,7 @@ impl Memory {
                 MemoryBacking::Host(m) => m.location(offset, n)?.location,
                 #[cfg(feature = "cuda")]
                 MemoryBacking::Cuda(m) => m.location(offset, n)?.location,
+                _ => return Err(UNSUPPORTED),
             };
             match (o.location, actual) {
                 (Location::Any, _) => (),
@@ -675,7 +687,7 @@ impl Memory {
             if o.route == Transport::HpTcp && !matches!(memory, MemoryBacking::Host(_)) {
                 return Err(UNSUPPORTED);
             }
-            witnesses.push((receipt, base(&memory)));
+            witnesses.push((receipt, base(&memory)?));
             ranges.push((memory, offset, n));
         }
         let additions: std::collections::BTreeSet<_> = addrs
@@ -692,8 +704,10 @@ impl Memory {
             Err(err @ orbite::Error::Unquiesced { .. }) => {
                 let mut all = lock(spans())?;
                 for (memory, _, _) in ranges {
-                    if let Some(s) = all.get_mut(&base(&memory)) {
-                        s.fenced = true;
+                    if let Ok(address) = base(&memory) {
+                        if let Some(s) = all.get_mut(&address) {
+                            s.fenced = true;
+                        }
                     }
                     self.quarantine.push(memory);
                 }

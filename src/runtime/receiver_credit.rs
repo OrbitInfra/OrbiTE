@@ -20,6 +20,7 @@ use super::admission_queue::LocalTransferAdmissionQueue;
 /// Resource tags in TENT's receiver credit schema.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u16)]
+#[non_exhaustive]
 pub enum CreditResource {
     DataBytes = 1,
     RequestSlots = 2,
@@ -39,6 +40,7 @@ impl CreditResource {
 
 /// One resource's cumulative balance in the sender ledger.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
 pub struct CreditBalance {
     pub granted: u64,
     pub consumed: u64,
@@ -47,22 +49,36 @@ pub struct CreditBalance {
 }
 
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub struct CreditAmount {
     pub resource: CreditResource,
     pub grant_total: u64,
+}
+
+impl CreditAmount {
+    /// A cumulative grant, in bytes for DataBytes or slots for the other resources.
+    pub fn new(resource: CreditResource, grant_total: u64) -> Self {
+        Self {
+            resource,
+            grant_total,
+        }
+    }
 }
 
 /// A cooperative receiver's application-delivered cumulative update.
 /// Automatic bindings synchronize equivalent totals over OrbiTE's control wire;
 /// neither API nor encoding is TENT wire-compatible.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct ReceiverCreditUpdateV1 {
     pub schema_version: u16,
     pub flags: u16,
     /// The authoritative RemoteSegment source epoch is the receiver session.
     pub receiver_session_id: SourceEpoch,
     pub qos_class: u32,
+    /// Receiver ledger generation, distinct from the process SourceEpoch.
     pub epoch: u64,
+    /// Monotonic update order within the ledger generation.
     pub sequence: u64,
     /// Zero has no expiry. Freshness gates new reservations, not reserved work.
     pub freshness_ttl_ms: u32,
@@ -70,7 +86,31 @@ pub struct ReceiverCreditUpdateV1 {
     pub grants: Vec<CreditAmount>,
 }
 
+impl ReceiverCreditUpdateV1 {
+    /// Start an update for an authoritative receiver session and ledger generation.
+    /// Sequence numbers order cumulative grants; neither freshness nor a new epoch
+    /// is a receipt for bytes already admitted. Add grants before applying it.
+    pub fn new(
+        receiver_session_id: SourceEpoch,
+        qos_class: u32,
+        epoch: u64,
+        sequence: u64,
+    ) -> Self {
+        Self {
+            schema_version: 1,
+            flags: 0,
+            receiver_session_id,
+            qos_class,
+            epoch,
+            sequence,
+            freshness_ttl_ms: 0,
+            grants: Vec::new(),
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum CreditUpdateDisposition {
     Applied,
     DuplicateOrOld,
@@ -78,6 +118,7 @@ pub enum CreditUpdateDisposition {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub struct ReceiverCreditStats {
     pub automatic: bool,
     /// Successful data groups whose actual owners have been released.

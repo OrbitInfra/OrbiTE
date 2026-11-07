@@ -6,6 +6,7 @@ pub(crate) const MAX_RAILS: usize = 16;
 /// Typed TENT transports/hp_tcp settings. The engine always retains its control listener.
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
+#[non_exhaustive]
 pub struct HpTcpConfig {
     pub enable: bool,
     pub bind_address: String,

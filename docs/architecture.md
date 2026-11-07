@@ -9,8 +9,12 @@ design after installed GDR/NVLink qualification. Neither adds a current
 transport, connector or performance claim.
 The beta.1 [Rust surface review](rust-api.md#beta1-freeze-candidate) and
 [Python inventory](python.md#surface-and-defaults) define the API freeze
-candidate. Open naming, extensibility and documentation choices require
-maintainer approval; source readiness does not qualify a native device.
+boundary. Public enums and field records are non-exhaustive except binary
+`TransferOp`; configs use defaults and field assignment. Documented primary
+helpers are stable candidates. Hidden owner helpers are release-private, so the
+Python packaging crate pins the exact core version. The hidden adaptive core
+has no stability promise. Remaining missing docs close before `0.1.0`; source
+readiness does not qualify a native device.
 Architectural alignment does not by itself establish behavior, ABI, wire or
 performance parity. See [capabilities](capabilities.md) for support and the
 [completion plan](completion-plan.md#p4-remaining-delivery) for open work.
@@ -514,8 +518,8 @@ publishes a registration-lifetime key. OrbiTE's stale-key, guard-byte and
 failed-destruction controls exercise its per-grant authority. See
 [GPU ownership](rdma-cuda.md#gpudirect-rdma-ownership).
 
-The `rdma-adaptive` Cargo feature exposes the shared v0.3.14 congestion
-core. A device and each route have separate byte windows. A domain-local lock
+The `rdma-adaptive` Cargo feature retains the hidden, unstable shared v0.3.14
+congestion core outside the beta API freeze. A device and each route have separate byte windows. A domain-local lock
 serializes reset and tick against concurrent feedback. Admission in enforce mode
 rolls back the device reservation if the route defers. Only an explicit receipt
 returns a permit’s charge. The moved/dropped permit control covers this

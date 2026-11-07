@@ -12,19 +12,17 @@ use orbite::{
 const TIMEOUT: Duration = Duration::from_secs(5);
 
 fn notification(name: &str, message: &str) -> Notification {
-    Notification {
-        name: name.into(),
-        message: message.into(),
-    }
+    Notification::new(name, message)
 }
 
 #[test]
 fn local_and_remote_messages_share_one_bounded_draining_inbox() {
-    let source = TransferEngine::new(EngineConfig {
-        max_pending_notifications: 3,
-        max_pending_notification_bytes: 8,
-        max_notification_bytes: 8,
-        ..EngineConfig::default()
+    let source = TransferEngine::new({
+        let mut config: EngineConfig = EngineConfig::default();
+        config.max_pending_notifications = 3;
+        config.max_pending_notification_bytes = 8;
+        config.max_notification_bytes = 8;
+        config
     })
     .unwrap();
     let sender = TransferEngine::new(EngineConfig::default()).unwrap();
@@ -86,9 +84,10 @@ fn local_and_remote_messages_share_one_bounded_draining_inbox() {
 #[test]
 fn attached_delivery_and_queue_failure_preserve_exact_transfer_results() {
     for operation in [TransferOp::Read, TransferOp::Write] {
-        let source = TransferEngine::new(EngineConfig {
-            max_pending_notifications: 1,
-            ..EngineConfig::default()
+        let source = TransferEngine::new({
+            let mut config: EngineConfig = EngineConfig::default();
+            config.max_pending_notifications = 1;
+            config
         })
         .unwrap();
         let exported = source
@@ -208,9 +207,10 @@ fn attached_delivery_and_queue_failure_preserve_exact_transfer_results() {
 #[test]
 fn concurrent_senders_and_receivers_deliver_each_message_once() {
     let source = Arc::new(
-        TransferEngine::new(EngineConfig {
-            handler_threads: 8,
-            ..EngineConfig::default()
+        TransferEngine::new({
+            let mut config: EngineConfig = EngineConfig::default();
+            config.handler_threads = 8;
+            config
         })
         .unwrap(),
     );

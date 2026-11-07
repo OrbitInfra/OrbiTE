@@ -5,6 +5,7 @@ use std::{fs::File, io::Read, path::Path};
 
 /// TENT metrics settings. Compile the `metrics` feature to opt in.
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct MetricsConfig {
     pub enabled: bool,
     pub http_host: String,

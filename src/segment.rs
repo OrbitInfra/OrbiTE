@@ -11,6 +11,7 @@ pub use file::{FileSegment, FileSegmentInfo};
 
 /// Target for both synchronous and asynchronous transfer submissions.
 #[derive(Clone, Copy)]
+#[non_exhaustive]
 pub enum TransferTarget<'a> {
     Memory(&'a RemoteSegment),
     File(&'a FileSegment),

@@ -13,6 +13,7 @@ use std::{ffi::OsString, net::ToSocketAddrs, path::Path, time::Duration};
 /// P2P constructor identity captured by the compatibility loader. The Rust
 /// control service continues to fence registrations by endpoint and epoch.
 #[derive(Clone)]
+#[non_exhaustive]
 pub struct TentSettings {
     pub local_segment_name: String,
     /// Inert P2P constructor identity. External metadata server URIs are rejected.

@@ -129,15 +129,18 @@ fn caller_context_control(memory: &CudaMemory) -> Result<()> {
 }
 
 fn exercise(path: &Path) -> Result<()> {
-    let engine = TransferEngine::new(EngineConfig {
-        io_uring: orbite::IoUringConfig {
-            pinned_staging: true,
-            staging_slot_kb: 4,
-            staging_slots: 1,
-        },
-        staging_chunk_size: CHUNK,
-        staging_chunk_count: 2,
-        ..Default::default()
+    let engine = TransferEngine::new({
+        let mut config = EngineConfig::default();
+        config.io_uring = {
+            let mut config = orbite::IoUringConfig::default();
+            config.pinned_staging = true;
+            config.staging_slot_kb = 4;
+            config.staging_slots = 1;
+            config
+        };
+        config.staging_chunk_size = CHUNK;
+        config.staging_chunk_count = 2;
+        config
     })?;
     let mut image = vec![0x58; 6 * CHUNK];
     OpenOptions::new()

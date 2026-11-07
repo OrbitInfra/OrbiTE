@@ -33,6 +33,13 @@ OrbiTE prefix rejection, with no admission or payload movement.
 
 ## Linux CI release profiles
 
+The beta API freeze changes Rust extensibility and construction, not transfer
+behavior. Downstream examples, installed consumers and Python wheels compile
+against the same release-pinned core. Artifact rejection is exercised with
+ordinary Python, `-O` and `PYTHONOPTIMIZE=2`; invalid metadata cannot bypass it.
+The [freeze decisions](rust-api.md#freeze-decisions) keep native qualification
+separate from this API review.
+
 The following are **Qualified on Linux CI**, limited to the cases below.
 Evidence is from accepted main `58caa0d79c316dcefeb7790351d08f21667c11dc`
 (S26), before the beta version change. The beta preparation reruns these

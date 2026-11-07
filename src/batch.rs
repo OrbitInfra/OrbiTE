@@ -13,6 +13,7 @@ use crate::{
     TransferFailure, TransferOp, TransferRequest, TransferTarget,
 };
 
+/// Engine-scoped batch identity. Its numeric value is not valid in another engine.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct BatchId(u64, crate::SourceEpoch);
 impl BatchId {
@@ -22,6 +23,7 @@ impl BatchId {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum TaskState {
     Waiting,
     Running,
@@ -37,6 +39,7 @@ impl TaskState {
 }
 
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct TaskStatus {
     /// Absolute public task ID of this transfer’s physical owner.
     pub physical_owner: usize,
@@ -46,14 +49,18 @@ pub struct TaskStatus {
     pub failover_count: usize,
     pub state: TaskState,
     pub operation: TransferOp,
+    /// Contiguous completed byte prefix of this public task, including a short failure.
     pub transferred_bytes: usize,
+    /// A cancellation request is logical intent, never a hardware release receipt.
     pub cancel_requested: bool,
+    /// True only after this task's physical owners can no longer access its ranges.
     pub locally_drained: bool,
     /// The failure identifies the affected public interval in this batch.
     pub failure: Option<Arc<TransferFailure>>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum BatchState {
     /// Additional submissions are allowed; completed tasks never regress.
     Open,
@@ -64,6 +71,7 @@ pub enum BatchState {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub struct BatchStatus {
     pub state: BatchState,
     pub submitted_tasks: usize,
@@ -81,6 +89,7 @@ impl BatchStatus {
 }
 
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct SubmissionStatus {
     pub tasks: Range<usize>,
     pub completed_requests: usize,
@@ -514,7 +523,8 @@ impl Batch {
         (0..s.public.len()).map(|id| s.public_status(id)).collect()
     }
     /// Snapshot one public task or the entire batch without voting on a retry,
-    /// waking a worker, or waiting for native retirement.
+    /// waking a worker, or waiting for native retirement. A terminal state alone
+    /// is not a release receipt; inspect `locally_drained` before releasing owners.
     pub fn observe_tasks(&self, task: Option<usize>) -> Result<Vec<TaskStatus>> {
         let state = self.progress()?.lock();
         match task {

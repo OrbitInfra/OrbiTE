@@ -14,12 +14,13 @@ use std::time::Instant;
 
 use crate::cuda::PinnedAllocation;
 use crate::engine::remaining;
-use crate::memory::Allocation;
+use crate::memory::MemoryBacking;
 use crate::platform::numa::{NATIVE, Numa, page_round};
 use crate::runtime::receiver_credit::ReceiverResourceLease;
 use crate::{Error, RegisteredMemory, Result, StagingLocation};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
 pub struct StagingStats {
     /// Live shared staging threads, including idle shards.
     pub worker_shards: usize,
@@ -312,8 +313,8 @@ impl ProxyManager {
     ) -> Result<()> {
         let (owner, offset) = memory.allocation_range(offset, bytes.len())?;
         match owner {
-            Allocation::Host(owner) => owner.read(offset, bytes),
-            Allocation::Cuda(owner) => owner.copy_staged(offset, bytes, None, self, deadline),
+            MemoryBacking::Host(owner) => owner.read(offset, bytes),
+            MemoryBacking::Cuda(owner) => owner.copy_staged(offset, bytes, None, self, deadline),
         }
     }
 
@@ -326,8 +327,8 @@ impl ProxyManager {
     ) -> Result<()> {
         let (owner, offset) = memory.allocation_range(offset, bytes.len())?;
         match owner {
-            Allocation::Host(owner) => owner.write(offset, bytes),
-            Allocation::Cuda(owner) => {
+            MemoryBacking::Host(owner) => owner.write(offset, bytes),
+            MemoryBacking::Cuda(owner) => {
                 owner.copy_staged(offset, &mut [], Some(bytes), self, deadline)
             }
         }

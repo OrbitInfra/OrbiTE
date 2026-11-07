@@ -1,7 +1,7 @@
 use super::ipc::{deadline, owned};
 use super::*;
 use crate::cuda::ipc::{IpcExport, IpcMapping};
-use crate::memory::Allocation;
+use crate::memory::MemoryBacking;
 
 pub(super) struct Producer {
     input: Arc<CudaMemory>,
@@ -156,7 +156,8 @@ fn pinned_producer_readiness_precedes_cpu_staging_ipc_dma_and_tcp_payloads() {
         let remote = allocation(&[0xcc; 64]);
         let mut ipc = if route.starts_with("ipc") {
             let export = IpcExport::new(owned(&remote, true)).unwrap();
-            let mut mapping = IpcMapping::new(&Allocation::Host(host.clone()), deadline()).unwrap();
+            let mut mapping =
+                IpcMapping::new(&MemoryBacking::Host(host.clone()), deadline()).unwrap();
             mapping.open(export.handle).unwrap();
             Some((export, mapping, CUDAStreamPool::new(1).unwrap()))
         } else {
@@ -183,7 +184,7 @@ fn pinned_producer_readiness_precedes_cpu_staging_ipc_dma_and_tcp_payloads() {
                 let (export, mut mapping, pool) = ipc.take().unwrap();
                 mapping
                     .copy_one(
-                        &Allocation::Host(host.clone()),
+                        &MemoryBacking::Host(host.clone()),
                         &pool,
                         8,
                         12,

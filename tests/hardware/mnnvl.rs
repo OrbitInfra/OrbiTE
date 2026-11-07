@@ -79,18 +79,20 @@ fn main() -> Result<()> {
     let numa = numa
         .parse()
         .map_err(|_| Error::InvalidConfig("invalid GPU NUMA node"))?;
-    let engine = Arc::new(TransferEngine::new(EngineConfig {
-        tcp: false,
-        max_failover_attempts: 0,
-        bind_addr: bind
+    let engine = Arc::new(TransferEngine::new({
+        let mut config = EngineConfig::default();
+        config.tcp = false;
+        config.max_failover_attempts = 0;
+        config.bind_addr = bind
             .parse()
-            .map_err(|_| Error::InvalidConfig("invalid bind address"))?,
-        mnnvl: Some(MnnvlConfig {
-            fabric_domain: Some(domain.parse::<SourceEpoch>()?),
-            egm,
-            ..Default::default()
-        }),
-        ..Default::default()
+            .map_err(|_| Error::InvalidConfig("invalid bind address"))?;
+        config.mnnvl = Some({
+            let mut config = MnnvlConfig::default();
+            config.fabric_domain = Some(domain.parse::<SourceEpoch>()?);
+            config.egm = egm;
+            config
+        });
+        config
     })?);
     match role.as_str() {
         "source" => {

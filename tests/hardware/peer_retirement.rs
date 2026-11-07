@@ -104,13 +104,11 @@ fn main() -> Result<()> {
     let [role, profile, bind, device, domain, peers @ ..] = &args[..] else {
         return Err("ROLE PROFILE BIND RNIC FABRIC_DOMAIN [PEER EPOCH OTHER EPOCH]".into());
     };
-    let mut c = EngineConfig {
-        tcp: false,
-        max_failover_attempts: 0,
-        handler_timeout: WAIT,
-        bind_addr: bind.parse()?,
-        ..Default::default()
-    };
+    let mut c = EngineConfig::default();
+    c.tcp = false;
+    c.max_failover_attempts = 0;
+    c.handler_timeout = WAIT;
+    c.bind_addr = bind.parse()?;
     let transport = match profile.as_str() {
         "rdma" => {
             let mut r = RdmaConfig::new(device);
@@ -124,10 +122,9 @@ fn main() -> Result<()> {
             Transport::Nvlink
         }
         "mnnvl" => {
-            c.mnnvl = Some(MnnvlConfig {
-                fabric_domain: Some(domain.parse()?),
-                ..Default::default()
-            });
+            let mut config = MnnvlConfig::default();
+            config.fabric_domain = Some(domain.parse()?);
+            c.mnnvl = Some(config);
             c.nvlink_cache_entries = 8;
             Transport::Mnnvl
         }

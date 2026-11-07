@@ -10,9 +10,14 @@ Both engines enable SHM. The default leaves it off. The source can register mult
 use orbite::{EngineConfig, Permission, ShmConfig, TransferEngine};
 
 fn main() -> orbite::Result<()> {
-    let source = TransferEngine::new(EngineConfig {
-        shm: ShmConfig { enable: true, ..Default::default() },
-        ..Default::default()
+    let source = TransferEngine::new({
+        let mut config = EngineConfig::default();
+        config.shm = {
+            let mut config = ShmConfig::default();
+            config.enable = true;
+            config
+        };
+        config
     })?;
     let host = source.allocate_shm_memory(8192)?;
     host.write(19, b"orbit")?;

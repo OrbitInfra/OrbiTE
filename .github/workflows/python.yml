@@ -40,6 +40,8 @@ jobs:
             cargo clippy --locked -p orbite-python --features "$features" --all-targets -- -D warnings
             cargo test --locked -p orbite-python --features "$features"
           done
+      - name: Reject malformed artifacts even under optimized Python
+        run: python -I tests/python/test_artifacts.py -v
       - name: Build and test the installed CPU wheel
         run: bash .github/scripts/check-installed-python.sh "$RUNNER_TEMP/wheel-cpu"
       - name: CPU wheel rejects CUDA exports before requesting a capsule

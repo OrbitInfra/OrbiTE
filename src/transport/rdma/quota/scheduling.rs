@@ -5,6 +5,7 @@ use crate::{Error, Result};
 /// TENT DeviceSelector scheduling parameters. Rates are in Gbit/s; EWMA
 /// coefficients weight the old estimate (zero learns entirely from the sample).
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct SchedulingParams {
     pub smart_selection: bool,
     pub numa_tier_weights: [f64; 3],

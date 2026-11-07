@@ -87,7 +87,7 @@ pub use transport::{
 };
 #[cfg(all(target_os = "linux", feature = "cuda"))]
 pub use {
-    config::StagingLocation, runtime::proxy_manager::StagingStats, transport::nvlink::NVLinkStats,
+    config::StagingLocation, runtime::proxy_manager::StagingStats, transport::nvlink::NvlinkStats,
 };
 
 #[cfg(not(unsupported_native_target))]
@@ -100,8 +100,8 @@ pub use {
     },
     error::{Error, Result},
     memory::{
-        Allocation as MemoryBacking, HostMemory, MemoryLocation, MemoryType, Permission,
-        RangeLocation, RegisteredMemory,
+        HostMemory, MemoryBacking, MemoryLocation, MemoryType, Permission, RangeLocation,
+        RegisteredMemory,
     },
     notification::{Notification, NotificationEffect, NotificationFailure, NotificationStatus},
     runtime::{

@@ -16,9 +16,10 @@ const GUARD: usize = 4096;
 const WAIT: Duration = Duration::from_secs(30);
 
 fn exercise(path: &Path) -> Result<()> {
-    let engine = TransferEngine::new(EngineConfig {
-        gds_require_native: true,
-        ..Default::default()
+    let engine = TransferEngine::new({
+        let mut config = EngineConfig::default();
+        config.gds_require_native = true;
+        config
     })?;
     let total = LENGTH + 2 * GUARD;
     let mut file_bytes = vec![0x37; total];

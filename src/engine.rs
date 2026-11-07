@@ -42,7 +42,9 @@ use crate::{
     TransferTarget,
 };
 
+/// The payload operation contract is intentionally binary READ/WRITE.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[allow(clippy::exhaustive_enums)]
 pub enum TransferOp {
     Read,
     Write,
@@ -107,6 +109,7 @@ impl Transport {
 /// TENT request priority; smaller discriminants are served first by RDMA workers.
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
 #[repr(u8)]
+#[non_exhaustive]
 pub enum Priority {
     #[default]
     High = 0,
@@ -116,6 +119,7 @@ pub enum Priority {
 
 /// One file-ordered element of a vectored READ or WRITE.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum FileIoElement {
     /// A nonempty range in one local host or CUDA registration.
     Range { address: u64, length: usize },
@@ -303,7 +307,9 @@ pub(crate) struct PreparedTransfer {
 
 /// Whether the failed request may have modified remote memory.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum RemoteEffect {
+    /// No remote payload effect from this failed attempt; local drain is separate.
     None,
     /// A WRITE body was attempted but its final acknowledgement was not received.
     /// Do not automatically replay it or treat a timeout as remote quiescence.
@@ -311,6 +317,7 @@ pub enum RemoteEffect {
 }
 
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct TransferFailure {
     pub request_index: usize,
     /// Consecutive requests affected by the failure, beginning at request_index.
@@ -324,6 +331,7 @@ pub struct TransferFailure {
 /// first failure. A later file SQE may have completed inside the affected span.
 /// Async task status reports its individual result and exact transferred bytes.
 #[derive(Debug)]
+#[non_exhaustive]
 pub struct BatchReport {
     pub completed_requests: usize,
     pub transferred_bytes: usize,
@@ -343,6 +351,7 @@ impl BatchReport {
 /// Independently sampled resource counters, including unregistered allocations
 /// still retained by local handles or admitted handlers. Not a global snapshot.
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub struct EngineStats {
     /// Freed batches awaiting physical completion, and batches with no safe release path.
     pub deferred_batches: usize,
@@ -352,7 +361,7 @@ pub struct EngineStats {
     #[cfg(feature = "gds")]
     pub gds: crate::GdsStats,
     #[cfg(feature = "cuda")]
-    pub nvlink: Option<crate::NVLinkStats>,
+    pub nvlink: Option<crate::NvlinkStats>,
     #[cfg(feature = "io-uring")]
     pub io_uring: Option<crate::IoUringStats>,
     #[cfg(feature = "cuda")]
@@ -1152,7 +1161,8 @@ impl TransferEngine {
     }
 
     /// Generated SHM basename of this engine's retained mapping. The caller
-    /// can verify a C-supplied path without granting authority over an arbitrary file.
+    /// can verify a binding-supplied path without granting authority over an arbitrary file.
+    #[doc(hidden)]
     pub fn shm_backing_name(&self, backing: &crate::MemoryBacking) -> Option<String> {
         match backing {
             #[cfg(target_os = "linux")]
@@ -1164,7 +1174,9 @@ impl TransferEngine {
         }
     }
 
-    /// Borrow the engine's compiled policy identity for a dynamically supplied request.
+    /// Resolve an engine-compiled policy identity for a dynamically supplied request.
+    /// Unknown names fail before admission. Clone the returned name into requests;
+    /// it retains the compiled spelling without allocating on the submit path.
     pub fn resolve_policy_name(&self, name: &str) -> Result<crate::PolicyName> {
         self.selector
             .as_ref()
@@ -1173,7 +1185,8 @@ impl TransferEngine {
     }
 
     /// Whether this engine installed the named transport. File library and
-    /// ring probes remain lazy until the first eligible file request.
+    /// ring probes remain lazy until the first eligible file request. This reports
+    /// configuration/installation, not peer reachability or hardware qualification.
     pub fn transport_installed(&self, route: Transport) -> bool {
         match route {
             Transport::Unspec => true,
@@ -1198,6 +1211,11 @@ impl TransferEngine {
     }
 
     /// Atomically publish host and device ranges in one registry transaction.
+    /// Each tuple is (retained backing, byte offset, byte length). Every range is
+    /// checked before publication; admitted work retains the backing and native
+    /// registrations until physical drain, even after unregister.
+    /// `route` limits the advertised transport (`Unspec` permits eligible routes);
+    /// `internal` hides the registration from peer Describe replies.
     pub fn register_memory_ranges(
         &self,
         ranges: &[(crate::MemoryBacking, usize, usize)],
@@ -1285,7 +1303,7 @@ impl TransferEngine {
         self.source.proxy.trim_idle()
     }
 
-    /// Establish an initial P2P identity for an address-only C segment name.
+    /// Discover an initial P2P identity at a trusted endpoint.
     /// The caller must trust the endpoint at first lookup and pin the result
     /// for the lifetime of the handle. Never call this to refresh a stale handle.
     pub fn discover_peer_epoch(

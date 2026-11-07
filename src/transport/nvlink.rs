@@ -10,7 +10,7 @@ mod mapping;
 mod progress;
 mod subbatch;
 use budget::MappingBudget;
-pub use budget::NVLinkStats;
+pub use budget::NvlinkStats;
 use cache::{RelocationCache, RelocationKey};
 use export::ExportCache;
 use mapping::OpenedMapping;
@@ -66,7 +66,7 @@ impl NVLinkTransport {
         })
     }
 
-    pub(crate) fn stats(&self) -> Result<NVLinkStats> {
+    pub(crate) fn stats(&self) -> Result<NvlinkStats> {
         let mut stats = self.budget.stats()?;
         (
             stats.stream_slots,

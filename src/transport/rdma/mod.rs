@@ -5,6 +5,8 @@
 use crate::{Error, Result};
 
 #[cfg(feature = "rdma-adaptive")]
+/// Unstable callable reference core; no engine integration or API stability promise.
+#[doc(hidden)]
 pub mod adaptive_congestion_control;
 mod buffers;
 mod bw_arbitration;

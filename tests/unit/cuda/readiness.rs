@@ -1,7 +1,7 @@
 use super::ipc::{deadline, owned};
 use super::*;
 use crate::cuda::ipc::{IpcExport, IpcMapping};
-use crate::memory::Allocation;
+use crate::memory::MemoryBacking;
 use crate::runtime::proxy_manager::ProxyManager;
 
 pub(super) struct Producer {
@@ -191,7 +191,7 @@ fn cuda_producer_readiness_is_consumed_by_copy_staging_ipc_and_dma_owners() {
             "ipc-requester" => {
                 let remote = allocation(&[0x77; 64]);
                 let export = IpcExport::new(owned(&remote, true)).unwrap();
-                let owner = Allocation::Cuda(gpu.clone());
+                let owner = MemoryBacking::Cuda(gpu.clone());
                 let pool = CUDAStreamPool::new(1).unwrap();
                 let mut mapping = IpcMapping::new(&owner, deadline()).unwrap();
                 mapping.open(export.handle).unwrap();

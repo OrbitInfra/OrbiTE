@@ -8,6 +8,7 @@ use crate::{Error, MemoryType, Priority, Result, Transport};
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum SegmentType {
     #[default]
     Memory,
@@ -17,6 +18,7 @@ pub enum SegmentType {
 
 /// Business intent attached to a transfer, independent of its QoS contract.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum IntentType {
     #[default]
     Unspec,
@@ -61,6 +63,7 @@ fn intent<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Option<IntentT
 /// Unknown or unconsumed JSON fields fail configuration instead of broadening it.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
+#[non_exhaustive]
 pub struct SelectionPolicy {
     #[serde(default = "default_name")]
     pub name: String,
@@ -117,6 +120,7 @@ impl Default for SelectionPolicy {
 /// With no rules, use the default eligible candidate order.
 #[derive(Clone, Debug, Default, Deserialize)]
 #[serde(from = "Root")]
+#[non_exhaustive]
 pub struct TransportSelectorConfig {
     pub force_tcp: bool,
     pub use_legacy_transport_selection: bool,

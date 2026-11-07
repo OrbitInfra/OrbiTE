@@ -103,12 +103,13 @@ fn source(device: i32, payload: usize, root: &Path, mode: &str) -> Result<()> {
         .or_else(|| mode.strip_prefix("batch-"))
         .or_else(|| mode.strip_prefix("sync-"))
         .unwrap_or(mode);
-    let engine = TransferEngine::new(EngineConfig {
-        nvlink: true,
-        nvlink_async_memcpy_threshold_kb: if sync { 2048 } else { 0 },
-        nvlink_cache_entries: if cached { 2 } else { 0 },
-        handler_timeout: TIMEOUT,
-        ..EngineConfig::default()
+    let engine = TransferEngine::new({
+        let mut config = EngineConfig::default();
+        config.nvlink = true;
+        config.nvlink_async_memcpy_threshold_kb = if sync { 2048 } else { 0 };
+        config.nvlink_cache_entries = if cached { 2 } else { 0 };
+        config.handler_timeout = TIMEOUT;
+        config
     })?;
     let memory = Arc::new(CudaMemory::allocate_ipc(device, payload + 2 * GUARD)?);
     memory.write(0, &vec![0xa5; memory.len()])?;
@@ -226,11 +227,12 @@ fn requester(
     let address: u64 = fields[3]
         .parse()
         .map_err(|_| Error::Protocol("source address"))?;
-    let engine = TransferEngine::new(EngineConfig {
-        nvlink: true,
-        nvlink_async_memcpy_threshold_kb: if sync { 2048 } else { 0 },
-        nvlink_cache_entries: if cached { 2 } else { 0 },
-        ..EngineConfig::default()
+    let engine = TransferEngine::new({
+        let mut config = EngineConfig::default();
+        config.nvlink = true;
+        config.nvlink_async_memcpy_threshold_kb = if sync { 2048 } else { 0 };
+        config.nvlink_cache_entries = if cached { 2 } else { 0 };
+        config
     })?;
     if mode == "stale" {
         let stale = "00000000000000000000000000000000".parse()?;

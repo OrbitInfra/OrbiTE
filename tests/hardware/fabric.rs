@@ -31,16 +31,18 @@ fn main() -> Result<()> {
     if bind.is_loopback() || bind.is_unspecified() {
         return Err(usage());
     }
-    let engine = TransferEngine::new(EngineConfig {
-        tcp: false,
-        bind_addr: (bind, 0).into(),
-        fabric: Some(FabricConfig {
-            provider: FabricProvider::Efa,
-            devices: vec![domain.clone()],
-            max_mr_size: 1 << 20,
-            ..Default::default()
-        }),
-        ..Default::default()
+    let engine = TransferEngine::new({
+        let mut config = EngineConfig::default();
+        config.tcp = false;
+        config.bind_addr = (bind, 0).into();
+        config.fabric = Some({
+            let mut config = FabricConfig::default();
+            config.provider = FabricProvider::Efa;
+            config.devices = vec![domain.clone()];
+            config.max_mr_size = 1 << 20;
+            config
+        });
+        config
     })?;
     let pattern = expected();
     match mode.as_str() {

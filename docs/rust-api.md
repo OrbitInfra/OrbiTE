@@ -12,8 +12,8 @@ Add `--features rdma,cuda` in an environment with the
 
 ## Beta.1 freeze candidate
 
-This is the public-surface review for `0.1.0-beta.1`, not a declaration of
-stable hardware support or final maintainer approval. Rust is the primary API.
+This is the public surface and stability boundary for `0.1.0-beta.1`.
+Hardware qualification is separate. Rust is the primary API.
 The following names and their public methods/fields are the candidate; private
 transport owners, native function tables and test shims are not public APIs.
 Full signatures come from rustdoc for the chosen feature set, not from the
@@ -30,30 +30,47 @@ frozen TENT C/C++ inventory, whose interfaces are out of scope.
 | Selection | `IntentType`, `PolicyName`, `SegmentType`, `SelectionPolicy`, `TransportSelectorConfig`, `QpPool`; compiled policies and named-policy resolution |
 | QoS | `QosConfig`, `QosPolicyFields`, `QosDegradedActions`, `QosTenantContract`, `QosRequestContext`, `QosUsage`, `EffectiveQosPolicy`; resolve and sample contracts |
 | Credits and accounting | `CreditResource`, `CreditBalance`, `CreditAmount`, `CreditUpdateDisposition`, `ReceiverCreditUpdateV1`, `ReceiverCreditConfig`, `ReceiverCreditStats`, `ReceiverCreditIssuerStats`, `EngineStats`, `RuntimeQueueStats`; manual and automatic credit lifecycle |
-| CPU providers | `HpTcpConfig`, `ShmConfig`, `MnnvlConfig`, `MnnvlHandleType`; SHM allocation/free and backing-name query (MNNVL settings exist without an active CUDA provider) |
+| CPU providers | `HpTcpConfig`, `ShmConfig`, `MnnvlConfig`, `MnnvlHandleType`; SHM allocation/free (MNNVL settings exist without an active CUDA provider) |
 | Linux topology | `Topology`, `NicEntry`, `NicType`, `MemEntry`, `MemType`, `DEVICE_PRIORITY_RANKS`; local/discovered topology snapshots |
 | `rdma` | `transport::rdma::{RdmaConfig, RdmaHostMemory, RdmaCudaMemory, RdmaProgressMode, SchedulingParams, NicLoadStats, QpReadDepths, RdmaStats}`; NIC load queries |
-| `rdma-adaptive` | `transport::rdma::adaptive_congestion_control`: `Config`, `Mode`, `PathState`, `Snapshot`, `Signals`, `DomainState`, `AdmissionDomain`, `Decision`, `Reason`, `Rejection`, `PathHandle`, `Permit`, `Classification`, `FailureScope`, `Outcome`, `classify_completion`, `classify_async_event`; callable core, not a live worker policy |
-| `cuda` | `cuda::{CudaMemory, RetainedResources, allocate_pinned_host, retained_resources}`, root `StagingLocation`, `StagingStats`, `NVLinkStats`; device/fabric/EGM allocation, external ownership, producer readiness, staging trim and IPC cache flush |
+| Unstable `rdma-adaptive` (excluded from freeze) | `transport::rdma::adaptive_congestion_control`: `Config`, `Mode`, `PathState`, `Snapshot`, `Signals`, `DomainState`, `AdmissionDomain`, `Decision`, `Reason`, `Rejection`, `PathHandle`, `Permit`, `Classification`, `FailureScope`, `Outcome`, `classify_completion`, `classify_async_event`; hidden callable core, not a live worker policy |
+| `cuda` | `cuda::{CudaMemory, RetainedResources, allocate_pinned_host, retained_resources}`, root `StagingLocation`, `StagingStats`, `NvlinkStats`; device/fabric/EGM allocation, external ownership, producer readiness, staging trim and IPC cache flush |
 | `cuda::local_copy` | `PinnedHostRegistration`, `CopyDirection`, `LocalCopyBackend`, `LocalCopyConfig`, `LocalCopyDesc`, `ProducerEvent`, `LocalCopyEngine`, `LocalCopyStats`, `LocalCopyCompletion`; caller stream, descriptors, submit, event progress/wait and close |
 | File and network features | `io-uring`: `IoUringConfig`, `IoUringStats`; `gds`: `GdsMode`, `GdsStats`; `fabric`: `FabricConfig`, `FabricProvider`, `FabricStats` |
 | `metrics` | `metrics::{MetricsConfig, Metrics}`; engine metrics/status, enable toggle, JSON/Prometheus snapshots and writers |
 | Offline diagnostics | `diagnostics::{BUILD_VERSION, BUILD_COMMIT, SCHEMA_VERSION, Outcome, Check, BuildInfo, Snapshot, version_snapshot}`; text/JSON rendering and exit code; `orbite diagnostics version` CLI |
 
-### Freeze review findings
+### Freeze decisions
 
-The release preparation fixes stale crate-level wire/ABI wording; it does not
-rename or hide a Rust symbol speculatively. The following require a maintainer
-decision before calling the candidate frozen:
+All public enums and every public struct with public fields are
+`#[non_exhaustive]`. `TransferOp` is the sole exhaustive enum: its binary
+READ/WRITE contract is intentional. CI enforces Clippy's `exhaustive_structs`
+and `exhaustive_enums` lints with that single exception. Opaque structs with private fields already
+require their constructors. Match enums with a wildcard and destructure field
+records with `..`; construct configuration through defaults and field assignment:
 
-| Finding | Current disposition / decision needed |
+```rust
+use orbite::{EngineConfig, RuntimeQueueConfig};
+
+let mut queue = RuntimeQueueConfig::default();
+queue.max_dispatch_owners = 8;
+let mut config = EngineConfig::default();
+config.runtime_queue = Some(queue);
+```
+
+`Notification::new`, `NicEntry::new`, `MemEntry::new`, `CreditAmount::new` and
+`ReceiverCreditUpdateV1::new` construct input records without struct literals.
+Their public fields remain mutable. QP pools use `QpPool::default()` followed by
+a unique name and any count/link overrides.
+
+| Boundary | Freeze decision |
 | --- | --- |
-| Extensibility | `TransferRequest`, `Transport` and `Error` already have `#[non_exhaustive]`. Public config/stats/report records, `TransferTarget`, `FileIoElement`, status and location enums generally do not. Decide which must remain literal-constructible/exhaustively matchable and which should gain the attribute before freeze. Adding it later is a source break. Binary READ/WRITE and frozen intent/priority values are deliberate, not automatically mistakes. |
-| Adapter-facing helpers | Python uses `discover_peer_epoch`, `transport_installed`, `register_memory_ranges`, `shm_backing_name`, `resolve_policy_name`, `Batch::observe_tasks` and backing `release_owned`/`exclusively_held`. Moving them to `pub(crate)` would break the separate binding crate. Decide whether to support them as primary Rust API or introduce a narrower binding boundary in later work; no unused public native owner was found to hide safely here. |
-| Names | `TentSettings`, `from_tent_*`, `Transport::tent_id/from_tent_id` and `ReceiverCreditUpdateV1` describe compatibility contracts. `MemoryBacking` re-exports the internally named `Allocation`; `MemType` (topology) and `MemoryType` (backing), and `NVLinkStats` versus `Transport::Nvlink`, are inconsistent names to ratify or rename before freeze. They remain unchanged here. |
-| Standalone adaptive core | Confirm that the public `rdma-adaptive` domain/permit API belongs in the freeze; it intentionally has no engine worker integration. |
-| Documentation | `cargo rustdoc --locked --lib -- -W missing-docs` found 342 diagnostics in the default macOS build of the reviewed base, including fields, variants and accessors. Examples include `BatchId`, `TaskState`, report/stat fields, `HostMemory` accessors, `EffectiveQosPolicy` accessors and diagnostics records. The all-feature Linux audit reports 668 missing-doc diagnostics on both stable and 1.85, with its full list preserved as CI artifacts. An additional unclosed `Arc<CudaMemory>` HTML tag was corrected; CI rejects broken links and invalid HTML. These findings are unresolved, not silently treated as documented or hidden with lint allowances. Decide the required documentation closure before ratifying the freeze. |
-| Native binding types | The intentional cudarc stream coupling and raw owner-backed alternative below remain; GPU signatures are candidates even though their installed profiles are unqualified. |
+| Primary Rust helpers | `transport_installed`, `register_memory_ranges`, `Batch::observe_tasks`, `resolve_policy_name` and `discover_peer_epoch` are documented API. Installation is not availability on a peer; observational status is not a drain receipt; discovery never replaces consumer epoch authority. |
+| Binding internals | Backing `release_owned`, registration `exclusively_held` and `shm_backing_name` are `#[doc(hidden)]`, outside the stability promise. The Python packaging crate pins the core to the exact same release because it uses these helpers. |
+| Names | `NvlinkStats` matches `Transport::Nvlink`; `MemoryBacking` is the actual retained owner enum. `MemType` is deliberately TENT's topology name, distinct from registration `MemoryType`: frozen [`Topology::MemType`](https://github.com/OrbitInfra/Mooncake/blob/e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c/mooncake-transfer-engine/tent/include/tent/runtime/topology.h#L55). `TentSettings`, `from_tent_*`, `tent_id` and `ReceiverCreditUpdateV1` retain their compatibility names. |
+| Adaptive core | The callable `rdma-adaptive` module is `#[doc(hidden)]`, unstable and outside this freeze. It has no engine integration or consumer. Crate-private visibility creates dead-code/unused-import warnings; hiding the reference core preserves its tests without suppressing those lints. |
+| Documentation | Missing docs are not a beta freeze blocker: adding documentation is non-breaking. The release-readiness audit found 668 all-feature Linux diagnostics. Before `0.1.0`, close the remaining findings and promote the CI audit to `-D missing-docs`, as required by the [release ladder](completion-plan.md#release-ladder). Ownership, receipts, epochs and units are documented at their affected entry points. |
+| Native binding types | The deliberate cudarc stream coupling and raw owner-backed alternative below remain. GPU signatures are frozen candidates even though installed profiles remain unqualified. |
 
 ## Transfer requests
 
@@ -62,7 +79,7 @@ with `Priority::High`, the engine's default QoS contract and remote staging off.
 Override them with `.with_qos(policy)`, `.with_priority(priority)` and
 `.with_remote_staging(true)`; an explicit QoS policy supplies its own priority.
 Use `Transport::Unspec` for [transport selection](transport-selection.md).
-`TransferRequest`, `Transport` and `Error` are non-exhaustive, so matches outside
+Public enums other than `TransferOp` are non-exhaustive, so matches outside
 the crate need a wildcard arm.
 
 Both ranges must lie inside one applicable registration, and `TransferOp`

@@ -36,6 +36,8 @@ fabric = ["dep:cc", "dep:bindgen", "dep:libloading"]
 
 [lints.clippy]
 undocumented_unsafe_blocks = "deny"
+exhaustive_structs = "deny"
+exhaustive_enums = "deny"
 
 [dependencies]
 tokio = { version = "1.52.3", default-features = false, features = ["rt", "net", "time", "sync", "io-util", "macros"] }

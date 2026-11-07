@@ -4,7 +4,8 @@ use crate::{Error, Result};
 
 /// Physical IPC and stream-slot charges, sampled independently of batch bytes.
 #[derive(Clone, Copy, Debug, Default)]
-pub struct NVLinkStats {
+#[non_exhaustive]
+pub struct NvlinkStats {
     pub exports: usize,
     pub imports: usize,
     pub allocation_bytes: usize,
@@ -24,7 +25,7 @@ pub struct NVLinkStats {
 
 pub(super) struct MappingBudget {
     limit: usize,
-    usage: Mutex<NVLinkStats>,
+    usage: Mutex<NvlinkStats>,
 }
 
 impl MappingBudget {
@@ -35,7 +36,7 @@ impl MappingBudget {
         })
     }
 
-    pub(super) fn stats(&self) -> Result<NVLinkStats> {
+    pub(super) fn stats(&self) -> Result<NvlinkStats> {
         self.usage
             .lock()
             .map(|usage| *usage)

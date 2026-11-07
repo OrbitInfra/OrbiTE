@@ -170,14 +170,15 @@ guarantee deadlines or isolate tenants.
 Cooperating processes on one host can share priority slots:
 
 ```rust
+use orbite::transport::rdma::RdmaConfig;
 use std::time::Duration;
-use orbite::RdmaConfig;
 
-let config = RdmaConfig {
-    priority_promotion_per_entry: true,
-    shared_quota_shm_path: Some("/orbite-rdma-slots".into()),
-    slot_rotation_interval: Duration::from_millis(2),
-    ..Default::default()
+let config = {
+    let mut config = RdmaConfig::default();
+    config.priority_promotion_per_entry = true;
+    config.shared_quota_shm_path = Some("/orbite-rdma-slots".into());
+    config.slot_rotation_interval = Duration::from_millis(2);
+    config
 };
 ```
 
@@ -206,12 +207,16 @@ another process's charge. Stop **all** participants before removing
 `[preferred NIC names, available NIC names]` (rank 0, rank 1):
 
 ```rust
-let rdma = orbite::transport::rdma::RdmaConfig {
-    priority_matrix: Some(r#"{
-        "cpu:0": [["mlx5_0"], ["mlx5_1"]],
-        "cuda:0": [["mlx5_1"], ["mlx5_0"]]
-    }"#.into()),
-    ..Default::default()
+let rdma = {
+    let mut config = orbite::transport::rdma::RdmaConfig::default();
+    config.priority_matrix = Some(
+        r#"{
+    "cpu:0": [["mlx5_0"], ["mlx5_1"]],
+    "cuda:0": [["mlx5_1"], ["mlx5_0"]]
+}"#
+        .into(),
+    );
+    config
 };
 ```
 

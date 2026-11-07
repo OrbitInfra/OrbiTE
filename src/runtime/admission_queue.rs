@@ -11,6 +11,7 @@ use super::receiver_credit::CreditReservation;
 
 /// Logical admission and dispatch reservations for physical transfer owners.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
 pub struct RuntimeQueueStats {
     /// Includes physical owners waiting for earlier submissions in the same Batch.
     pub queued_owners: usize,
