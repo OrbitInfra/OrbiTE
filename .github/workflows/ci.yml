@@ -98,7 +98,7 @@ jobs:
         if: matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive,fabric'
         run: |
           set -o pipefail
-          cargo rustdoc --locked --lib --features "$ORBITE_FEATURES" -- -W missing-docs -D rustdoc::broken_intra_doc_links 2>&1 | tee "$RUNNER_TEMP/rust-api-audit.log"
+          cargo rustdoc --locked --lib --features "$ORBITE_FEATURES" -- -W missing-docs -D rustdoc::broken_intra_doc_links -D rustdoc::invalid_html_tags 2>&1 | tee "$RUNNER_TEMP/rust-api-audit.log"
       - name: Preserve Rust documentation review findings
         if: always() && matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive,fabric'
         uses: actions/upload-artifact@v7.0.2
