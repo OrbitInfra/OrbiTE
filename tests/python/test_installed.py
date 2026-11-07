@@ -141,7 +141,7 @@ class Contract(unittest.TestCase):
     def test_installed_distribution_and_surface(self):
         self.assertNotIn("/python/orbite/", str(Path(te.__file__).resolve()))
         import importlib.metadata
-        self.assertEqual(importlib.metadata.version("orbite"), "0.1.0a1")
+        self.assertEqual(importlib.metadata.version("orbite"), "0.1.0b1")
         for name in ("Notification", "Request", "TransferStatus", "SegmentInfoBuffer", "SegmentInfo", "MemoryOptions", "MemoryGuard", "BatchGuard", "TransferEngine"):
             self.assertTrue(hasattr(te, name), name)
         enum_values = {
@@ -152,6 +152,16 @@ class Contract(unittest.TestCase):
             "IntentType": dict(zip(["INTENT_UNSPEC", "FOREGROUND_GET", "BACKGROUND_PREFETCH", "MIGRATION", "CHECKPOINT", "WEIGHT_LOADING", "STAGING_INTERNAL"], range(7))),
             "SegmentInfoType": {"Memory": 0, "File": 1},
         }
+        public = {
+            "Notification", "Request", "TransferStatus", "SegmentInfoBuffer", "SegmentInfo",
+            "MemoryOptions", "MemoryGuard", "BatchGuard", "TransferEngine",
+            "LOCAL_SEGMENT_ID", "kWildcardLocation", "PRIO_HIGH", "PRIO_MEDIUM", "PRIO_LOW",
+            "TentException", "InvalidArgumentError", "AddressNotRegisteredError",
+            "DeviceNotFoundError", "InvalidEntryError", "RdmaError", "CudaError",
+            "MetadataError", "RpcServiceError", "InternalError", "NotImplementedError",
+        } | set(enum_values) | {member for values in enum_values.values() for member in values}
+        # Helper imports are implementation details, not part of the freeze candidate.
+        self.assertEqual({name for name in dir(te) if not name.startswith("_")}, public)
         for name, rows in enum_values.items():
             cls = getattr(te, name)
             self.assertEqual({k: int(v) for k, v in cls.__members__.items()}, rows)

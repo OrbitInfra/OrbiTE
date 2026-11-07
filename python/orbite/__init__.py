@@ -4,10 +4,10 @@ Integer addresses must refer to engine allocations or retained buffer exports.
 External buffers are registered with ``owner=buffer`` or ``register_buffer``.
 Do not access registered storage concurrently with a transfer.
 """
-from dataclasses import dataclass, field
-from enum import IntEnum
-import operator
-from typing import ClassVar
+from dataclasses import dataclass as _dataclass, field as _field
+from enum import IntEnum as _IntEnum
+import operator as _operator
+from typing import ClassVar as _ClassVar
 
 from ._native import (
     _Engine, TentException, InvalidArgumentError, AddressNotRegisteredError,
@@ -20,12 +20,12 @@ kWildcardLocation = "*"
 PRIO_HIGH, PRIO_MEDIUM, PRIO_LOW = range(3)
 
 
-class OpCode(IntEnum):
+class OpCode(_IntEnum):
     READ = 0
     WRITE = 1
 
 
-class TransferStatusEnum(IntEnum):
+class TransferStatusEnum(_IntEnum):
     INITIAL = 0
     PENDING = 1
     INVALID = 2
@@ -35,13 +35,13 @@ class TransferStatusEnum(IntEnum):
     FAILED = 6
 
 
-class Permission(IntEnum):
+class Permission(_IntEnum):
     LocalReadWrite = 0
     GlobalReadOnly = 1
     GlobalReadWrite = 2
 
 
-class TransportType(IntEnum):
+class TransportType(_IntEnum):
     UNSPEC = 0
     RDMA = 1
     MNNVL = 2
@@ -63,7 +63,7 @@ class TransportType(IntEnum):
     MEMFABRIC = 18
 
 
-class IntentType(IntEnum):
+class IntentType(_IntEnum):
     INTENT_UNSPEC = 0
     FOREGROUND_GET = 1
     BACKGROUND_PREFETCH = 2
@@ -73,7 +73,7 @@ class IntentType(IntEnum):
     STAGING_INTERNAL = 6
 
 
-class SegmentInfoType(IntEnum):
+class SegmentInfoType(_IntEnum):
     Memory = 0
     File = 1
 
@@ -84,12 +84,12 @@ for _enum in (OpCode, TransferStatusEnum, Permission, TransportType, IntentType,
 
 class _Record:
     __slots__ = ()
-    _fields: ClassVar[dict] = {}
+    _fields: _ClassVar[dict] = {}
 
     def __setattr__(self, name, value):
         rule = self._fields.get(name)
         if rule in ("u64", "i32"):
-            value = operator.index(value)
+            value = _operator.index(value)
             low, high = (0, 2**64 - 1) if rule == "u64" else (-2**31, 2**31 - 1)
             if not low <= value <= high:
                 raise OverflowError(f"{name} is outside {rule}")
@@ -98,8 +98,8 @@ class _Record:
                 raise TypeError(f"{name} must be a string")
         elif rule is bool:
             value = bool(value)
-        elif isinstance(rule, type) and issubclass(rule, IntEnum):
-            value = rule(operator.index(value))
+        elif isinstance(rule, type) and issubclass(rule, _IntEnum):
+            value = rule(_operator.index(value))
         elif rule == "buffers":
             if not isinstance(value, (tuple, list)) or any(not isinstance(v, SegmentInfoBuffer) for v in value):
                 raise TypeError("buffers must contain SegmentInfoBuffer records")
@@ -107,16 +107,16 @@ class _Record:
         object.__setattr__(self, name, value)
 
 
-@dataclass(slots=True)
+@_dataclass(slots=True)
 class Notification(_Record):
-    _fields: ClassVar[dict] = {"name": str, "msg": str}
+    _fields: _ClassVar[dict] = {"name": str, "msg": str}
     name: str = ""
     msg: str = ""
 
 
-@dataclass(slots=True)
+@_dataclass(slots=True)
 class Request(_Record):
-    _fields: ClassVar[dict] = {"opcode": OpCode, "source": "u64", "target_id": "u64", "target_offset": "u64", "length": "u64", "priority": "i32", "transport_hint": TransportType, "policy_name": "optional_string", "deadline_ns": "u64", "intent_type": IntentType}
+    _fields: _ClassVar[dict] = {"opcode": OpCode, "source": "u64", "target_id": "u64", "target_offset": "u64", "length": "u64", "priority": "i32", "transport_hint": TransportType, "policy_name": "optional_string", "deadline_ns": "u64", "intent_type": IntentType}
     opcode: OpCode = OpCode.READ
     source: int = 0
     target_id: int = 0
@@ -129,9 +129,9 @@ class Request(_Record):
     intent_type: IntentType = IntentType.INTENT_UNSPEC
 
 
-@dataclass(slots=True)
+@_dataclass(slots=True)
 class TransferStatus(_Record):
-    _fields: ClassVar[dict] = {"state": TransferStatusEnum, "bytes": "u64"}
+    _fields: _ClassVar[dict] = {"state": TransferStatusEnum, "bytes": "u64"}
     state: TransferStatusEnum = TransferStatusEnum.INITIAL
     bytes: int = 0
 
@@ -140,24 +140,24 @@ def _status(row):
     return TransferStatus(TransferStatusEnum(row[0]), row[1])
 
 
-@dataclass(slots=True)
+@_dataclass(slots=True)
 class SegmentInfoBuffer(_Record):
-    _fields: ClassVar[dict] = {"base": "u64", "length": "u64", "location": str}
+    _fields: _ClassVar[dict] = {"base": "u64", "length": "u64", "location": str}
     base: int = 0
     length: int = 0
     location: str = ""
 
 
-@dataclass(slots=True)
+@_dataclass(slots=True)
 class SegmentInfo(_Record):
-    _fields: ClassVar[dict] = {"type": SegmentInfoType, "buffers": "buffers"}
+    _fields: _ClassVar[dict] = {"type": SegmentInfoType, "buffers": "buffers"}
     type: SegmentInfoType = SegmentInfoType.Memory
-    buffers: list[SegmentInfoBuffer] = field(default_factory=list)
+    buffers: list[SegmentInfoBuffer] = _field(default_factory=list)
 
 
-@dataclass(slots=True)
+@_dataclass(slots=True)
 class MemoryOptions(_Record):
-    _fields: ClassVar[dict] = {"location": str, "perm": Permission, "type": TransportType, "shm_path": str, "shm_offset": "u64", "internal": bool}
+    _fields: _ClassVar[dict] = {"location": str, "perm": Permission, "type": TransportType, "shm_path": str, "shm_offset": "u64", "internal": bool}
     location: str = kWildcardLocation
     perm: Permission = Permission.GlobalReadWrite
     type: TransportType = TransportType.UNSPEC

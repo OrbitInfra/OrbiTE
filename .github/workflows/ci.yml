@@ -94,6 +94,18 @@ jobs:
         run: python3 tests/hardware/build_installed.py --consumer gds-p10 --toolchain "$RUSTUP_TOOLCHAIN" --output "$RUNNER_TEMP/gds-p10-installed"
       - name: Clippy
         run: cargo clippy --workspace --locked --features "$ORBITE_FEATURES" --all-targets -- -D warnings
+      - name: Audit the Rust freeze candidate documentation
+        if: matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive,fabric'
+        run: |
+          set -o pipefail
+          cargo rustdoc --locked --lib --features "$ORBITE_FEATURES" -- -W missing-docs -D rustdoc::broken_intra_doc_links 2>&1 | tee "$RUNNER_TEMP/rust-api-audit.log"
+      - name: Preserve Rust documentation review findings
+        if: always() && matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive,fabric'
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: rust-api-audit-${{ matrix.toolchain }}
+          path: ${{ runner.temp }}/rust-api-audit.log
+          if-no-files-found: error
       - name: Set the same test parallelism for the suite and stability controls
         if: matrix.toolchain == 'stable' && (matrix.features == 'rdma,cuda,io-uring' || matrix.features == 'rdma,cuda,io-uring,gds' || matrix.features == 'rdma,cuda,io-uring,gds,metrics')
         run: echo "RUST_TEST_THREADS=$(nproc)" >> "$GITHUB_ENV"

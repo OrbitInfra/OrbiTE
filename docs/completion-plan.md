@@ -29,7 +29,9 @@ Every substage and every claimed hardware profile has one state:
 | Unqualified / Failed | Required hardware or evidence is unavailable, or a gate ran and failed; neither counts as passed |
 
 `orbite 0.1.0-alpha.1` is published on crates.io for early development; its API
-is unstable. [Capabilities](capabilities.md)
+is unstable. The source prepares `0.1.0-beta.1`; [release notes](releases.md)
+and the API inventories are submitted for maintainer review, with no publication.
+[Capabilities](capabilities.md)
 summarizes current paths and [qualification](qualification.md) records the exact
 artifacts and hardware profiles.
 
@@ -46,7 +48,7 @@ artifacts and hardware profiles.
 | P6 | Routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | Complete at source level. Installed RDMA profiles remain in the verification queue |
 | P7 | File, io_uring and GDS paths | P2; GDS also P5 | S1–S5 complete at source level. DRAM/file io_uring qualified in Linux CI. Installed CUDA staging and native GDS gates unrun |
 | P8 | Additional CPU/NVIDIA-compatible network providers | P1/P2; relevant P4–P6 | P8.2 libfabric implemented; EFA unqualified. P8.1 MPComm is deferred: no consumer; provider unavailable |
-| P9 | Rust/Python and operational compatibility | P0/P2/P6 | Python wheels and configuration implemented; S19/S20/S22 removed and out of scope |
+| P9 | Rust/Python and operational compatibility | P0/P2/P6 | Configuration and Python CPU/TCP wheels qualified on Linux CI; API freeze review pending; S19/S20/S22 removed and out of scope |
 | P10 | Cross-backend fault and lifetime acceptance | Relevant P3–P9 deliveries | CPU fixture matrix implemented; installed acceptance remains open |
 | P11 | Consumer integration, matched performance and release | Accepted P2–P10 profiles | Scoped CPU comparisons implemented; consumer/hardware release gates remain open |
 
@@ -105,7 +107,12 @@ S24 implements the opt-in [libfabric host path](fabric.md), with real
 software-provider controls and an unrun EFA gate. S25 MPComm is deferred: no
 consumer; provider unavailable. S26 provides [byte-checked CPU sweeps and the
 executable fault matrix](benchmarks.md); hardware fault acceptance and matched
-performance remain queued. The next step is the maintainer's beta.1 gate review.
+performance remain queued. Beta.1 preparation records the
+[CPU qualification evidence](qualification.md#linux-ci-release-profiles),
+[Rust freeze findings](rust-api.md#freeze-review-findings),
+[Python surface](python.md#surface-and-defaults) and [release notes](releases.md).
+API ratification and publication remain the maintainer's decision; this work
+does not start test consolidation or hardware qualification.
 
 CPU controls run in CI. GPU and RDMA changes require written installed gates
 in the [verification queue](qualification.md#verification-queue). Prior hardware
@@ -462,12 +469,13 @@ publish packages.
 | Version | Release gate |
 | --- | --- |
 | `0.1.0-alpha.N` | Maintainer-published milestones during early development; APIs remain unstable. The current release is `0.1.0-alpha.1`, published from main [`7cc48490`](https://github.com/OrbitInfra/OrbiTE/commit/7cc48490). |
-| `0.1.0-beta.1` | S21, S24 and S26 and per-peer retirement are complete; S25 is deferred. The Rust API and Python API are the freeze candidate. TCP, HP-TCP, SHM, io_uring, configuration and Python must be qualified on CI. GPU, RDMA, GDS, MNNVL and fabric profiles remain explicitly unqualified. |
+| `0.1.0-beta.1` | S21, S24 and S26 and per-peer retirement are complete; S25 is deferred. The [Rust](rust-api.md#beta1-freeze-candidate) and [Python](python.md#surface-and-defaults) APIs are the freeze candidate; listed findings await maintainer disposition. TCP, HP-TCP, SHM, io_uring, configuration and Python CPU/TCP are qualified in their stated Linux CI profiles. Publication requires review of the prepared version, notes and packaging gates. Current GPU, RDMA, GDS, MNNVL/EGM, EFA, CXL and physical fabric profiles remain explicitly unqualified. |
 | Test consolidation (after the beta.1 API freeze) | Audit `tests/unit` (about 72k lines) for repeated assertions of the same invariant through the same owner, often added by different steps; merge them into table-driven tests. Preserve every negative control and distinct failure path: timeout, cancel, partial submit, `Unquiesced`, stale epoch and each deliberate TENT difference. CPU shims and `tests/hardware` gates are out of scope. Report source/test line deltas and invariant counts before/after; the invariant count must be unchanged. Tests-only refactor: no production change and no coverage drop. |
 | `0.1.0` | Installed hardware verification passes for the OrbitKV-critical profiles below. The [P10 fault matrix](#p10--fault-and-physical-lifetime-acceptance) must pass on those profiles, and [P11 performance comparisons](#p11--consumers-performance-and-release) must be matched against frozen TENT. |
 | Post-0.1.0 P/D integration design | Begin after the GDR and NVLink installed profiles qualify. Prefer an OrbiTE NIXL backend plugin so the official vLLM `NixlConnector`, SGLang NIXL backend and Dynamo can select it without engine changes or forks; OrbiTE does not ship custom P/D connectors. Write a design document first: capability gap; NIXL descriptors, notifications and release semantics versus physical quiescence; abort safety for in-flight WRITEs into decode pages; joint arbitration of P/D and cache traffic; and TTFT/ITL against NIXL+UCX and Mooncake. Any C/C++ glue is purpose-built for that plugin. This is a plan, not implemented code. |
 
-Beta evidence uses the existing [source and oracle checks](qualification.md#reproduce-and-review),
+Beta evidence uses the [TCP and configuration jobs](qualification.md#linux-ci-release-profiles),
+[source and oracle checks](qualification.md#reproduce-and-review),
 [HP-TCP](qualification.md#hp-tcp-rail-verification),
 [SHM](qualification.md#shared-memory-and-cxl-verification) and
 [io_uring](qualification.md#local-file-segments) and
