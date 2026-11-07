@@ -531,7 +531,7 @@ impl CudaMemory {
     /// # Safety
     /// The actual owner must retain the stable writable device allocation AND
     /// its CUDA context through the last registration/operation. Coordinate
-    /// external streams and address reuse. Aliases share this Arc<CudaMemory>.
+    /// external streams and address reuse. Aliases share this `Arc<CudaMemory>`.
     pub unsafe fn from_raw_parts(
         address: u64,
         length: usize,

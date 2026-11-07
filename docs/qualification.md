@@ -31,11 +31,36 @@ native request/reply bytes on Linux. TCP data fixtures also run against a real
 registered TENT source with guard bytes. A frozen client also exercises native
 OrbiTE prefix rejection, with no admission or payload movement.
 
-The S17 Rust controls read the same 223 configuration rows, 67 environment
-rows and 12 precedence vectors. They check feature selection, error paths,
-subsystem settings and snapshot isolation in a child process. These CPU
-checks cover configuration loading. Installed transfer profiles are tracked
-separately below.
+## Linux CI release profiles
+
+The following are **Qualified on Linux CI**, limited to the cases below.
+Evidence is from accepted main `58caa0d79c316dcefeb7790351d08f21667c11dc`
+(S26), before the beta version change. The beta preparation reruns these
+workflows for its own artifact; its PR handoff records those runs. No label
+extends this evidence to physical two-host networking or native hardware.
+
+| Profile | Exact workflow / jobs | Tests and limits |
+| --- | --- | --- |
+| CPU DRAM over TCP | `CI` / [check (stable)](https://github.com/OrbitInfra/OrbiTE/actions/runs/42372828450/job/128404284048) and [check (1.85.0)](https://github.com/OrbitInfra/OrbiTE/actions/runs/42372828450/job/128404284206), step `Test CPU TCP and ownership` | `tests/tcp.rs`: `batched_read_write_range_guards_and_retired_descriptors`, `whole_batch_validation_prevents_early_effects_and_budgets_are_enforced`, `execution_failure_preserves_completed_prefix_and_skips_later_requests`, `concurrent_batches_use_independent_destinations_and_release_admission`, `two_process_restart_fences_old_authority`. Real loopback sockets and child processes; no physical two-host profile. |
+| TENT configuration (F01) | The same default jobs, plus `CI` / [check (stable, rdma,cuda,io-uring,gds,metrics,rdma-adaptive,fabric)](https://github.com/OrbitInfra/OrbiTE/actions/runs/42372828450/job/128404284109) and [the 1.85.0 counterpart](https://github.com/OrbitInfra/OrbiTE/actions/runs/42372828450/job/128404284269), step `Test CPU TCP and ownership` | `config::tent::tests::{every_config_row_reaches_its_schema_or_fails_closed, every_environment_row_has_a_parser_or_an_inactive_or_rejected_owner, frozen_precedence_vectors}` cover 223 config rows, 67 environment rows and 12 precedence vectors. Unsupported/excluded rows are explicit rejection/N/A dispositions, not executed accelerators. |
+| Python CPU/TCP wheels (F21) | `Python wheels` / [x86_64 stable 3.13](https://github.com/OrbitInfra/OrbiTE/actions/runs/42372828464/job/128404283700), [x86_64 1.85.0 3.13](https://github.com/OrbitInfra/OrbiTE/actions/runs/42372828464/job/128404283579), [aarch64 stable 3.13](https://github.com/OrbitInfra/OrbiTE/actions/runs/42372828464/job/128404283702), [aarch64 1.85.0 3.13](https://github.com/OrbitInfra/OrbiTE/actions/runs/42372828464/job/128404283716); all 20 jobs in that run passed | Both `Build and test the installed CPU wheel` and `Build and test the installed combined-feature wheel` run `tests/python/test_installed.py`. The matrix covers CPython 3.10–3.14 on both architectures/toolchains. Only CPU/TCP behavior is qualified; see [wheel cases](#python-wheels). |
+
+The TCP job also runs `runtime::control_plane::tests` controls
+`fragmented_write_keeps_backing_and_close_waits_for_actual_handler_exit`,
+`async_cancel_wait_timeout_and_requester_drain_preserve_physical_owners` and
+`p10_killed_tcp_requester_retains_partial_write_until_socket_drain`, plus
+`transport::tcp::task::tests` fragmented READ and WRITE-backpressure controls.
+The full-feature jobs' `P10 CPU fault matrix and real peer kills` step repeats
+the new real-process kill controls 50 times per toolchain. This is lifetime
+and byte evidence, not a physical-network latency or throughput claim.
+
+Configuration controls also include
+`invalid_roots_paths_files_types_and_credentials_are_bounded_diagnostics`,
+`public_tent_entry_points_reject_external_metadata`,
+`constructor_identity_and_legacy_corner_cases_reach_typed_fields` and
+`public_constructors_capture_the_file_and_do_not_reread_process_environment`.
+The last uses a child process to prove immutable capture without changing the
+test runner's environment. Native-feature parsing does not qualify the device.
 
 P2P-only configuration controls reject external metadata types and server
 URIs through the Rust loaders, inline/file `MC_TENT_CONF`, legacy overrides
@@ -103,6 +128,9 @@ EFA DMA, fabric performance or physical multi-rail qualification.
 
 ## Python wheels
 
+**Qualified on Linux CI for the CPU/TCP wheel profile**, with exact jobs in
+the [release evidence](#linux-ci-release-profiles).
+
 The `Python wheels` workflow builds and installs CPU and combined-feature
 wheels for CPython 3.10–3.14 on Linux x86_64 and aarch64, with stable and Rust
 1.85. `tests/python/test_installed.py` checks all three S16 Python binding rows
@@ -112,6 +140,18 @@ routing, exceptions and context exits. Held TCP replies prove GIL release,
 early-drop ownership, queued cancellation and timeout retention. Four timing
 controls repeat 50 times. The source-distribution job rebuilds and installs its
 wheel before repeating the same consumer controls.
+
+The specific installed tests are `test_inventory_rows`,
+`test_installed_distribution_and_surface`, `test_two_process_tcp_installed_wheel`,
+`test_real_tcp_read_write_guards_status_and_notifications`,
+`test_policy_intent_deadline_and_permissions_reach_owner`,
+`test_registration_options_lists_exceptions_and_limits`,
+`test_p2p_config_migration_file_and_environment`,
+`test_gil_release_during_blocking_wait`,
+`test_timeout_cancel_and_early_drop_retain_exporter_until_drain`,
+`test_queued_cancel_status_and_destination_guards`,
+`test_memory_guard_early_drop_preserves_pending_destination` and
+`test_frozen_context_manager_exits_and_engine_keepalive`.
 
 `test_cuda_exporters.py` adds CPU-wheel unavailable checks and seven installed
 CUDA-wheel controls through a CPU driver shim, including guarded TCP bytes,

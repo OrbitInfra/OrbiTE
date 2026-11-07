@@ -10,6 +10,51 @@ cargo doc --locked --no-deps --open
 Add `--features rdma,cuda` in an environment with the
 [build prerequisites](build.md).
 
+## Beta.1 freeze candidate
+
+This is the public-surface review for `0.1.0-beta.1`, not a declaration of
+stable hardware support or final maintainer approval. Rust is the primary API.
+The following names and their public methods/fields are the candidate; private
+transport owners, native function tables and test shims are not public APIs.
+Full signatures come from rustdoc for the chosen feature set, not from the
+frozen TENT C/C++ inventory, whose interfaces are out of scope.
+
+| Area | Public surface |
+| --- | --- |
+| Construction | `TransferEngine`, `EngineConfig`, `TentSettings`, `RuntimeQueueConfig`; typed `new`, explicit `from_tent_env/json/file`, config and stats queries |
+| Requests and outcomes | `TransferRequest`, `TransferOp`, `Transport`, `Priority`, `FileIoElement`, `BatchReport`, `TransferFailure`, `RemoteEffect`, `Error`, `Result` |
+| Registered backing | `HostMemory`, `MemoryBacking`, `RegisteredMemory`, `Permission`, `MemoryType`, `MemoryLocation`, `RangeLocation`; owned/external and range-batch registration, address resolution, unregister, guarded reads/writes |
+| Peer and file authority | `SourceEpoch`, `RemoteSegment`, `RemoteRegion`, `TransferTarget`, `FileSegment`, `FileSegmentInfo`; endpoint/epoch discovery, open/refresh/close, file offset resolution and info |
+| Async work | `Batch`, `BatchId`, `TaskState`, `TaskStatus`, `BatchState`, `BatchStatus`, `SubmissionStatus`; allocate, append/groups, seal, observe/progress, cancel, wait, drain and free; `next_poll_delay`, `wait_before_next_poll` |
+| Notifications | `Notification`, `NotificationEffect`, `NotificationFailure`, `NotificationStatus`; attached, local and remote send, receive and delivery status |
+| Selection | `IntentType`, `PolicyName`, `SegmentType`, `SelectionPolicy`, `TransportSelectorConfig`, `QpPool`; compiled policies and named-policy resolution |
+| QoS | `QosConfig`, `QosPolicyFields`, `QosDegradedActions`, `QosTenantContract`, `QosRequestContext`, `QosUsage`, `EffectiveQosPolicy`; resolve and sample contracts |
+| Credits and accounting | `CreditResource`, `CreditBalance`, `CreditAmount`, `CreditUpdateDisposition`, `ReceiverCreditUpdateV1`, `ReceiverCreditConfig`, `ReceiverCreditStats`, `ReceiverCreditIssuerStats`, `EngineStats`, `RuntimeQueueStats`; manual and automatic credit lifecycle |
+| CPU providers | `HpTcpConfig`, `ShmConfig`, `MnnvlConfig`, `MnnvlHandleType`; SHM allocation/free and backing-name query (MNNVL settings exist without an active CUDA provider) |
+| Linux topology | `Topology`, `NicEntry`, `NicType`, `MemEntry`, `MemType`, `DEVICE_PRIORITY_RANKS`; local/discovered topology snapshots |
+| `rdma` | `transport::rdma::{RdmaConfig, RdmaHostMemory, RdmaCudaMemory, RdmaProgressMode, SchedulingParams, NicLoadStats, QpReadDepths, RdmaStats}`; NIC load queries |
+| `rdma-adaptive` | `transport::rdma::adaptive_congestion_control`: `Config`, `Mode`, `PathState`, `Snapshot`, `Signals`, `DomainState`, `AdmissionDomain`, `Decision`, `Reason`, `Rejection`, `PathHandle`, `Permit`, `Classification`, `FailureScope`, `Outcome`, `classify_completion`, `classify_async_event`; callable core, not a live worker policy |
+| `cuda` | `cuda::{CudaMemory, RetainedResources, allocate_pinned_host, retained_resources}`, root `StagingLocation`, `StagingStats`, `NVLinkStats`; device/fabric/EGM allocation, external ownership, producer readiness, staging trim and IPC cache flush |
+| `cuda::local_copy` | `PinnedHostRegistration`, `CopyDirection`, `LocalCopyBackend`, `LocalCopyConfig`, `LocalCopyDesc`, `ProducerEvent`, `LocalCopyEngine`, `LocalCopyStats`, `LocalCopyCompletion`; caller stream, descriptors, submit, event progress/wait and close |
+| File and network features | `io-uring`: `IoUringConfig`, `IoUringStats`; `gds`: `GdsMode`, `GdsStats`; `fabric`: `FabricConfig`, `FabricProvider`, `FabricStats` |
+| `metrics` | `metrics::{MetricsConfig, Metrics}`; engine metrics/status, enable toggle, JSON/Prometheus snapshots and writers |
+| Offline diagnostics | `diagnostics::{BUILD_VERSION, BUILD_COMMIT, SCHEMA_VERSION, Outcome, Check, BuildInfo, Snapshot, version_snapshot}`; text/JSON rendering and exit code; `orbite diagnostics version` CLI |
+
+### Freeze review findings
+
+The release preparation fixes stale crate-level wire/ABI wording; it does not
+rename or hide a Rust symbol speculatively. The following require a maintainer
+decision before calling the candidate frozen:
+
+| Finding | Current disposition / decision needed |
+| --- | --- |
+| Extensibility | `TransferRequest`, `Transport` and `Error` already have `#[non_exhaustive]`. Public config/stats/report records, `TransferTarget`, `FileIoElement`, status and location enums generally do not. Decide which must remain literal-constructible/exhaustively matchable and which should gain the attribute before freeze. Adding it later is a source break. Binary READ/WRITE and frozen intent/priority values are deliberate, not automatically mistakes. |
+| Adapter-facing helpers | Python uses `discover_peer_epoch`, `transport_installed`, `register_memory_ranges`, `shm_backing_name`, `resolve_policy_name`, `Batch::observe_tasks` and backing `release_owned`/`exclusively_held`. Moving them to `pub(crate)` would break the separate binding crate. Decide whether to support them as primary Rust API or introduce a narrower binding boundary in later work; no unused public native owner was found to hide safely here. |
+| Names | `TentSettings`, `from_tent_*`, `Transport::tent_id/from_tent_id` and `ReceiverCreditUpdateV1` describe compatibility contracts. `MemoryBacking` re-exports the internally named `Allocation`; `MemType` (topology) and `MemoryType` (backing), and `NVLinkStats` versus `Transport::Nvlink`, are inconsistent names to ratify or rename before freeze. They remain unchanged here. |
+| Standalone adaptive core | Confirm that the public `rdma-adaptive` domain/permit API belongs in the freeze; it intentionally has no engine worker integration. |
+| Documentation | `cargo rustdoc --locked --lib -- -W missing-docs` found 342 diagnostics in the default macOS build of the reviewed base, including fields, variants and accessors. Examples include `BatchId`, `TaskState`, report/stat fields, `HostMemory` accessors, `EffectiveQosPolicy` accessors and diagnostics records. The all-feature Linux audit reports 668 missing-doc diagnostics on both stable and 1.85, with its full list preserved as CI artifacts. An additional unclosed `Arc<CudaMemory>` HTML tag was corrected; CI rejects broken links and invalid HTML. These findings are unresolved, not silently treated as documented or hidden with lint allowances. Decide the required documentation closure before ratifying the freeze. |
+| Native binding types | The intentional cudarc stream coupling and raw owner-backed alternative below remain; GPU signatures are candidates even though their installed profiles are unqualified. |
+
 ## Transfer requests
 
 `TransferRequest::new(transport, local_address, remote_address, length)` starts

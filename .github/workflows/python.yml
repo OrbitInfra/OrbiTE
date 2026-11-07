@@ -58,7 +58,9 @@ jobs:
         if: matrix.runner == 'ubuntu-24.04' && matrix.toolchain == 'stable' && matrix.python == '3.13'
         run: |
           python -m maturin sdist --out "$RUNNER_TEMP/sdist"
+          python scripts/check-python-artifacts.py "$RUNNER_TEMP/sdist"/*.tar.gz
           python -m pip wheel --no-deps --no-build-isolation "$RUNNER_TEMP/sdist"/*.tar.gz --wheel-dir "$RUNNER_TEMP/sdist-wheel"
+          python scripts/check-python-artifacts.py "$RUNNER_TEMP/sdist-wheel"/*.whl
           python -m pip install --force-reinstall "$RUNNER_TEMP/sdist-wheel"/*.whl
           python -I tests/python/test_installed.py -v
       - name: Save installable wheels for review (no publication)
@@ -68,4 +70,6 @@ jobs:
           path: |
             ${{ runner.temp }}/wheel-cpu/*.whl
             ${{ runner.temp }}/wheel-combined/*.whl
+            ${{ runner.temp }}/sdist/*.tar.gz
+            ${{ runner.temp }}/sdist-wheel/*.whl
           if-no-files-found: error

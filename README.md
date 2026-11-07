@@ -120,7 +120,7 @@ features with the [build guide](docs/build.md), then continue with the
 
 ## Status
 
-OrbiTE is in alpha. The bounded host RDMA, GPUDirect RDMA, CUDA IPC and
+The source is preparing [0.1.0-beta.1](docs/releases.md). The bounded host RDMA, GPUDirect RDMA, CUDA IPC and
 staging profiles above passed installed tests on H20/RoCE hosts and
 independent review; newer source has CPU controls and awaits its hardware pass.
 [Qualification](docs/qualification.md) records the evidence, and the

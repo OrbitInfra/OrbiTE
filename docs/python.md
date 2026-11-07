@@ -2,8 +2,8 @@
 
 The `orbite` distribution exposes the Mooncake v0.3.14 TENT Python API through
 OrbiTE's Rust owners. It targets CPython 3.10–3.14 on Linux x86_64 and aarch64.
-The API is in early development. Wheels are built for review in CI; publishing
-to PyPI is the maintainer's action.
+The `0.1.0-beta.1` API is a freeze candidate awaiting maintainer review.
+Wheels are built for review in CI; publishing to PyPI is the maintainer's action.
 
 ## Build and install
 
@@ -14,7 +14,7 @@ python -m pip install /tmp/orbite-wheels/*.whl
 ```
 
 The default wheel contains the CPU transports. To build with native features,
-pass `--features python,pyo3/extension-module,rdma,cuda,io-uring,gds,metrics,rdma-adaptive`
+pass `--features pyo3/extension-module,rdma,cuda,io-uring,gds,metrics,rdma-adaptive`
 to maturin, after installing the [native prerequisites](build.md).
 A compiled provider still needs its runtime library and hardware. Building a
 combined wheel does not qualify any GPU or RDMA profile.
@@ -31,7 +31,7 @@ or pass a configuration file path. Both use the immutable
 [TENT configuration loader](rust-api.md#loading-tent-configuration). No environment
 variable is changed to construct an engine. External metadata types and
 etcd/Redis/HTTP URLs raise `TentException` with the same endpoint/epoch migration
-guidance as Rust and C; server URIs are not included in the diagnostic.
+guidance as Rust; server URIs are not included in the diagnostic.
 
 ```python
 import orbite as tent
@@ -85,6 +85,12 @@ an authoritative epoch and retires an endpoint/epoch identity.
 
 ## Surface and defaults
 
+This section and the inventory are the beta.1 public-surface review. The
+installed-wheel check retains every frozen declaration and rejects accidental
+top-level helper exports. `dataclass`, `field`, `IntEnum`, `operator` and
+`ClassVar` are now private imports; none was in the TENT inventory. `_native`,
+`_Engine`, underscore-prefixed helpers and implementation slots are private.
+
 All six enums and their values are exported both through their enum classes
 and at module scope, alongside `LOCAL_SEGMENT_ID`, `kWildcardLocation` and the
 three `PRIO_*` constants. The [binding inventory](https://github.com/OrbitInfra/OrbiTE/blob/main/tests/reference/inventory/python.tsv)
@@ -101,6 +107,27 @@ installed-wheel controls. Its source checker compares the frozen binding.
 | `MemoryGuard` | `address()`, `size()`, context entry returns address; exit requests a safe release |
 | `BatchGuard` | `id()`, idempotent `release()`, context entry returns batch ID; exit delegates pending owners to deferred retirement |
 | `TransferEngine` | Both constructors; introspection, segment, basic/advanced/bulk memory, batches, both notification submit overloads, cancellation, notifications and all status queries |
+
+The six enums are `OpCode`, `TransferStatusEnum`, `Permission`, `TransportType`,
+`IntentType` and `SegmentInfoType`; the inventory fixes every value and default.
+The engine methods in the freeze candidate are:
+
+| Group | Methods |
+| --- | --- |
+| Identity and segments | `available`, `get_segment_name`, `get_rpc_server_address`, `get_rpc_server_port`, `get_local_topology`, `export_local_segment`, `import_remote_segment`, `open_segment`, `close_segment`, `get_segment_info` |
+| Memory | `allocate_local_memory`, `allocate_local_memory_ex`, `free_local_memory`, `allocate_memory_guard`, `allocate_memory_guard_ex`, `register_local_memory`, `register_local_memory_ex`, `register_local_memory_batch`, `register_local_memory_batch_ex`, `unregister_local_memory`, `unregister_local_memory_batch` |
+| Batches and notifications | `allocate_transfer_batch`, `free_transfer_batch`, `allocate_batch_guard`, `submit_transfer`, `submit_transfer_notif`, `cancel_transfer`, `send_notifi`, `recv_notifi`, `get_transfer_status`, `get_transfer_status_list`, `get_transfer_status_overall` |
+| OrbiTE additions | `register_buffer`, retained `owner=`/`owners=` arguments, `progress_batch`, `wait`, `terminal_result`, `close` |
+
+Names such as `TentException`, `send_notifi`, `kWildcardLocation`, `Request.source`
+and `MemoryOptions.type` intentionally match `mooncake.tent` and stay unchanged.
+There is no classic `mooncake.engine` shim. The maintainer should ratify the
+additive helpers and the distinction between Python's reversible segment-handle
+close and Rust's endpoint/epoch retirement. The Python surface has no per-peer
+retirement method with an authoritative epoch. Most wrapper methods rely on
+this guide and the inventory rather than individual `help()` docstrings; whether
+to require those before freeze remains a documentation decision. No unsupported
+method is made silently successful to satisfy the inventory.
 
 Data records also accept keyword field initializers. Policy, intent, priority,
 transport hint and absolute monotonic `deadline_ns` reach the same compiled
@@ -216,6 +243,10 @@ Its bounded engine, memory, segment and batch owners retain the existing Python
 behavior without C exports, C++ adapters or a plugin loader. The extension
 remains `orbite._native`. Rust-only builds do not compile or load Python.
 Maturin uses `>=1.10.2,<2`; CI fixes the build tool at 1.10.2.
+Both Cargo packages inherit `0.1.0-beta.1` from the workspace version. The
+dynamic version in `pyproject.toml` reads the binding crate's Cargo metadata;
+Python normalizes it to `0.1.0b1`. CI checks filenames and embedded wheel/sdist
+metadata, rebuilds a wheel from the sdist and checks the installed version.
 
 Version-specific wheels preserve the buffer API on CPython 3.10. PyO3's
 [stable ABI buffer support starts at 3.11](https://pyo3.rs/v0.27.2/building-and-distribution.html#missing-features),

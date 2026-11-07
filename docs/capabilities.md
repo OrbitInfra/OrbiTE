@@ -1,17 +1,21 @@
 # Capabilities
 
 This page summarizes the current source on `main`. The `0.1.0-alpha.1` crate on
-crates.io is published for early development; its API is unstable.
+crates.io is published for early development; its API is unstable. The source
+is preparing `0.1.0-beta.1`, which is not published by this change; see
+[release notes](releases.md).
 
 | Status | Meaning |
 | --- | --- |
 | **Accepted** | A bounded installed hardware profile passed and an independent reviewer accepted it. Only that recorded profile is covered |
-| **Qualified** | A bounded installed hardware profile passed; independent acceptance is still open |
+| **Qualified** | The exact artifact passed its stated Linux CI or installed hardware profile; evidence does not extend beyond that profile |
 | **Implemented** | Source and CPU controls pass; the current source has no installed hardware result |
 | **Planned** | Not implemented yet; the stage is listed in the [completion plan](completion-plan.md) |
 
 [Qualification](qualification.md) records the exact artifacts, cases and limits
-behind every hardware result. The [v0.3.14 delta](tent-parity.md#v0314-delta)
+behind each CI and hardware result. Historical hardware acceptance below applies
+only to its recorded artifact; every current beta GPU/RDMA/GDS/MNNVL/EFA/CXL
+profile remains unqualified. The [v0.3.14 delta](tent-parity.md#v0314-delta)
 records the source alignment. The [S16 acceptance inventory](https://github.com/OrbitInfra/OrbiTE/tree/main/tests/reference/inventory)
 lists the six native direction flags and their provider conditions. Wire
 fixtures and CPU codec checks support the independent frozen oracle.
@@ -20,7 +24,7 @@ fixtures and CPU codec checks support the independent frozen oracle.
 
 | Path | Status | Limits |
 | --- | --- | --- |
-| CPU DRAM over TCP | Implemented | Loopback and multi-process byte, restart and lifetime controls; no physical two-host profile. See [CPU and TCP](cpu-tcp.md) |
+| CPU DRAM over TCP | Qualified on Linux CI | [Exact CI jobs and tests](qualification.md#linux-ci-release-profiles): loopback and multi-process byte, restart and lifetime controls; no physical two-host profile. See [CPU and TCP](cpu-tcp.md) |
 | Host DRAM over RDMA | Accepted (RoCE) | Two-host RoCEv2 READ/WRITE with restart, cleanup and in-flight DMA faults. InfiniBand and physical link or device loss are unqualified. See [RDMA and CUDA](rdma-cuda.md) |
 | GPUDirect RDMA | Accepted (H20/RoCE, with limits) | Host/GPU READ/WRITE and two-rail slices. The H20 evidence covers private GPU source grants. Opt-in GPU source QP/MR reuse is implemented; installed profile unqualified. Host-wide context non-growth is unqualified |
 | CUDA IPC / NVLink on one host | Accepted (H20, cooperative profiles) | GPU/GPU, pinned host/GPU, subbatch reuse and a fixed-working-set import cache. Grouped completion, stream pool, native batch copy, cache reclamation and the single-task synchronous path await installed verification. See [CUDA IPC](cuda-ipc.md) |
@@ -84,12 +88,12 @@ qualification; GPU/RDMA/GDS installed fault fixtures remain queued.
 
 | Capability | Status | Limits |
 | --- | --- | --- |
-| Rust API | Implemented | See [Rust API](rust-api.md) |
+| Rust API | Beta.1 freeze candidate; review pending | [Surface inventory and decisions](rust-api.md#beta1-freeze-candidate) |
 | TENT C ABI (S19) | Removed; out of scope | Frozen declarations retained as reference inventory only |
 | TENT C++ and classic TE (S20) | Removed; out of scope | No source adapters or classic-TE shim |
 | Device plugin ABI (S22/F03) | Removed; out of scope | CPU and CUDA use built-in owners |
-| TENT Python API | Implemented (F21) | [Installed wheels](python.md) for CPython 3.10–3.14, Linux x86_64/aarch64. Guarded TCP, GIL release and retained host/CAI/DLPack exporters; native GPU/RDMA Python profiles remain unqualified |
-| TENT configuration and P2P self-description | Configuration implemented (F01), P2P available (F06) | File or inline `MC_TENT_CONF`, legacy aliases and explicit constructor precedence resolve into [one engine configuration](rust-api.md#loading-tent-configuration). Discovery, membership, KV indexes and external metadata stores belong to the consumer; non-P2P configuration is rejected. Rust `close_segment(endpoint, epoch, timeout)` fences and drains one peer; live descriptor/operation references bound the identity table, while failed native cleanup stays charged. CPU sockets/SHM are exercised on Linux; RNIC/CUDA retirement is shim-only, installed profile unqualified |
+| TENT Python API | Qualified on Linux CI (F21, CPU/TCP only) | [Exact CI evidence](qualification.md#python-wheels). [Installed wheels](python.md) for CPython 3.10–3.14, Linux x86_64/aarch64. Guarded TCP, GIL release and retained host/CAI/DLPack exporters; native GPU/RDMA Python profiles remain unqualified |
+| TENT configuration and P2P self-description | Qualified on Linux CI (F01 loading and F06 CPU handshake) | [Exact jobs and cases](qualification.md#linux-ci-release-profiles). File or inline `MC_TENT_CONF`, legacy aliases and explicit constructor precedence resolve into [one engine configuration](rust-api.md#loading-tent-configuration). Discovery, membership, KV indexes and external metadata stores belong to the consumer; non-P2P configuration is rejected. Rust `close_segment(endpoint, epoch, timeout)` fences and drains one peer; live descriptor/operation references bound the identity table, while failed native cleanup stays charged. CPU sockets/SHM are exercised on Linux; RNIC/CUDA retirement is shim-only, installed profile unqualified |
 | TENT wire interoperability | Out of scope by design (S23) | See the [wire and consumer boundary](tent-parity.md#wire-and-consumer-boundaries) |
 
 ## Provider selection
