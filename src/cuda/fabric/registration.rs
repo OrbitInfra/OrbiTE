@@ -1,6 +1,6 @@
 use super::*;
 use crate::RegisteredMemory;
-use crate::memory::Allocation;
+use crate::memory::MemoryBacking;
 
 pub(crate) struct Registration {
     pub(crate) share: Option<Arc<Share>>,
@@ -71,7 +71,7 @@ impl Platform {
             local: false,
         };
         match owner {
-            Allocation::Cuda(m) => {
+            MemoryBacking::Cuda(m) => {
                 let mut a = m
                     .allocation
                     .lock()
@@ -81,7 +81,7 @@ impl Platform {
                     slot.share = Some(v.export()?);
                 }
             }
-            Allocation::Host(m) => {
+            MemoryBacking::Host(m) => {
                 if let Some(p) = m.owned_pin() {
                     let required = p.numa_node.map(|n| self.host_device(Some(n))).transpose()?;
                     slot.local = required.is_none_or(|d| {

@@ -28,17 +28,19 @@ fn main() -> Result<()> {
     if rails.len() != 2 || rails[0] == rails[1] {
         return Err(usage());
     }
-    let engine = TransferEngine::new(EngineConfig {
-        tcp: false,
-        bind_addr: (rails[0], 0).into(),
-        hp_tcp: HpTcpConfig {
-            enable: true,
-            worker_count: 2,
-            connections_per_peer: 2,
-            rail_addresses: rails,
-            ..Default::default()
-        },
-        ..Default::default()
+    let engine = TransferEngine::new({
+        let mut config = EngineConfig::default();
+        config.tcp = false;
+        config.bind_addr = (rails[0], 0).into();
+        config.hp_tcp = {
+            let mut config = HpTcpConfig::default();
+            config.enable = true;
+            config.worker_count = 2;
+            config.connections_per_peer = 2;
+            config.rail_addresses = rails;
+            config
+        };
+        config
     })?;
     let pattern = expected();
     match mode.as_str() {

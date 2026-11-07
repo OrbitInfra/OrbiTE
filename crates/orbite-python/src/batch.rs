@@ -147,6 +147,8 @@ pub(crate) fn status(t: &TaskStatus) -> records::Status {
             Some(Error::Cancelled) => 3,
             _ => 6,
         },
+        // The binding is release-pinned; an unknown future state is not success.
+        _ => 6,
     };
     records::Status {
         status: state,

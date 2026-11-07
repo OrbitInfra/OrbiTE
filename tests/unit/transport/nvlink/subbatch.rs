@@ -6,11 +6,11 @@ use std::sync::mpsc;
 use std::time::Instant;
 
 use crate::cuda::CudaMemory;
-use crate::memory::Allocation;
+use crate::memory::MemoryBacking;
 use crate::{Priority, RemoteRegion, TaskState, TransferRequest, Transport};
 
 pub(crate) fn run_case(
-    local: Vec<Allocation>,
+    local: Vec<MemoryBacking>,
     remote: Arc<CudaMemory>,
     case: &str,
     asynchronous: bool,
@@ -45,11 +45,11 @@ pub(crate) fn run_case(
     let registrations: Vec<_> = local
         .iter()
         .map(|memory| match memory {
-            Allocation::Cuda(memory) => engine
+            MemoryBacking::Cuda(memory) => engine
                 .register_cuda_memory_batch(&[(memory.clone(), 5, 100)], Permission::LocalOnly)
                 .unwrap()
                 .remove(0),
-            Allocation::Host(memory) => engine
+            MemoryBacking::Host(memory) => engine
                 .register_host_memory(memory.clone(), 5, 100, Permission::LocalOnly)
                 .unwrap(),
         })
@@ -58,8 +58,8 @@ pub(crate) fn run_case(
         .iter()
         .map(|memory| {
             let owner: Arc<dyn Send + Sync> = match memory {
-                Allocation::Cuda(memory) => memory.clone(),
-                Allocation::Host(memory) => memory.clone(),
+                MemoryBacking::Cuda(memory) => memory.clone(),
+                MemoryBacking::Host(memory) => memory.clone(),
             };
             Arc::downgrade(&owner)
         })

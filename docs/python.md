@@ -2,7 +2,7 @@
 
 The `orbite` distribution exposes the Mooncake v0.3.14 TENT Python API through
 OrbiTE's Rust owners. It targets CPython 3.10–3.14 on Linux x86_64 and aarch64.
-The `0.1.0-beta.1` API is a freeze candidate awaiting maintainer review.
+The `0.1.0-beta.1` surface follows the maintainer-approved freeze decisions.
 Wheels are built for review in CI; publishing to PyPI is the maintainer's action.
 
 ## Build and install
@@ -85,7 +85,11 @@ an authoritative epoch and retires an endpoint/epoch identity.
 
 ## Surface and defaults
 
-This section and the inventory are the beta.1 public-surface review. The
+This section and the inventory define the beta.1 Python surface. The additive
+helpers are ratified, including retained buffer registration, explicit progress,
+wait/drain and terminal-result inspection. Reversible `close_segment(handle)`
+is also ratified as-is. Per-peer retirement may be added later when a Python
+consumer needs it; it is not implied by closing a segment handle. The
 installed-wheel check retains every frozen declaration and rejects accidental
 top-level helper exports. `dataclass`, `field`, `IntEnum`, `operator` and
 `ClassVar` are now private imports; none was in the TENT inventory. `_native`,
@@ -121,13 +125,13 @@ The engine methods in the freeze candidate are:
 
 Names such as `TentException`, `send_notifi`, `kWildcardLocation`, `Request.source`
 and `MemoryOptions.type` intentionally match `mooncake.tent` and stay unchanged.
-There is no classic `mooncake.engine` shim. The maintainer should ratify the
-additive helpers and the distinction between Python's reversible segment-handle
-close and Rust's endpoint/epoch retirement. The Python surface has no per-peer
-retirement method with an authoritative epoch. Most wrapper methods rely on
-this guide and the inventory rather than individual `help()` docstrings; whether
-to require those before freeze remains a documentation decision. No unsupported
-method is made silently successful to satisfy the inventory.
+There is no classic `mooncake.engine` shim. The additive helpers and the
+reversible segment-handle close are part of the beta.1 surface. There is no
+Python per-peer retirement method with an authoritative epoch today; a later
+consumer can request it as an additive API. Most wrapper methods rely on this
+guide and the inventory rather than individual `help()` docstrings. Documentation
+can be added without breaking the frozen surface. No unsupported method is made
+silently successful to satisfy the inventory.
 
 Data records also accept keyword field initializers. Policy, intent, priority,
 transport hint and absolute monotonic `deadline_ns` reach the same compiled
@@ -243,7 +247,8 @@ Its bounded engine, memory, segment and batch owners retain the existing Python
 behavior without C exports, C++ adapters or a plugin loader. The extension
 remains `orbite._native`. Rust-only builds do not compile or load Python.
 Maturin uses `>=1.10.2,<2`; CI fixes the build tool at 1.10.2.
-Both Cargo packages inherit `0.1.0-beta.1` from the workspace version. The
+The binding pins `orbite` to its exact release because hidden owner helpers are
+compatible only within that release. Both Cargo packages inherit `0.1.0-beta.1` from the workspace version. The
 dynamic version in `pyproject.toml` reads the binding crate's Cargo metadata;
 Python normalizes it to `0.1.0b1`. CI checks filenames and embedded wheel/sdist
 metadata, rebuilds a wheel from the sdist and checks the installed version.

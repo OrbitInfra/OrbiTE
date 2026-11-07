@@ -1,6 +1,6 @@
 # CUDA IPC and NVLink
 
-Build with `--features cuda`, set `EngineConfig { nvlink: true, ..Default::default() }`
+Build with `--features cuda`, create `let mut config = EngineConfig::default(); config.nvlink = true;`
 and select `Transport::Nvlink` (or let [transport selection](transport-selection.md)
 choose it). This payload transport sits beside TCP and RDMA: the shared control
 socket exchanges descriptors, CUDA IPC handles and receipts, and the bytes move
@@ -10,7 +10,7 @@ and driver.
 
 ## Multi-node NVLink and EGM
 
-With `--features cuda`, select `EngineConfig::mnnvl = Some(MnnvlConfig { .. })`
+With `--features cuda`, select `config.mnnvl = Some(MnnvlConfig::default())`
 on both engines. The default is off. As in the frozen loader, the **presence**
 of `MC_ENABLE_MNNVL` opts the default configuration into MNNVL. An explicit
 `None` disables it. Legacy `nvlink` and MNNVL are mutually exclusive.

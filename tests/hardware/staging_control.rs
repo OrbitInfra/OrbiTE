@@ -70,19 +70,21 @@ fn main() -> Result<(), Box<dyn StdError>> {
         }
         _ => return Err("expected no arguments or --rdma DEVICE GID_INDEX".into()),
     };
-    let source = TransferEngine::new(EngineConfig {
-        rdma: rdma.clone(),
-        handler_threads: 1,
-        handler_timeout: WAIT,
-        remote_staging: true,
-        staging_chunk_size: 8,
-        staging_chunk_count: 2,
-        ..Default::default()
+    let source = TransferEngine::new({
+        let mut config = EngineConfig::default();
+        config.rdma = rdma.clone();
+        config.handler_threads = 1;
+        config.handler_timeout = WAIT;
+        config.remote_staging = true;
+        config.staging_chunk_size = 8;
+        config.staging_chunk_count = 2;
+        config
     })?;
-    let requester = TransferEngine::new(EngineConfig {
-        rdma,
-        max_failover_attempts: 0,
-        ..Default::default()
+    let requester = TransferEngine::new({
+        let mut config = EngineConfig::default();
+        config.rdma = rdma;
+        config.max_failover_attempts = 0;
+        config
     })?;
     let initial: [u8; 64] = std::array::from_fn(|i| (i * 3 + 1) as u8);
     let gpu = Arc::new(CudaMemory::allocate(0, initial.len())?);

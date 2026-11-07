@@ -88,7 +88,7 @@ qualification; GPU/RDMA/GDS installed fault fixtures remain queued.
 
 | Capability | Status | Limits |
 | --- | --- | --- |
-| Rust API | Beta.1 freeze candidate; review pending | [Surface inventory and decisions](rust-api.md#beta1-freeze-candidate) |
+| Rust API | Beta.1 freeze decisions recorded | [Surface inventory and decisions](rust-api.md#freeze-decisions) |
 | TENT C ABI (S19) | Removed; out of scope | Frozen declarations retained as reference inventory only |
 | TENT C++ and classic TE (S20) | Removed; out of scope | No source adapters or classic-TE shim |
 | Device plugin ABI (S22/F03) | Removed; out of scope | CPU and CUDA use built-in owners |

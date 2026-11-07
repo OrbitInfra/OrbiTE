@@ -4,11 +4,12 @@
 
 This is a release candidate for maintainer review, not a publication record.
 The Rust and Python APIs are the freeze candidate; the
-[Rust review findings](rust-api.md#freeze-review-findings) and
-[Python surface review](python.md#surface-and-defaults) identify decisions that
-remain with the maintainer. Publishing to crates.io and PyPI is the
+[Rust freeze decisions](rust-api.md#freeze-decisions) and
+[Python surface review](python.md#surface-and-defaults) record the maintainer's
+decisions and the boundaries excluded from the freeze. Publishing to crates.io
+and PyPI is the
 maintainer's action. The last published Rust milestone is `0.1.0-alpha.1`
-from `7cc48490`; Python artifacts use the equivalent version `0.1.0b1`.
+from `7cc48490`. The beta.1 version is spelled `0.1.0b1` on PyPI.
 
 ### Changes since 0.1.0-alpha.1
 
@@ -45,9 +46,16 @@ from `7cc48490`; Python artifacts use the equivalent version `0.1.0b1`.
   integration design, after installed GDR/NVLink qualification; no custom
   connector or NIXL dependency is added.
 
-This preparation unifies the Rust package versions, checks wheel and sdist
-metadata, hides five accidental Python helper imports, and corrects stale
-documentation. It does not change transfer behavior. TCP, configuration and
+This preparation unifies package versions and validates wheel/sdist metadata,
+including under optimized Python. Rust public field records and enums are
+non-exhaustive except binary `TransferOp`; construct configs through defaults
+and field assignment. `NVLinkStats` is renamed to `NvlinkStats`, `MemoryBacking`
+is the real type name, and TENT's topology name `MemType` remains. Binding-only
+helpers and the standalone adaptive core are hidden and outside the freeze;
+the Python crate pins the exact core version. Five accidental Python helper
+imports are private. Python's additive helpers and reversible segment close
+are ratified. Missing documentation must close before `0.1.0`. Transfer behavior
+is unchanged. TCP, configuration and
 the Python CPU/TCP wheel profile are labeled **Qualified on Linux CI** only
 against the [named jobs and tests](qualification.md#linux-ci-release-profiles).
 HP-TCP loopback, same-host SHM and ext4/tmpfs io_uring retain their bounded
@@ -73,8 +81,9 @@ speed guarantees. No tuning was attempted in the benchmark preparation.
 | Gapped ext4 READ / WRITE | p99 **15.7 / 8.8 ms**, versus **1.8 / 1.7 ms** for TENT |
 
 The [original measurement table](qualification.md#cpu-benchmark-evidence)
-pins revisions, host, workload and sample counts. Per-batch workers and
-per-owner TCP connections are possible contributors; the ext4 tail cause is
+pins revisions, host, workload and sample counts. `TcpTransport::transfer`
+opens a new control connection per physical request and polls it with backoff.
+That and per-batch workers are possible contributors; the ext4 tail cause is
 unresolved. p99 uses only 100 samples per trial, and files were warmed without
 fsync. These results say nothing about RNIC, GPU or physical SSD performance.
 

@@ -16,6 +16,7 @@ pub(crate) enum Quarantine {
 pub(crate) use registration::{BufferLease, BufferSlot, FileHandle};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum GdsMode {
     /// Effective driver configuration disables compatibility I/O.
     NativeOnly,
@@ -24,6 +25,7 @@ pub enum GdsMode {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
 pub struct GdsStats {
     pub mode: Option<GdsMode>,
     pub available: bool,

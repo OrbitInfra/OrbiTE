@@ -4,6 +4,7 @@ mod runtime;
 use crate::{Error, MemoryType, Result, SourceEpoch};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum MnnvlHandleType {
     #[default]
     Fabric,
@@ -13,6 +14,7 @@ pub enum MnnvlHandleType {
 /// Typed counterparts of TENT's NVLink handle, host registration and threshold
 /// settings and transports/mnnvl/egm. Selecting this profile replaces legacy IPC.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct MnnvlConfig {
     pub handle_type: MnnvlHandleType,
     pub host_register: bool,

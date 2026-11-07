@@ -138,16 +138,18 @@ independently of the retained-owner budgets:
 ```rust
 use orbite::{EngineConfig, RuntimeQueueConfig, TransferEngine};
 
-let engine = TransferEngine::new(EngineConfig {
-    max_inflight_batches: 128,
-    max_inflight_bytes: 256 << 20,
-    runtime_queue: Some(RuntimeQueueConfig {
-        max_dispatch_owners: 8,
-        max_dispatch_bytes: 32 << 20,
-        deadline_aware: true,
-        ..Default::default()
-    }),
-    ..EngineConfig::default()
+let engine = TransferEngine::new({
+    let mut config = EngineConfig::default();
+    config.max_inflight_batches = 128;
+    config.max_inflight_bytes = 256 << 20;
+    config.runtime_queue = Some({
+        let mut config = RuntimeQueueConfig::default();
+        config.max_dispatch_owners = 8;
+        config.max_dispatch_bytes = 32 << 20;
+        config.deadline_aware = true;
+        config
+    });
+    config
 })?;
 # Ok::<(), orbite::Error>(())
 ```
@@ -207,33 +209,43 @@ resolve to `default`/`unspec`. Names are trimmed and lowercased, at most 256
 bytes and unique; at most 4096 contracts compile.
 
 ```rust
-use orbite::{EngineConfig, Priority, QosConfig, QosPolicyFields,
-    QosRequestContext, QosTenantContract, TransferEngine};
+use orbite::{
+    EngineConfig, Priority, QosConfig, QosPolicyFields, QosRequestContext, QosTenantContract,
+    TransferEngine,
+};
 
-let requester = TransferEngine::new(EngineConfig {
-    qos: Some(QosConfig {
-        defaults: QosPolicyFields {
-            max_inflight_bytes: Some(64 << 20),
-            max_inflight_requests: Some(128),
-            ..Default::default()
-        },
-        tenants: vec![QosTenantContract {
-            name: "tenant-a".into(),
-            intents: [("foreground_get".into(), QosPolicyFields {
-                priority: Some(Priority::High),
-                max_inflight_bytes: Some(128 << 20),
-                ..Default::default()
-            })].into(),
-            ..Default::default()
-        }],
-        ..Default::default()
-    }),
-    ..EngineConfig::default()
+let requester = TransferEngine::new({
+    let mut config = EngineConfig::default();
+    config.qos = Some({
+        let mut config = QosConfig::default();
+        config.defaults = {
+            let mut config = QosPolicyFields::default();
+            config.max_inflight_bytes = Some(64 << 20);
+            config.max_inflight_requests = Some(128);
+            config
+        };
+        config.tenants = vec![{
+            let mut config = QosTenantContract::default();
+            config.name = "tenant-a".into();
+            config.intents = [("foreground_get".into(), {
+                let mut config = QosPolicyFields::default();
+                config.priority = Some(Priority::High);
+                config.max_inflight_bytes = Some(128 << 20);
+                config
+            })]
+            .into();
+            config
+        }];
+        config
+    });
+    config
 })?;
-let policy = requester.resolve_qos(&QosRequestContext {
-    tenant_id: "tenant-a".into(),
-    intent: "foreground_get".into(),
-    requested_priority: Priority::Low,
+let policy = requester.resolve_qos(&{
+    let mut config = QosRequestContext::default();
+    config.tenant_id = "tenant-a".into();
+    config.intent = "foreground_get".into();
+    config.requested_priority = Priority::Low;
+    config
 })?;
 assert_eq!(policy.effective_priority(), Priority::High);
 // Use request.with_qos(policy.clone()) for repeated submissions.
@@ -284,13 +296,16 @@ Delay requires `EngineConfig::runtime_queue`; otherwise engine creation returns
 ```rust
 use orbite::{EngineConfig, QosConfig, RuntimeQueueConfig, TransferEngine};
 
-let engine = TransferEngine::new(EngineConfig {
-    runtime_queue: Some(RuntimeQueueConfig::default()),
-    qos: QosConfig::from_json(r#"{"qos":{"defaults":{
-        "max_inflight_bytes":"64MiB", "max_inflight_requests":128,
-        "allowed_degraded_actions":["delay","reject"]
-    }}}"#)?,
-    ..Default::default()
+let engine = TransferEngine::new({
+    let mut config = EngineConfig::default();
+    config.runtime_queue = Some(RuntimeQueueConfig::default());
+    config.qos = QosConfig::from_json(
+        r#"{"qos":{"defaults":{
+    "max_inflight_bytes":"64MiB", "max_inflight_requests":128,
+    "allowed_degraded_actions":["delay","reject"]
+}}}"#,
+    )?;
+    config
 })?;
 # Ok::<(), orbite::Error>(())
 ```
@@ -336,9 +351,10 @@ for `EngineConfig::qos`. Other sections are ignored.
 ```rust
 use orbite::{EngineConfig, QosConfig, TransferEngine};
 
-let engine = TransferEngine::new(EngineConfig {
-    qos: QosConfig::from_json_file("transfer-engine.json")?,
-    ..EngineConfig::default()
+let engine = TransferEngine::new({
+    let mut config = EngineConfig::default();
+    config.qos = QosConfig::from_json_file("transfer-engine.json")?;
+    config
 })?;
 # Ok::<(), orbite::Error>(())
 ```
@@ -403,21 +419,29 @@ share that credit owner with no manual update loop:
 use orbite::{EngineConfig, ReceiverCreditConfig, TransferEngine};
 use std::time::Duration;
 
-let source = TransferEngine::new(EngineConfig {
-    receiver_credit: Some(ReceiverCreditConfig {
-        max_sessions: 128,
-        max_bytes: 256 << 20,
-        max_requests: 1024,
-        bytes_per_sender: 64 << 20,
-        requests_per_sender: 256,
-    }),
-    ..EngineConfig::default()
+let source = TransferEngine::new({
+    let mut config = EngineConfig::default();
+    config.receiver_credit = Some({
+        let mut config = ReceiverCreditConfig::default();
+        config.max_sessions = 128;
+        config.max_bytes = 256 << 20;
+        config.max_requests = 1024;
+        config.bytes_per_sender = 64 << 20;
+        config.requests_per_sender = 256;
+        config
+    });
+    config
 })?;
-let requester = TransferEngine::new(EngineConfig {
-    max_receiver_credit_sessions: 32,
-    ..EngineConfig::default()
+let requester = TransferEngine::new({
+    let mut config = EngineConfig::default();
+    config.max_receiver_credit_sessions = 32;
+    config
 })?;
-let peer = requester.open_segment(source.endpoint(), source.source_epoch(), Duration::from_secs(3))?;
+let peer = requester.open_segment(
+    source.endpoint(),
+    source.source_epoch(),
+    Duration::from_secs(3),
+)?;
 requester.connect_receiver_credit(&peer, 0, Duration::from_secs(3))?;
 // Register memory and submit through the ordinary APIs.
 // After every accepted data owner has completed and dropped:

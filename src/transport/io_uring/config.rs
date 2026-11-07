@@ -1,6 +1,7 @@
 use crate::{Error, Result};
 
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub struct IoUringConfig {
     pub pinned_staging: bool,
     /// KiB per slot, rounded up to a 4 KiB boundary.

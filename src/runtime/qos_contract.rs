@@ -16,6 +16,7 @@ const MAX_CONTRACTS: usize = 4096;
 /// allowing delay requires EngineConfig::runtime_queue. If both are allowed,
 /// temporary quota pressure delays; impossible groups still fail admission.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
 pub struct QosDegradedActions {
     pub delay: bool,
     pub reject: bool,
@@ -25,6 +26,7 @@ pub struct QosDegradedActions {
 /// Some(0) is a hard zero budget. Counts cover admitted public data requests
 /// until their actual owner drains.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
 pub struct QosPolicyFields {
     pub priority: Option<Priority>,
     pub max_inflight_bytes: Option<usize>,
@@ -52,6 +54,7 @@ impl QosPolicyFields {
 }
 
 #[derive(Clone, Debug, Default)]
+#[non_exhaustive]
 pub struct QosTenantContract {
     pub name: String,
     pub defaults: QosPolicyFields,
@@ -61,6 +64,7 @@ pub struct QosTenantContract {
 /// Typed TENT-style global -> tenant -> intent resolution. EngineConfig::qos
 /// opts in; budgets aggregate by the resolved contract, not by a parent tree.
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct QosConfig {
     pub version: u32,
     pub defaults: QosPolicyFields,
@@ -78,6 +82,7 @@ impl Default for QosConfig {
 }
 
 #[derive(Clone, Debug)]
+#[non_exhaustive]
 pub struct QosRequestContext {
     pub tenant_id: String,
     pub intent: String,
@@ -96,6 +101,7 @@ impl Default for QosRequestContext {
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
 pub struct QosUsage {
     pub owners: usize,
     pub inflight_bytes: usize,

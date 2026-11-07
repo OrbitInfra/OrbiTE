@@ -11,16 +11,22 @@ fixed through queueing, execution and drain.
 ```rust
 use orbite::{EngineConfig, TransportSelectorConfig};
 
-let selector = TransportSelectorConfig::from_json(r#"{
+let selector = TransportSelectorConfig::from_json(
+    r#"{
   "policy": [
-    {"name": "small_host", "segment_type": "memory",
-     "local_memory": "cpu", "remote_memory": "cpu",
-     "max_size": 4096, "priority": "high", "transports": ["tcp"]},
-    {"name": "bulk", "segment_type": "memory",
-     "transports": ["nvlink", "rdma", "tcp"]}
+{"name": "small_host", "segment_type": "memory",
+ "local_memory": "cpu", "remote_memory": "cpu",
+ "max_size": 4096, "priority": "high", "transports": ["tcp"]},
+{"name": "bulk", "segment_type": "memory",
+ "transports": ["nvlink", "rdma", "tcp"]}
   ]
-}"#)?;
-let config = EngineConfig { selector: Some(selector), ..Default::default() };
+}"#,
+)?;
+let config = {
+    let mut config = EngineConfig::default();
+    config.selector = Some(selector);
+    config
+};
 # Ok::<(), orbite::Error>(())
 ```
 

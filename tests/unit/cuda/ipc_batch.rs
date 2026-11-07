@@ -1,7 +1,7 @@
 use super::ipc::{complete_group, deadline, owned};
 use super::*;
 use crate::cuda::ipc::{IpcCopy, IpcExport, IpcMapping};
-use crate::memory::Allocation;
+use crate::memory::MemoryBacking;
 
 fn local(device: &Arc<Device>, batch: bool) -> Arc<CudaMemory> {
     let mut api = driver();
@@ -37,7 +37,7 @@ fn ipc_native_batch_read_write_mixed_owners_and_ordered_fallback() {
                 let host = pinned(&local);
                 host.write(0, &[0x5a; 128]).unwrap();
                 let export = IpcExport::new(owned(&source, true)).unwrap();
-                let owner = Allocation::Cuda(local.clone());
+                let owner = MemoryBacking::Cuda(local.clone());
                 let copies = [
                     IpcCopy {
                         memory: owner.clone(),
@@ -46,7 +46,7 @@ fn ipc_native_batch_read_write_mixed_owners_and_ordered_fallback() {
                         length: 17,
                     },
                     IpcCopy {
-                        memory: Allocation::Host(host.clone()),
+                        memory: MemoryBacking::Host(host.clone()),
                         local_offset: 40,
                         remote_offset: if overlap && to_remote { 11 } else { 40 },
                         length: 9,
@@ -76,7 +76,7 @@ fn ipc_native_batch_read_write_mixed_owners_and_ordered_fallback() {
                 let mut expected_device = vec![0xa5; 128];
                 let mut expected_host = vec![0x5a; 128];
                 for copy in &copies {
-                    let local = if matches!(&copy.memory, Allocation::Cuda(_)) {
+                    let local = if matches!(&copy.memory, MemoryBacking::Cuda(_)) {
                         &mut expected_device
                     } else {
                         &mut expected_host
@@ -138,7 +138,7 @@ fn ipc_native_batch_cancel_only_submits_and_completes_admitted_prefix() {
     for accepted in 0..=2 {
         let source = allocation(&[0x5a; 128]);
         let destination = allocation(&[0xa5; 128]);
-        let owner = Allocation::Cuda(local(&destination, true));
+        let owner = MemoryBacking::Cuda(local(&destination, true));
         let export = IpcExport::new(owned(&source, true)).unwrap();
         let copies = (0..3)
             .map(|i| IpcCopy {
@@ -187,7 +187,7 @@ fn ipc_native_batch_partial_error_never_replays_or_claims_a_completed_prefix() {
         let destination = allocation(&[0xa5; 128]);
         let local = local(&destination, true);
         let host = pinned(&local);
-        let owner = Allocation::Cuda(local.clone());
+        let owner = MemoryBacking::Cuda(local.clone());
         let export = IpcExport::new(owned(&source, true)).unwrap();
         let copies = [
             IpcCopy {
@@ -197,7 +197,7 @@ fn ipc_native_batch_partial_error_never_replays_or_claims_a_completed_prefix() {
                 length: 16,
             },
             IpcCopy {
-                memory: Allocation::Host(host.clone()),
+                memory: MemoryBacking::Host(host.clone()),
                 local_offset: 16,
                 remote_offset: 16,
                 length: 16,

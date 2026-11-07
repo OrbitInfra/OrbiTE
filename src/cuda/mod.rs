@@ -43,6 +43,7 @@ static RETAINED_EXPORT: AtomicUsize = AtomicUsize::new(0);
 static RETAINED_CONTEXT: AtomicUsize = AtomicUsize::new(0);
 
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub struct RetainedResources {
     pub device_allocations: usize,
     pub ipc_mappings: usize,
@@ -395,6 +396,7 @@ impl CudaMemory {
     }
 
     /// Retire an exclusively held device allocation and report its native receipt.
+    #[doc(hidden)]
     pub fn release_owned(self: Arc<Self>) -> Result<()> {
         let mut memory = Arc::try_unwrap(self).map_err(|_| Error::BatchBusy)?;
         memory
@@ -403,7 +405,7 @@ impl CudaMemory {
             .map_err(|_| Error::Internal("CUDA allocation lock poisoned"))?
             .release()
     }
-    /// Identify an externally retained device allocation for the C ABI. The caller
+    /// Identify an externally retained device allocation for a language binding. The caller
     /// must supply live host storage if CUDA reports an unrecognized host pointer.
     ///
     /// # Safety

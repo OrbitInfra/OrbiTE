@@ -83,7 +83,7 @@ Async batches use the same validation and executor; see
 
 ## Notification contracts
 
-`Notification { name, message }` carries UTF-8 strings (empty strings and
+`Notification::new(name, message)` carries UTF-8 strings (empty strings and
 repeats are valid). `send_local_notification` delivers in process;
 `send_notification(peer, notification, timeout)` uses epoch-fenced TCP for other
 peers. A receipt confirms enqueue, not consumption. `receive_notifications()`

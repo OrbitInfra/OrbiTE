@@ -8,6 +8,7 @@ pub const SCHEMA_VERSION: u32 = 1;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum Outcome {
     Pass,
     Warn,
@@ -16,6 +17,7 @@ pub enum Outcome {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Check {
     pub id: String,
     pub outcome: Outcome,
@@ -23,6 +25,7 @@ pub struct Check {
     pub remediation: Vec<String>,
 }
 #[derive(Debug, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct BuildInfo {
     pub version: String,
     pub commit: String,
@@ -31,6 +34,7 @@ pub struct BuildInfo {
     pub features: BTreeMap<String, bool>,
 }
 #[derive(Debug, Serialize, Deserialize)]
+#[non_exhaustive]
 pub struct Snapshot {
     pub schema_version: u32,
     pub command: String,

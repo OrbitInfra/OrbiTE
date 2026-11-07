@@ -1,7 +1,7 @@
 use super::ipc::owned;
 use super::*;
 use crate::cuda::ipc::{IpcExport, IpcMapping};
-use crate::memory::Allocation;
+use crate::memory::MemoryBacking;
 
 fn pinned(context: &Arc<Context>, value: u8) -> Arc<HostMemory> {
     let memory = Arc::new(HostMemory::from_cuda_pinned(Arc::new(
@@ -26,11 +26,18 @@ fn ipc_host_read_write_preserve_guards_reuse_stream_and_free_real_pin() {
     let export = IpcExport::new(remote.clone()).unwrap();
     let pool = CUDAStreamPool::new(1).unwrap();
     let mut mapping =
-        IpcMapping::new(&Allocation::Host(host.clone()), super::ipc::deadline()).unwrap();
+        IpcMapping::new(&MemoryBacking::Host(host.clone()), super::ipc::deadline()).unwrap();
     mapping.open(export.handle).unwrap();
     for to_remote in [false, true, false] {
         mapping
-            .copy_one(&Allocation::Host(host.clone()), &pool, 11, 7, 17, to_remote)
+            .copy_one(
+                &MemoryBacking::Host(host.clone()),
+                &pool,
+                11,
+                7,
+                17,
+                to_remote,
+            )
             .unwrap();
     }
     let mut actual = [0; 128];
@@ -98,9 +105,9 @@ fn ipc_host_and_mixed_subbatches_keep_failure_scope_and_actual_owners() {
                         let owner = allocation(&[value; 128]);
                         let gpu = owned(&owner, false);
                         gpu.allocation.lock().unwrap().context = context.clone();
-                        Allocation::Cuda(gpu)
+                        MemoryBacking::Cuda(gpu)
                     } else {
-                        Allocation::Host(pinned(&context, value))
+                        MemoryBacking::Host(pinned(&context, value))
                     }
                 })
                 .collect();
@@ -157,7 +164,7 @@ fn ipc_host_rejects_unknown_backing_and_checks_pinned_cleanup_failure() {
     };
     for host in [ordinary, Arc::new(external)] {
         assert!(matches!(
-            IpcMapping::new(&Allocation::Host(host), super::ipc::deadline()),
+            IpcMapping::new(&MemoryBacking::Host(host), super::ipc::deadline()),
             Err(Error::Unavailable(_))
         ));
     }
@@ -174,7 +181,7 @@ fn ipc_host_rejects_unknown_backing_and_checks_pinned_cleanup_failure() {
         let export = IpcExport::new(owned(&source, true)).unwrap();
         let pool = CUDAStreamPool::new(1).unwrap();
         let mut mapping =
-            IpcMapping::new(&Allocation::Host(host.clone()), super::ipc::deadline()).unwrap();
+            IpcMapping::new(&MemoryBacking::Host(host.clone()), super::ipc::deadline()).unwrap();
         mapping.open(export.handle).unwrap();
         match fault {
             "event-create" => destination.event_create_error.store(1, Ordering::Release),
@@ -187,7 +194,7 @@ fn ipc_host_rejects_unknown_backing_and_checks_pinned_cleanup_failure() {
             "free" => destination.free_error.store(1, Ordering::Release),
             _ => unreachable!(),
         }
-        let result = mapping.copy_one(&Allocation::Host(host.clone()), &pool, 11, 7, 17, false);
+        let result = mapping.copy_one(&MemoryBacking::Host(host.clone()), &pool, 11, 7, 17, false);
         assert_eq!(
             result.is_err(),
             !matches!(fault, "close" | "free"),
@@ -224,7 +231,7 @@ fn ipc_host_completion_excludes_cpu_and_rdma_and_fence_survives_loan_drop() {
         .register_host_memory(host.clone(), 0, 128, Permission::LocalOnly)
         .unwrap();
     let loan = region.dma_lease(100, 1).unwrap();
-    assert!(IpcMapping::new(&Allocation::Host(host.clone()), super::ipc::deadline()).is_err());
+    assert!(IpcMapping::new(&MemoryBacking::Host(host.clone()), super::ipc::deadline()).is_err());
     drop(loan);
     let source = allocation(&[0x5a; 128]);
     let export = IpcExport::new(owned(&source, true)).unwrap();
@@ -232,7 +239,7 @@ fn ipc_host_completion_excludes_cpu_and_rdma_and_fence_survives_loan_drop() {
     let copy_host = host.clone();
     let handle = export.handle;
     let worker = std::thread::spawn(move || {
-        let owner = Allocation::Host(copy_host);
+        let owner = MemoryBacking::Host(copy_host);
         let pool = CUDAStreamPool::new(1).unwrap();
         let mut mapping = IpcMapping::new(&owner, super::ipc::deadline()).unwrap();
         mapping.open(handle).unwrap();
@@ -276,9 +283,9 @@ fn ipc_groups_deduplicate_aliases_and_serialize_reversed_mixed_owners() {
             let mut copies: Vec<_> = (0..4)
                 .map(|index| IpcCopy {
                     memory: if index % 2 == 0 {
-                        Allocation::Cuda(gpu.clone())
+                        MemoryBacking::Cuda(gpu.clone())
                     } else {
-                        Allocation::Host(host.clone())
+                        MemoryBacking::Host(host.clone())
                     },
                     local_offset: index * 8,
                     remote_offset: index * 8,

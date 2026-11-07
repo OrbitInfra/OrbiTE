@@ -218,10 +218,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                 } else {
                     TransferOp::Read
                 };
-                let notification = (*name != "~").then(|| Notification {
-                    name: text(name),
-                    message: text(message),
-                });
+                let notification =
+                    (*name != "~").then(|| Notification::new(text(name), text(message)));
                 let mut batch = if split {
                     if notification.is_some() || requests.is_empty() {
                         return Err("split trace needs nonempty unnotified requests".into());
@@ -275,10 +273,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 );
             }
             ["NOTIFY", label, mode, name, message] => {
-                let notification = Notification {
-                    name: text(name),
-                    message: text(message),
-                };
+                let notification = Notification::new(text(name), text(message));
                 match *mode {
                     "local" => source.send_local_notification(&notification)?,
                     "remote" => requester.send_notification(

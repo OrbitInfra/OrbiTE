@@ -3,7 +3,7 @@ use std::time::Instant;
 use super::budget::MappingPermit;
 use crate::Result;
 use crate::cuda::ipc::IpcMapping;
-use crate::memory::Allocation;
+use crate::memory::MemoryBacking;
 
 /// One relocation/import reference, charged until native close is proven.
 pub(super) struct OpenedMapping {
@@ -13,7 +13,7 @@ pub(super) struct OpenedMapping {
 
 impl OpenedMapping {
     pub(super) fn new(
-        memory: &Allocation,
+        memory: &MemoryBacking,
         permit: MappingPermit,
         deadline: Instant,
     ) -> Result<Self> {

@@ -13,12 +13,14 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum PathState {
     Healthy,
     Congested,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Snapshot {
     pub mode: Mode,
     pub state: PathState,
@@ -29,6 +31,7 @@ pub struct Snapshot {
 }
 
 #[derive(Clone, Copy, Debug, Default)]
+#[non_exhaustive]
 pub struct Signals {
     pub backlog_bytes: u64,
     pub delivery_rate_bytes_per_sec: u64,
@@ -71,21 +74,25 @@ pub struct DomainState {
     deferred: AtomicU64,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum AdmissionDomain {
     Device,
     Route,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Decision {
     Defer,
     Avoid,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub enum Reason {
     Window,
     StaleGeneration,
 }
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
 pub struct Rejection {
     pub decision: Decision,
     pub domain: AdmissionDomain,

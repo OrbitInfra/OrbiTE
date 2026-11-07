@@ -41,13 +41,16 @@ fn main() -> Result<()> {
     } else {
         PathBuf::from(directory)
     };
-    let engine = TransferEngine::new(EngineConfig {
-        tcp: false,
-        shm: ShmConfig {
-            enable: true,
-            cxl_mount_path: cxl,
-        },
-        ..Default::default()
+    let engine = TransferEngine::new({
+        let mut config = EngineConfig::default();
+        config.tcp = false;
+        config.shm = {
+            let mut config = ShmConfig::default();
+            config.enable = true;
+            config.cxl_mount_path = cxl;
+            config
+        };
+        config
     })?;
     match mode.as_str() {
         "source" => {

@@ -6,6 +6,7 @@ use super::{IoUringConfig, task::Bounce};
 use crate::{Error, Result};
 
 #[derive(Clone, Copy, Debug, Default)]
+#[non_exhaustive]
 pub struct IoUringStats {
     pub slot_bytes: usize,
     pub slots: usize,

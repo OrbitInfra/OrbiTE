@@ -564,9 +564,10 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     let role = &args[1];
     let bind_addr: SocketAddr = args[2].parse()?;
     let mut rdma = if env::var("ORBITE_RDMA_DISCOVERY").as_deref() == Ok("1") {
-        RdmaConfig {
-            rdma_whitelist: vec![args[3].clone()],
-            ..Default::default()
+        {
+            let mut config = RdmaConfig::default();
+            config.rdma_whitelist = vec![args[3].clone()];
+            config
         }
     } else {
         let mut config = RdmaConfig::new(&args[3]);
@@ -622,24 +623,25 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
     if transport == Transport::Tcp {
         rdma.host_memory = RdmaHostMemory::Staged;
     }
-    let config = EngineConfig {
-        bind_addr,
-        remote_staging: env::var("ORBITE_REMOTE_STAGING").as_deref() == Ok("1"),
-        handler_threads: if env::var("ORBITE_REMOTE_STAGING").as_deref() == Ok("1") {
+    let config = {
+        let mut config = EngineConfig::default();
+        config.bind_addr = bind_addr;
+        config.remote_staging = env::var("ORBITE_REMOTE_STAGING").as_deref() == Ok("1");
+        config.handler_threads = if env::var("ORBITE_REMOTE_STAGING").as_deref() == Ok("1") {
             1
         } else {
             4
-        },
-        max_inflight_batches: 1,
-        staging_chunk_size: env::var("ORBITE_STAGING_CHUNK_SIZE")
-            .map_or(Ok(4 << 20), |s| s.parse())?,
-        staging_chunk_count: env::var("ORBITE_STAGING_CHUNK_COUNT")
-            .map_or(Ok(64), |s| s.parse())?,
-        staging_pipeline_depth: env::var("ORBITE_STAGING_PIPELINE_DEPTH")
-            .map_or(Ok(1), |s| s.parse())?,
-        rdma: Some(rdma),
-        handler_timeout: TIMEOUT,
-        ..EngineConfig::default()
+        };
+        config.max_inflight_batches = 1;
+        config.staging_chunk_size =
+            env::var("ORBITE_STAGING_CHUNK_SIZE").map_or(Ok(4 << 20), |s| s.parse())?;
+        config.staging_chunk_count =
+            env::var("ORBITE_STAGING_CHUNK_COUNT").map_or(Ok(64), |s| s.parse())?;
+        config.staging_pipeline_depth =
+            env::var("ORBITE_STAGING_PIPELINE_DEPTH").map_or(Ok(1), |s| s.parse())?;
+        config.rdma = Some(rdma);
+        config.handler_timeout = TIMEOUT;
+        config
     };
     if env::var("ORBITE_STAGING_OBSERVE").as_deref() == Ok("1") {
         println!(
@@ -745,10 +747,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             TransferOp::Read,
             &peer,
             &requests[1..],
-            Some(&Notification {
-                name: "read_done".into(),
-                message: seed.to_string(),
-            }),
+            Some(&Notification::new("read_done", seed.to_string())),
             TIMEOUT,
         )?;
         batch.seal()?;
@@ -791,10 +790,7 @@ fn main() -> std::result::Result<(), Box<dyn std::error::Error>> {
             TransferOp::Write,
             &peer,
             &requests,
-            Some(&Notification {
-                name: "write_done".into(),
-                message: seed.to_string(),
-            }),
+            Some(&Notification::new("write_done", seed.to_string())),
             TIMEOUT,
         )?;
         let status = batch.wait(TIMEOUT)?;

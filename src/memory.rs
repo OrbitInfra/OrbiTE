@@ -17,6 +17,7 @@ pub use location::{MemoryLocation, MemoryType, RangeLocation};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
+#[non_exhaustive]
 pub enum Permission {
     LocalOnly = 0,
     RemoteRead = 1,
@@ -520,6 +521,7 @@ impl HostMemory {
     }
 
     /// Retire an exclusively held, engine-allocated host mapping.
+    #[doc(hidden)]
     pub fn release_owned(self) -> Result<()> {
         #[cfg(target_os = "linux")]
         let mut owned = self;
@@ -676,7 +678,7 @@ pub(crate) struct DmaLease {
     #[cfg(target_os = "linux")]
     _shared_access: Option<crate::transport::shm::RangeLock>,
     _registration: RegisteredMemory,
-    allocation: Allocation,
+    allocation: MemoryBacking,
     range: Range<usize>,
     address: NonNull<u8>,
 }
@@ -690,9 +692,9 @@ impl DmaLease {
     #[cfg(feature = "rdma")]
     pub(crate) fn complete(&self) -> Result<()> {
         match &self.allocation {
-            Allocation::Host(_) => Ok(()),
+            MemoryBacking::Host(_) => Ok(()),
             #[cfg(feature = "cuda")]
-            Allocation::Cuda(memory) => memory.complete_dma(),
+            MemoryBacking::Cuda(memory) => memory.complete_dma(),
         }
     }
 
@@ -709,16 +711,16 @@ impl DmaLease {
 impl Drop for DmaLease {
     fn drop(&mut self) {
         match &self.allocation {
-            Allocation::Host(memory) => memory
+            MemoryBacking::Host(memory) => memory
                 .backing
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
                 .dma
                 .retain(|range| *range != self.range),
             #[cfg(all(feature = "cuda", feature = "rdma"))]
-            Allocation::Cuda(memory) => memory.release_dma(&self.range),
+            MemoryBacking::Cuda(memory) => memory.release_dma(&self.range),
             #[cfg(all(feature = "cuda", not(feature = "rdma")))]
-            Allocation::Cuda(_) => {}
+            MemoryBacking::Cuda(_) => {}
         }
     }
 }
@@ -741,9 +743,9 @@ impl RegisteredMemory {
     #[cfg(target_os = "linux")]
     pub(crate) fn shared(&self) -> Option<(Arc<crate::transport::shm::Local>, usize)> {
         match &self.0.allocation {
-            Allocation::Host(host) => host.shared().map(|s| (s, self.0.allocation_offset)),
+            MemoryBacking::Host(host) => host.shared().map(|s| (s, self.0.allocation_offset)),
             #[cfg(feature = "cuda")]
-            Allocation::Cuda(_) => None,
+            MemoryBacking::Cuda(_) => None,
         }
     }
     #[cfg(target_os = "linux")]
@@ -755,9 +757,9 @@ impl RegisteredMemory {
     ) -> Result<T> {
         checked_range(offset, length, self.len())?;
         #[cfg(not(feature = "cuda"))]
-        let Allocation::Host(host) = &self.0.allocation;
+        let MemoryBacking::Host(host) = &self.0.allocation;
         #[cfg(feature = "cuda")]
-        let Allocation::Host(host) = &self.0.allocation else {
+        let MemoryBacking::Host(host) = &self.0.allocation else {
             return Err(Error::Unavailable("SHM requires host memory"));
         };
         let start = self.0.allocation_offset + offset;
@@ -774,19 +776,20 @@ impl RegisteredMemory {
     }
     #[cfg(all(feature = "io-uring", feature = "cuda"))]
     pub(crate) fn is_cuda_pinned_host(&self) -> bool {
-        matches!(&self.0.allocation, Allocation::Host(host) if host.cuda_pinned)
+        matches!(&self.0.allocation, MemoryBacking::Host(host) if host.cuda_pinned)
     }
 
     #[cfg(feature = "cuda")]
     pub(crate) fn ipc_requester(&self) -> bool {
         match &self.0.allocation {
-            Allocation::Host(memory) => memory.cuda_pinned,
-            Allocation::Cuda(memory) => memory.ipc_requester,
+            MemoryBacking::Host(memory) => memory.cuda_pinned,
+            MemoryBacking::Cuda(memory) => memory.ipc_requester,
         }
     }
 
     /// True once this retired registration has no users besides the caller's handle.
     /// Check after closing registration admission. This never authorizes a retry of failed native retirement.
+    #[doc(hidden)]
     pub fn exclusively_held(&self) -> bool {
         Arc::strong_count(&self.0) == 1
     }
@@ -800,9 +803,9 @@ impl RegisteredMemory {
     /// The registration retains its owner; the returned metadata is a snapshot.
     pub fn location(&self) -> Result<RangeLocation> {
         match &self.0.allocation {
-            Allocation::Host(memory) => memory.location(self.0.allocation_offset, self.len()),
+            MemoryBacking::Host(memory) => memory.location(self.0.allocation_offset, self.len()),
             #[cfg(feature = "cuda")]
-            Allocation::Cuda(memory) => memory.location(self.0.allocation_offset, self.len()),
+            MemoryBacking::Cuda(memory) => memory.location(self.0.allocation_offset, self.len()),
         }
     }
 
@@ -830,9 +833,9 @@ impl RegisteredMemory {
     #[cfg(feature = "rdma")]
     pub(crate) fn with_rdma_context<T>(&self, operation: impl FnOnce() -> Result<T>) -> Result<T> {
         match &self.0.allocation {
-            Allocation::Host(_) => operation(),
+            MemoryBacking::Host(_) => operation(),
             #[cfg(feature = "cuda")]
-            Allocation::Cuda(memory) => memory.with_rdma_context(operation),
+            MemoryBacking::Cuda(memory) => memory.with_rdma_context(operation),
         }
     }
 
@@ -856,7 +859,7 @@ impl RegisteredMemory {
         #[cfg(target_os = "linux")]
         let shared_access;
         match &self.0.allocation {
-            Allocation::Host(memory) => {
+            MemoryBacking::Host(memory) => {
                 let mut backing = memory
                     .backing
                     .lock()
@@ -873,7 +876,7 @@ impl RegisteredMemory {
                 backing.dma.push(range.clone());
             }
             #[cfg(all(feature = "cuda", feature = "rdma"))]
-            Allocation::Cuda(memory) => {
+            MemoryBacking::Cuda(memory) => {
                 memory.acquire_dma(range.clone())?;
                 #[cfg(target_os = "linux")]
                 {
@@ -881,7 +884,7 @@ impl RegisteredMemory {
                 }
             }
             #[cfg(all(feature = "cuda", not(feature = "rdma")))]
-            Allocation::Cuda(_) => return Err(Error::Unavailable("file I/O requires DRAM")),
+            MemoryBacking::Cuda(_) => return Err(Error::Unavailable("file I/O requires DRAM")),
         }
         Ok(DmaLease {
             #[cfg(target_os = "linux")]
@@ -898,7 +901,7 @@ impl RegisteredMemory {
         &self,
         offset: usize,
         length: usize,
-    ) -> Result<(Allocation, usize)> {
+    ) -> Result<(MemoryBacking, usize)> {
         checked_range(offset, length, self.len())?;
         Ok((self.0.allocation.clone(), self.0.allocation_offset + offset))
     }
@@ -911,8 +914,10 @@ impl RegisteredMemory {
     ) -> Result<(Arc<crate::cuda::CudaMemory>, usize)> {
         checked_range(offset, length, self.len())?;
         match &self.0.allocation {
-            Allocation::Cuda(memory) => Ok((Arc::clone(memory), self.0.allocation_offset + offset)),
-            Allocation::Host(_) => {
+            MemoryBacking::Cuda(memory) => {
+                Ok((Arc::clone(memory), self.0.allocation_offset + offset))
+            }
+            MemoryBacking::Host(_) => {
                 Err(Error::Unavailable("NVLink IPC requires CUDA device memory"))
             }
         }
@@ -933,14 +938,18 @@ impl RegisteredMemory {
     }
 }
 
+/// Retained host or CUDA allocation used by range-batch registration.
+/// Clones share the real allocation owner; unregistering a view does not release
+/// it while admitted work can still access the bytes.
 #[derive(Clone)]
-pub enum Allocation {
+#[non_exhaustive]
+pub enum MemoryBacking {
     Host(Arc<HostMemory>),
     #[cfg(feature = "cuda")]
     Cuda(Arc<crate::cuda::CudaMemory>),
 }
 
-impl Allocation {
+impl MemoryBacking {
     fn memory_type(&self) -> MemoryType {
         match self {
             Self::Host(_) => MemoryType::Cpu,
@@ -1020,7 +1029,7 @@ pub(crate) struct Registration {
     #[cfg(feature = "cuda")]
     pub(crate) fabric: std::sync::OnceLock<crate::cuda::fabric::Registration>,
     pub(crate) descriptor: RemoteRegion,
-    allocation: Allocation,
+    allocation: MemoryBacking,
     allocation_offset: usize,
     #[cfg(feature = "rdma")]
     active: AtomicBool,
@@ -1128,7 +1137,11 @@ impl MemoryRegistry {
             .try_reserve_exact(ranges.len())
             .map_err(|_| Error::ResourceExhausted)?;
         for (allocation, offset, length) in ranges {
-            allocations.push((Allocation::Host(Arc::clone(allocation)), *offset, *length));
+            allocations.push((
+                MemoryBacking::Host(Arc::clone(allocation)),
+                *offset,
+                *length,
+            ));
         }
         self.register_batch(
             &allocations,
@@ -1151,7 +1164,11 @@ impl MemoryRegistry {
             .try_reserve_exact(ranges.len())
             .map_err(|_| Error::ResourceExhausted)?;
         for (allocation, offset, length) in ranges {
-            allocations.push((Allocation::Cuda(Arc::clone(allocation)), *offset, *length));
+            allocations.push((
+                MemoryBacking::Cuda(Arc::clone(allocation)),
+                *offset,
+                *length,
+            ));
         }
         self.register_batch(
             &allocations,
@@ -1164,7 +1181,7 @@ impl MemoryRegistry {
 
     pub(crate) fn register_batch(
         &self,
-        ranges: &[(Allocation, usize, usize)],
+        ranges: &[(MemoryBacking, usize, usize)],
         permission: Permission,
         route: crate::Transport,
         internal: bool,
@@ -1317,12 +1334,12 @@ impl MemoryRegistry {
                         profile: crate::segment::RegionProfile {
                             route,
                             node: match allocation {
-                                Allocation::Host(h) => match h.location {
+                                MemoryBacking::Host(h) => match h.location {
                                     MemoryLocation::Cpu(n) => n,
                                     _ => None,
                                 },
                                 #[cfg(feature = "cuda")]
-                                Allocation::Cuda(c) => match c.location {
+                                MemoryBacking::Cuda(c) => match c.location {
                                     MemoryLocation::Cuda { device, .. } => {
                                         u32::try_from(device).ok()
                                     }

@@ -17,10 +17,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         source.source_epoch(),
         Duration::from_secs(2),
     )?;
-    let notification = Notification {
-        name: "example-scope".into(),
-        message: "read-complete".into(),
-    };
+    let notification = Notification::new("example-scope", "read-complete");
     let report = requester.submit_and_notify(
         TransferOp::Read,
         &peer,

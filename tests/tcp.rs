@@ -158,10 +158,11 @@ fn whole_batch_validation_prevents_early_effects_and_budgets_are_enforced() {
     let readonly = source
         .register_memory(vec![0; 8].into_boxed_slice(), Permission::RemoteRead)
         .unwrap();
-    let requester = TransferEngine::new(EngineConfig {
-        max_batch_requests: 2,
-        max_inflight_bytes: 8,
-        ..EngineConfig::default()
+    let requester = TransferEngine::new({
+        let mut config: EngineConfig = EngineConfig::default();
+        config.max_batch_requests = 2;
+        config.max_inflight_bytes = 8;
+        config
     })
     .unwrap();
     let local = requester
@@ -297,10 +298,7 @@ fn execution_failure_preserves_completed_prefix_and_skips_later_requests() {
             TransferOp::Read,
             &peer,
             &requests,
-            &Notification {
-                name: "scope".into(),
-                message: "complete".into(),
-            },
+            &Notification::new("scope", "complete"),
             TIMEOUT,
         )
         .unwrap();
@@ -325,9 +323,10 @@ fn peer_process_fixture() {
     let Ok(bind) = std::env::var("ORBITE_TEST_PEER_BIND") else {
         return;
     };
-    let source = TransferEngine::new(EngineConfig {
-        bind_addr: bind.parse().unwrap(),
-        ..EngineConfig::default()
+    let source = TransferEngine::new({
+        let mut config: EngineConfig = EngineConfig::default();
+        config.bind_addr = bind.parse().unwrap();
+        config
     })
     .unwrap();
     let data = (0..65536)
@@ -357,18 +356,9 @@ fn peer_process_fixture() {
         assert_eq!(
             source.receive_notifications().unwrap(),
             [
-                Notification {
-                    name: "read".into(),
-                    message: "1024".into()
-                },
-                Notification {
-                    name: "write".into(),
-                    message: "256".into()
-                },
-                Notification {
-                    name: "确认".into(),
-                    message: String::new()
-                },
+                Notification::new("read", "1024"),
+                Notification::new("write", "256"),
+                Notification::new("确认", String::new()),
             ]
         );
     }
@@ -502,10 +492,7 @@ fn two_process_restart_fences_old_authority() {
             TransferOp::Read,
             &peer,
             &requests,
-            &Notification {
-                name: "read".into(),
-                message: "1024".into(),
-            },
+            &Notification::new("read", "1024"),
             TIMEOUT,
         )
         .unwrap();
@@ -537,38 +524,21 @@ fn two_process_restart_fences_old_authority() {
                     process.address + 128,
                     256
                 )],
-                &Notification {
-                    name: "write".into(),
-                    message: "256".into()
-                },
+                &Notification::new("write", "256"),
                 TIMEOUT
             )
             .unwrap()
             .is_complete()
     );
     requester
-        .send_notification(
-            &peer,
-            &Notification {
-                name: "确认".into(),
-                message: String::new(),
-            },
-            TIMEOUT,
-        )
+        .send_notification(&peer, &Notification::new("确认", String::new()), TIMEOUT)
         .unwrap();
     process.finish(true);
 
     let mut replacement = PeerProcess::start(process.endpoint);
     assert_ne!(process.epoch, replacement.epoch);
     let stale = requester
-        .send_notification(
-            &peer,
-            &Notification {
-                name: "stale".into(),
-                message: String::new(),
-            },
-            TIMEOUT,
-        )
+        .send_notification(&peer, &Notification::new("stale", String::new()), TIMEOUT)
         .unwrap_err();
     assert!(matches!(stale.error, Error::EpochMismatch));
     assert_eq!(stale.effect, NotificationEffect::None);
@@ -612,9 +582,10 @@ fn two_process_restart_fences_old_authority() {
 fn concurrent_batches_use_independent_destinations_and_release_admission() {
     use std::sync::{Arc, Barrier};
 
-    let source = TransferEngine::new(EngineConfig {
-        handler_threads: 8,
-        ..EngineConfig::default()
+    let source = TransferEngine::new({
+        let mut config: EngineConfig = EngineConfig::default();
+        config.handler_threads = 8;
+        config
     })
     .unwrap();
     let data = (0..32768)

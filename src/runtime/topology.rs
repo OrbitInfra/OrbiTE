@@ -7,11 +7,14 @@ mod config;
 pub const DEVICE_PRIORITY_RANKS: usize = 3;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum NicType {
     Rdma,
 }
 
+/// TENT Topology::MemType: a topology location kind, not a registration backing.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum MemType {
     Host,
     Cuda,
@@ -19,6 +22,7 @@ pub enum MemType {
 
 /// A provider-visible NIC. Unknown PCI or NUMA placement stays unknown.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub struct NicEntry {
     pub name: String,
     pub pci_bus_id: Option<String>,
@@ -31,6 +35,7 @@ pub struct NicEntry {
 /// A memory location and its ranked indices into Topology::nic_list.
 /// Only listed NICs are eligible; masks and physical locality further restrict them.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub struct MemEntry {
     pub name: String,
     pub pci_bus_id: Option<String>,
@@ -41,6 +46,7 @@ pub struct MemEntry {
 
 /// An immutable inventory snapshot, not a claim about allocation placement.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
 pub struct Topology {
     pub nic_list: Vec<NicEntry>,
     pub mem_list: Vec<MemEntry>,
@@ -63,6 +69,33 @@ impl Topology {
                 };
                 memory.device_list[rank].push(index);
             }
+        }
+    }
+}
+
+impl NicEntry {
+    /// Describe a named NIC with unknown placement and no transport attributes.
+    pub fn new(name: impl Into<String>, kind: NicType) -> Self {
+        Self {
+            name: name.into(),
+            pci_bus_id: None,
+            kind,
+            numa_node: None,
+            device_attrs: BTreeMap::new(),
+        }
+    }
+}
+
+impl MemEntry {
+    /// Describe a memory location with no eligible NICs until device_list is set.
+    /// Each list contains indices into the containing topology's nic_list.
+    pub fn new(name: impl Into<String>, kind: MemType) -> Self {
+        Self {
+            name: name.into(),
+            pci_bus_id: None,
+            kind,
+            numa_node: None,
+            device_list: Default::default(),
         }
     }
 }

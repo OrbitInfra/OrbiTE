@@ -1,6 +1,6 @@
 use super::ipc::owned;
 use super::*;
-use crate::memory::Allocation;
+use crate::memory::MemoryBacking;
 use crate::test_support::EVENTUAL_PROGRESS;
 use std::sync::{Barrier, mpsc};
 use std::time::Instant;
@@ -38,7 +38,9 @@ fn stream_pool_bounds_concurrent_cold_leases_without_locking_memory() {
             );
             std::thread::spawn(move || {
                 start.wait();
-                let stream = pool.acquire(&Allocation::Cuda(memory), deadline()).unwrap();
+                let stream = pool
+                    .acquire(&MemoryBacking::Cuda(memory), deadline())
+                    .unwrap();
                 ready.send(()).unwrap();
                 release.wait();
                 drop(stream);
@@ -52,7 +54,7 @@ fn stream_pool_bounds_concurrent_cold_leases_without_locking_memory() {
     assert!(memory.allocation.try_lock().is_ok());
     assert!(matches!(
         pool.acquire(
-            &Allocation::Cuda(memory.clone()),
+            &MemoryBacking::Cuda(memory.clone()),
             Instant::now() + Duration::from_millis(5)
         ),
         Err(Error::Timeout)
@@ -76,7 +78,7 @@ fn stream_pool_matches_actual_context_reclaims_idle_and_fences_close() {
     let devices: Vec<_> = (0..2).map(|_| allocation(&[0; 128])).collect();
     let memories: Vec<_> = devices
         .iter()
-        .map(|d| Allocation::Cuda(owned(d, false)))
+        .map(|d| MemoryBacking::Cuda(owned(d, false)))
         .collect();
     let pool = CUDAStreamPool::new(1).unwrap();
     for index in [0, 0, 1, 1, 0] {
@@ -119,7 +121,7 @@ fn stream_pool_charges_uncertain_construction_and_cleanup_without_retry() {
         "replace",
     ] {
         let device = allocation(&[0; 128]);
-        let memory = Allocation::Cuda(owned(&device, false));
+        let memory = MemoryBacking::Cuda(owned(&device, false));
         let pool = CUDAStreamPool::new(1).unwrap();
         match fault {
             "event-create" => device.event_create_error.store(1, Ordering::Release),
@@ -152,7 +154,7 @@ fn stream_pool_charges_uncertain_construction_and_cleanup_without_retry() {
         if fault == "replace" {
             let other = allocation(&[0; 128]);
             assert!(matches!(
-                pool.acquire(&Allocation::Cuda(owned(&other, false)), deadline()),
+                pool.acquire(&MemoryBacking::Cuda(owned(&other, false)), deadline()),
                 Err(Error::Unquiesced { .. })
             ));
             assert_eq!(count(&other, "stream-create"), 0);

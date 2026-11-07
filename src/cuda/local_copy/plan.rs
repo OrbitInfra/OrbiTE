@@ -1,5 +1,5 @@
 use super::*;
-use crate::memory::Allocation;
+use crate::memory::MemoryBacking;
 use std::collections::BTreeMap;
 use std::ops::Range;
 
@@ -88,11 +88,11 @@ pub(super) fn compile(rows: &[Row], max_pitch: usize) -> Vec<Dma> {
 }
 
 pub(super) struct Loan {
-    memory: Allocation,
+    memory: MemoryBacking,
     ranges: Vec<Range<usize>>,
 }
 impl Loan {
-    fn acquire(memory: Allocation, mut ranges: Vec<Range<usize>>) -> Result<Self> {
+    fn acquire(memory: MemoryBacking, mut ranges: Vec<Range<usize>>) -> Result<Self> {
         ranges.sort_unstable_by_key(|r| r.start);
         let mut distinct: Vec<Range<usize>> = Vec::new();
         for r in ranges {
@@ -105,8 +105,8 @@ impl Loan {
             distinct.push(r);
         }
         match &memory {
-            Allocation::Host(h) => h.borrow_local(&distinct)?,
-            Allocation::Cuda(d) => {
+            MemoryBacking::Host(h) => h.borrow_local(&distinct)?,
+            MemoryBacking::Cuda(d) => {
                 let mut a = d
                     .allocation
                     .lock()
@@ -130,12 +130,12 @@ impl Loan {
     }
     pub fn retire_producer(&self) {
         match &self.memory {
-            Allocation::Host(h) => {
+            MemoryBacking::Host(h) => {
                 if let Some(p) = h.owned_pin() {
                     p.retire_producer();
                 }
             }
-            Allocation::Cuda(d) => {
+            MemoryBacking::Cuda(d) => {
                 if let Some(p) = &mut d
                     .allocation
                     .lock()
@@ -149,8 +149,8 @@ impl Loan {
     }
     pub fn enqueue_producer(&self, stream: sys::CUstream) -> Result<()> {
         match &self.memory {
-            Allocation::Host(h) => h.owned_pin().map_or(Ok(()), |p| p.enqueue_producer(stream)),
-            Allocation::Cuda(d) => {
+            MemoryBacking::Host(h) => h.owned_pin().map_or(Ok(()), |p| p.enqueue_producer(stream)),
+            MemoryBacking::Cuda(d) => {
                 let a = d
                     .allocation
                     .lock()
@@ -166,8 +166,8 @@ impl Loan {
 impl Drop for Loan {
     fn drop(&mut self) {
         match &self.memory {
-            Allocation::Host(h) => h.release_local(&self.ranges),
-            Allocation::Cuda(d) => d
+            MemoryBacking::Host(h) => h.release_local(&self.ranges),
+            MemoryBacking::Cuda(d) => d
                 .allocation
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
@@ -203,7 +203,7 @@ impl Plan {
             return Err(Error::ResourceExhausted);
         }
         let mut rows = Vec::new();
-        let mut owners: BTreeMap<usize, (Allocation, Vec<Range<usize>>)> = BTreeMap::new();
+        let mut owners: BTreeMap<usize, (MemoryBacking, Vec<Range<usize>>)> = BTreeMap::new();
         let mut bytes = 0usize;
         for p in parts {
             if p.device.memory_type() != crate::MemoryType::Cuda
@@ -239,7 +239,8 @@ impl Plan {
             let (doff, dlen) = span(p.device_offset, p.device_pitch, p.device.len())?;
             let (hoff, hlen) = span(p.host_offset, p.host_pitch, p.host.len())?;
             let (gpu, device_offset) = p.device.cuda_range(doff, dlen)?;
-            let (Allocation::Host(host), host_offset) = p.host.allocation_range(hoff, hlen)? else {
+            let (MemoryBacking::Host(host), host_offset) = p.host.allocation_range(hoff, hlen)?
+            else {
                 return Err(Error::Unavailable("local copy host view"));
             };
             if gpu
@@ -288,12 +289,12 @@ impl Plan {
                 rows.push(row);
                 owners
                     .entry(gpu_id)
-                    .or_insert_with(|| (Allocation::Cuda(gpu.clone()), Vec::new()))
+                    .or_insert_with(|| (MemoryBacking::Cuda(gpu.clone()), Vec::new()))
                     .1
                     .push(d..d + p.width);
                 owners
                     .entry(host_id)
-                    .or_insert_with(|| (Allocation::Host(host.clone()), Vec::new()))
+                    .or_insert_with(|| (MemoryBacking::Host(host.clone()), Vec::new()))
                     .1
                     .push(h..h + p.width);
             }

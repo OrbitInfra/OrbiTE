@@ -127,27 +127,29 @@ pub(super) fn engine(case: &Case, bind: SocketAddr) -> Result<TransferEngine> {
             ));
         }
     }
-    let config = EngineConfig {
-        selector: if env::var("ORBITE_HOST_MODE")?.as_str() == "installed-rail-health" {
+    let config = {
+        let mut config = EngineConfig::default();
+        config.selector = if env::var("ORBITE_HOST_MODE")?.as_str() == "installed-rail-health" {
             Some(super::rail_health::policy(case)?)
         } else {
             case.selector
                 .then(|| super::selector::config(case))
                 .transpose()?
-        },
-        runtime_queue: case.selector.then_some(orbite::RuntimeQueueConfig {
-            max_outstanding_owners: 1,
-            max_dispatch_owners: 1,
-            deadline_aware: true,
-            mlu_local_threshold: 1.0,
-            ..Default::default()
-        }),
-        bind_addr: bind,
-        max_registered_bytes: case.length(),
-        max_transfer_bytes: case.payload,
-        max_inflight_bytes: case.parents * case.payload,
-        handler_threads: case.parents + 2,
-        handler_timeout: if matches!(
+        };
+        config.runtime_queue = case.selector.then_some({
+            let mut config = orbite::RuntimeQueueConfig::default();
+            config.max_outstanding_owners = 1;
+            config.max_dispatch_owners = 1;
+            config.deadline_aware = true;
+            config.mlu_local_threshold = 1.0;
+            config
+        });
+        config.bind_addr = bind;
+        config.max_registered_bytes = case.length();
+        config.max_transfer_bytes = case.payload;
+        config.max_inflight_bytes = case.parents * case.payload;
+        config.handler_threads = case.parents + 2;
+        config.handler_timeout = if matches!(
             env::var("ORBITE_HOST_MODE").as_deref(),
             Ok("installed-interruption"
                 | "installed-lost-completion"
@@ -158,50 +160,51 @@ pub(super) fn engine(case: &Case, bind: SocketAddr) -> Result<TransferEngine> {
             Duration::from_secs(8)
         } else {
             TIMEOUT
-        },
-        rdma: Some(RdmaConfig {
-            rail_cooldown: Duration::from_secs(2),
-            rail_probe_interval: Duration::from_secs(1),
-            rail_topology,
-            priority_matrix,
-            rdma_whitelist: case.rails.clone(),
-            rdma_blacklist: if automatic {
+        };
+        config.rdma = Some({
+            let mut config = RdmaConfig::default();
+            config.rail_cooldown = Duration::from_secs(2);
+            config.rail_probe_interval = Duration::from_secs(1);
+            config.rail_topology = rail_topology;
+            config.priority_matrix = priority_matrix;
+            config.rdma_whitelist = case.rails.clone();
+            config.rdma_blacklist = if automatic {
                 case.rails.clone()
             } else {
                 Vec::new()
-            },
-            port: if automatic { None } else { Some(1) },
-            gid_index: if automatic {
+            };
+            config.port = if automatic { None } else { Some(1) };
+            config.gid_index = if automatic {
                 None
             } else {
                 Some(env::var("ORBITE_SHARED_GID")?.parse()?)
-            },
-            device_mask: if case.selective && case.source {
+            };
+            config.device_mask = if case.selective && case.source {
                 3
             } else {
                 case.mask
-            },
-            hop_limit: 64,
-            num_lanes: case.lanes,
-            block_size: case.block,
-            max_endpoints: 2 * case.lanes,
-            max_grants: 2048,
-            max_cqes: 2048,
-            max_send_wr: 8,
-            signal_interval: if case.selective { 3 } else { 1 },
-            max_rd_atomic: if case.selective { u8::MAX } else { 16 },
-            max_dest_rd_atomic: if case.selective { u8::MAX } else { 16 },
-            max_direct_bytes: case.parents * case.payload,
-            max_cached_mrs: 4,
-            max_cached_mr_bytes: 4 * case.length(),
-            progress_mode: if case.events {
+            };
+            config.hop_limit = 64;
+            config.num_lanes = case.lanes;
+            config.block_size = case.block;
+            config.max_endpoints = 2 * case.lanes;
+            config.max_grants = 2048;
+            config.max_cqes = 2048;
+            config.max_send_wr = 8;
+            config.signal_interval = if case.selective { 3 } else { 1 };
+            config.max_rd_atomic = if case.selective { u8::MAX } else { 16 };
+            config.max_dest_rd_atomic = if case.selective { u8::MAX } else { 16 };
+            config.max_direct_bytes = case.parents * case.payload;
+            config.max_cached_mrs = 4;
+            config.max_cached_mr_bytes = 4 * case.length();
+            config.progress_mode = if case.events {
                 RdmaProgressMode::EventDriven
             } else {
                 RdmaProgressMode::Polling
-            },
-            ..Default::default()
-        }),
-        ..Default::default()
+            };
+            config
+        });
+        config
     };
     if automatic {
         let mut pinned = config.clone();
