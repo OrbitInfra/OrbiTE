@@ -189,6 +189,12 @@ jobs:
             RUST_TEST_THREADS=$(nproc) "$binary" "${filters[@]}" > "$RUNNER_TEMP/r1b.log" || { cat "$RUNNER_TEMP/r1b.log"; exit 1; }
             grep -F "test result: ok. $count passed; 0 failed;" "$RUNNER_TEMP/r1b.log"
           done
+      - name: Repeat TCP stream and retirement controls 50 times
+        if: matrix.features == '' || matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive,fabric'
+        run: |
+          binary=$(cargo test --locked --features "$ORBITE_FEATURES" --lib --no-run --message-format=json |
+            jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
+          bash .github/scripts/repeat-tcp-pool.sh "$binary" "$RUNNER_TEMP/tcp-pool"
       - name: Repeat peer retirement owner controls 50 times
         if: matrix.toolchain == 'stable' && matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive'
         run: |

@@ -268,6 +268,7 @@ pub(crate) fn rdma_fixture_with_config(
     let progress_worker =
         TransferEngine::start_progress(&config, &allocations, &runtime_queue, &source).unwrap();
     let engine = TransferEngine {
+        tcp: TcpTransport::new(config.max_peer_segments),
         hp_tcp,
         #[cfg(feature = "metrics")]
         metrics: None,
@@ -1229,6 +1230,7 @@ pub(crate) fn staging_fixture(
     let progress_worker =
         TransferEngine::start_progress(&config, &allocations, &runtime_queue, &source).unwrap();
     let engine = TransferEngine {
+        tcp: TcpTransport::new(config.max_peer_segments),
         hp_tcp: None,
         #[cfg(feature = "metrics")]
         metrics: None,

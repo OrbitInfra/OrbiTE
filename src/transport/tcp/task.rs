@@ -80,6 +80,7 @@ impl TcpTask {
     }
 
     /// One phase and at most 64 KiB of socket I/O per turn.
+    #[cfg(any(feature = "cuda", test))]
     pub(crate) fn progress(
         &mut self,
         channel: &mut ControlChannel<'_>,
@@ -88,16 +89,65 @@ impl TcpTask {
             crate::runtime::proxy_manager::ProxyManager,
         >,
     ) -> Result<bool> {
+        self.step(
+            channel,
+            advanced,
+            false,
+            #[cfg(feature = "cuda")]
+            proxy,
+        )
+    }
+
+    pub(super) fn progress_blocking(
+        &mut self,
+        channel: &mut ControlChannel<'_>,
+        advanced: &mut bool,
+        #[cfg(feature = "cuda")] proxy: &std::sync::Arc<
+            crate::runtime::proxy_manager::ProxyManager,
+        >,
+    ) -> Result<bool> {
+        self.step(
+            channel,
+            advanced,
+            true,
+            #[cfg(feature = "cuda")]
+            proxy,
+        )
+    }
+
+    fn step(
+        &mut self,
+        channel: &mut ControlChannel<'_>,
+        advanced: &mut bool,
+        blocking: bool,
+        #[cfg(feature = "cuda")] proxy: &std::sync::Arc<
+            crate::runtime::proxy_manager::ProxyManager,
+        >,
+    ) -> Result<bool> {
         remaining(channel.deadline)?;
+        let read = |channel: &mut ControlChannel<'_>, bytes: &mut [u8]| {
+            if blocking {
+                channel.blocking_read(bytes)
+            } else {
+                channel.poll_read(bytes)
+            }
+        };
+        let write = |channel: &mut ControlChannel<'_>, bytes: &[u8]| {
+            if blocking {
+                channel.blocking_write(bytes)
+            } else {
+                channel.poll_write(bytes)
+            }
+        };
         let next = match self.state {
             State::Request => {
-                let count = channel.poll_write(&self.frame[self.position..])?;
+                let count = write(channel, &self.frame[self.position..])?;
                 self.position += count;
                 *advanced |= count != 0;
                 (self.position == self.frame.len()).then_some(State::Reply)
             }
             State::Reply | State::Ack => {
-                let count = channel.poll_read(&mut self.reply[self.position..])?;
+                let count = read(channel, &mut self.reply[self.position..])?;
                 self.position += count;
                 *advanced |= count != 0;
                 if self.position != self.reply.len() {
@@ -122,10 +172,10 @@ impl TcpTask {
             }
             State::Payload => {
                 let count = if self.operation == TransferOp::Read {
-                    channel.poll_read(&mut self.payload[self.position..])?
+                    read(channel, &mut self.payload[self.position..])?
                 } else {
                     self.effect = RemoteEffect::Unknown;
-                    channel.poll_write(&self.payload[self.position..])?
+                    write(channel, &self.payload[self.position..])?
                 };
                 self.position += count;
                 *advanced |= count != 0;

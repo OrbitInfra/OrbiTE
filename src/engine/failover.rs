@@ -220,7 +220,7 @@ impl TransferEngine {
                     .map_err(|e| (e, RemoteEffect::None))?
                     .wait(posted)
             })()),
-            Transport::Tcp => single(TcpTransport::transfer(
+            Transport::Tcp => single(self.tcp.transfer(
                 operation,
                 peer,
                 request,

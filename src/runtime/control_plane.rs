@@ -3,6 +3,7 @@ mod accept;
 mod connection;
 #[cfg(feature = "cuda")]
 mod source_sessions;
+mod worker;
 #[cfg(feature = "cuda")]
 pub(crate) use connection::Connecting;
 
@@ -551,6 +552,31 @@ impl ControlChannel<'_> {
         }
     }
 
+    pub(crate) fn blocking_read(&mut self, bytes: &mut [u8]) -> Result<usize> {
+        let timeout = self.poll_timeout()?;
+        self.set_nonblocking(false)?;
+        self.stream.set_read_timeout(Some(timeout))?;
+        let length = bytes.len().min(64 << 10);
+        match self.stream.read(&mut bytes[..length]) {
+            Ok(0) => Err(io::Error::from(io::ErrorKind::UnexpectedEof).into()),
+            Ok(n) => Ok(n),
+            Err(e) if retryable(&e) => Ok(0),
+            Err(e) => Err(e.into()),
+        }
+    }
+
+    pub(crate) fn blocking_write(&mut self, bytes: &[u8]) -> Result<usize> {
+        let timeout = self.poll_timeout()?;
+        self.set_nonblocking(false)?;
+        self.stream.set_write_timeout(Some(timeout))?;
+        match self.stream.write(&bytes[..bytes.len().min(64 << 10)]) {
+            Ok(0) => Err(io::Error::from(io::ErrorKind::WriteZero).into()),
+            Ok(n) => Ok(n),
+            Err(e) if retryable(&e) => Ok(0),
+            Err(e) => Err(e.into()),
+        }
+    }
+
     pub(crate) fn reply(&mut self, epoch: SourceEpoch, status: u8, length: u64) -> Result<()> {
         self.write_all(
             &Reply {
@@ -577,6 +603,7 @@ pub(crate) struct ControlService {
     acceptor: Option<JoinHandle<()>>,
     accept_wake: mio::Waker,
     workers: Vec<JoinHandle<()>>,
+    worker_wakes: Vec<Arc<mio::Waker>>,
     #[cfg(feature = "cuda")]
     session_workers: Vec<JoinHandle<()>>,
 }
@@ -604,6 +631,7 @@ impl ControlService {
             acceptor: None,
             accept_wake,
             workers: Vec::new(),
+            worker_wakes: Vec::new(),
             #[cfg(feature = "cuda")]
             session_workers: Vec::new(),
         };
@@ -620,6 +648,7 @@ impl ControlService {
         };
         #[cfg(test)]
         let observer = tests::native_boundary::take_observer();
+        let idle_slots = worker::Slots::new(config.max_peer_segments);
         for index in 0..config.handler_threads {
             #[cfg(test)]
             let observer = observer.clone();
@@ -629,25 +658,13 @@ impl ControlService {
             let source = Arc::clone(&source);
             let stopping = Arc::clone(&service.stopping);
             let max_bytes = config.max_transfer_bytes;
+            let reactor = worker::Worker::new(idle_slots.clone())?;
+            service.worker_wakes.push(reactor.wake.clone());
+            let timeout = config.handler_timeout;
             let worker = thread::Builder::new()
                 .name(format!("orbite-control-{index}"))
                 .spawn(move || {
-                    loop {
-                        if stopping.load(Ordering::Acquire) {
-                            return;
-                        }
-                        let request = match receiver.lock() {
-                            Ok(queue) => queue.recv_timeout(IO_POLL),
-                            Err(_) => return,
-                        };
-                        let (stream, deadline) = match request {
-                            Ok(request) => request,
-                            Err(mpsc::RecvTimeoutError::Timeout) => continue,
-                            Err(mpsc::RecvTimeoutError::Disconnected) => return,
-                        };
-                        if stopping.load(Ordering::Acquire) {
-                            return;
-                        }
+                    let result = reactor.run(&receiver, &stopping, timeout, |stream, deadline| {
                         let channel = ControlChannel {
                             stream,
                             deadline,
@@ -655,10 +672,12 @@ impl ControlService {
                             nonblocking: false,
                         };
                         // A failed connection is isolated and closed, never replayed.
+                        let mut reusable = None;
                         let _outcome = serve(
                             channel,
                             &source,
                             max_bytes,
+                            &mut reusable,
                             #[cfg(feature = "cuda")]
                             sessions.as_ref(),
                         );
@@ -666,11 +685,16 @@ impl ControlService {
                         if let Some(observer) = &observer {
                             let _ = observer.try_send(_outcome);
                         }
+                        reusable
+                    });
+                    if let Err(error) = result {
+                        log::error!("control worker stopped: {error}");
                     }
                 })?;
             service.workers.push(worker);
         }
         let stopping = Arc::clone(&service.stopping);
+        let worker_wakes = service.worker_wakes.clone();
         let timeout = config.handler_timeout;
         let accept = move || listener.accept().map(|(stream, _)| stream.into());
         #[cfg(test)]
@@ -678,14 +702,14 @@ impl ControlService {
         service.acceptor = Some(
             thread::Builder::new()
                 .name("orbite-control-accept".into())
-                .spawn(
-                    move || match accept::run(poll, accept, sender, &stopping, timeout) {
+                .spawn(move || {
+                    match accept::run(poll, accept, sender, &stopping, timeout, &worker_wakes) {
                         Ok(()) => log::debug!("control acceptor at {endpoint} stopped"),
                         Err(error) => {
                             log::error!("control acceptor at {endpoint} stopped: {error}")
                         }
-                    },
-                )?,
+                    }
+                })?,
         );
         Ok(service)
     }
@@ -699,6 +723,9 @@ impl Drop for ControlService {
     fn drop(&mut self) {
         self.stopping.store(true, Ordering::Release);
         self.source.notifications.set_receiver(None);
+        for wake in &self.worker_wakes {
+            let _ = wake.wake();
+        }
         if let Some(acceptor) = self.acceptor.take() {
             if let Err(error) = self.accept_wake.wake() {
                 log::warn!("control listener shutdown wake failed: {error}");
@@ -730,6 +757,7 @@ fn serve(
     mut channel: ControlChannel<'_>,
     source: &Arc<Source>,
     max_bytes: usize,
+    reusable: &mut Option<TcpStream>,
     #[cfg(feature = "cuda")] sessions: Option<&source_sessions::Sessions>,
 ) -> Result<()> {
     let mut bytes = [0; REQUEST_SIZE];
@@ -801,7 +829,7 @@ fn serve(
             return sessions.submit(channel, source.epoch, request, pin_hello, memory, admission);
         }
     }
-    let channel = &mut channel;
+    let io = &mut channel;
     let mut retained_memory = None;
     let prepared = (|| {
         if request.operation == Operation::Describe {
@@ -856,8 +884,8 @@ fn serve(
                     &crate::transport::mnnvl::Location::wire(region.fabric).to_be_bytes(),
                 );
             }
-            channel.reply(source.epoch, 0, payload.len() as u64)?;
-            channel.write_all(&payload)?;
+            io.reply(source.epoch, 0, payload.len() as u64)?;
+            io.write_all(&payload)?;
             return Ok(());
         }
         if source.metadata.tcp_disabled
@@ -876,11 +904,11 @@ fn serve(
             let reservation = source.notifications.reserve(name_length, message_length)?;
             let mut name = buffer(name_length)?;
             let mut message = buffer(message_length)?;
-            channel.reply(source.epoch, 9, 0)?;
-            channel.read_exact(&mut name)?;
-            channel.read_exact(&mut message)?;
+            io.reply(source.epoch, 9, 0)?;
+            io.read_exact(&mut name)?;
+            io.read_exact(&mut message)?;
             let mut marker = [0; 1];
-            channel.read_exact(&mut marker)?;
+            io.read_exact(&mut marker)?;
             if marker != [0] {
                 return Err(Error::Protocol("invalid notification commit marker"));
             }
@@ -888,11 +916,11 @@ fn serve(
                 .map_err(|_| Error::Protocol("notification name is not UTF-8"))?;
             let message = String::from_utf8(message)
                 .map_err(|_| Error::Protocol("notification message is not UTF-8"))?;
-            remaining(channel.deadline)?;
+            remaining(io.deadline)?;
             source
                 .notifications
                 .deliver(reservation, Notification { name, message })?;
-            channel.reply(source.epoch, 0, 0)?;
+            io.reply(source.epoch, 0, 0)?;
             return Ok(());
         }
         let (memory, offset, length) = resolve_payload(source, &request, max_bytes)?;
@@ -908,7 +936,7 @@ fn serve(
                 return Err(Error::Unavailable("build with --features cuda"));
             }
             Operation::TcpRead | Operation::TcpWrite => crate::transport::tcp::TcpTransport::serve(
-                channel,
+                io,
                 source.epoch,
                 &request,
                 memory,
@@ -926,7 +954,7 @@ fn serve(
                     .nvlink
                     .as_ref()
                     .ok_or(Error::Unavailable("NVLink is not configured"))?
-                    .serve(channel, source.epoch, &request, memory, offset, length);
+                    .serve(io, source.epoch, &request, memory, offset, length);
                 #[cfg(not(feature = "cuda"))]
                 return Err(Error::Unavailable("build with --features cuda"));
             }
@@ -936,7 +964,7 @@ fn serve(
                     .fabric
                     .as_ref()
                     .ok_or(Error::Unavailable("libfabric is not configured"))?
-                    .serve(channel, source.epoch, &request, memory, offset, length);
+                    .serve(io, source.epoch, &request, memory, offset, length);
                 #[cfg(not(feature = "fabric"))]
                 return Err(Error::Unavailable("build with --features fabric"));
             }
@@ -949,13 +977,15 @@ fn serve(
                     .rdma
                     .as_ref()
                     .ok_or(Error::Unavailable("RDMA is not configured"))?
-                    .serve(channel, source.epoch, &request, memory);
+                    .serve(io, source.epoch, &request, memory);
                 #[cfg(not(feature = "rdma"))]
                 return Err(Error::Unavailable("build with --features rdma"));
             }
             _ => Err(Error::Protocol("unexpected data transport operation")),
         }
     })();
+    let clean_tcp =
+        prepared.is_ok() && matches!(request.operation, Operation::TcpRead | Operation::TcpWrite);
     if let Err(error) = prepared {
         if matches!(error, Error::Unquiesced { .. }) {
             // A native failure cannot release source admission or its actual
@@ -964,8 +994,11 @@ fn serve(
         }
         // After an I/O error the connection cannot safely carry another frame.
         if !matches!(error, Error::Io(_) | Error::Timeout | Error::SourceClosed) {
-            channel.reply(source.epoch, error_status(&error), 0)?;
+            io.reply(source.epoch, error_status(&error), 0)?;
         }
+    }
+    if clean_tcp {
+        *reusable = Some(channel.stream);
     }
     Ok(())
 }

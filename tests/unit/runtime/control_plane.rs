@@ -1875,6 +1875,8 @@ fn accept_readiness_preserves_bounded_handoff_and_serves_the_next_connection() {
 
 #[path = "control_plane/peer_retirement.rs"]
 mod peer_retirement;
+#[path = "control_plane/tcp_reuse.rs"]
+mod tcp_reuse;
 
 #[cfg(target_os = "linux")]
 #[test]
