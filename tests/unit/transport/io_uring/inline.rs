@@ -330,6 +330,93 @@ fn aligned_small_file_requests_need_no_bounce_allocation() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn pending_native_io_completes_on_worker_while_caller_only_computes() -> Result<()> {
+    if !kernel() {
+        return Ok(());
+    }
+    use std::sync::atomic::{AtomicBool, Ordering};
+    struct AsyncHandoff {
+        inner: Box<dyn Ring>,
+        caller: std::thread::ThreadId,
+        reaped: Arc<AtomicBool>,
+    }
+    impl Ring for AsyncHandoff {
+        fn space(&mut self) -> usize {
+            self.inner.space()
+        }
+        fn queued(&mut self) -> usize {
+            self.inner.queued()
+        }
+        fn push(&mut self, entries: &[squeue::Entry]) -> io::Result<()> {
+            let entries: Vec<_> = entries
+                .iter()
+                .cloned()
+                .map(|entry| entry.flags(squeue::Flags::ASYNC))
+                .collect();
+            self.inner.push(&entries)
+        }
+        fn submit(&mut self, count: u32) -> io::Result<usize> {
+            assert_eq!(std::thread::current().id(), self.caller);
+            self.inner.submit(count)
+        }
+        fn peek(&mut self) -> io::Result<Option<(u64, i32)>> {
+            Ok(None) // Force worker handoff even if the real CQE arrived early.
+        }
+        fn reap(&mut self, until: Instant) -> io::Result<(u64, i32)> {
+            assert_ne!(std::thread::current().id(), self.caller);
+            let cqe = self.inner.reap(until)?;
+            self.reaped.store(true, Ordering::Release);
+            Ok(cqe)
+        }
+    }
+    for op in [TransferOp::Read, TransferOp::Write] {
+        let (mut f, _) = observed(false, false, false)?;
+        let reaped = Arc::new(AtomicBool::new(false));
+        let done = reaped.clone();
+        let caller = std::thread::current().id();
+        Arc::get_mut(&mut f.engine)
+            .unwrap()
+            .io_uring
+            .as_mut()
+            .unwrap()
+            .create = Arc::new(move |count| {
+            Ok(Box::new(AsyncHandoff {
+                inner: ring::create(count)?,
+                caller,
+                reaped: done.clone(),
+            }))
+        });
+        let mut batch =
+            f.engine
+                .submit_async(op, &f.segment, &[f.request(1, 0, 8)], None, TIMEOUT)?;
+        let until = Instant::now() + EVENTUAL_PROGRESS;
+        // No status polling or explicit syscall to drive the submitter's task work.
+        while !reaped.load(Ordering::Acquire) && Instant::now() < until {
+            std::hint::spin_loop();
+        }
+        assert!(reaped.load(Ordering::Acquire));
+        assert_eq!(batch.wait(TIMEOUT)?.transferred_bytes, 8);
+        batch.free()?;
+        let mut expected = vec![0x9a; f.memory.len()];
+        if op == TransferOp::Read {
+            expected[1..9].copy_from_slice(b"abcdefgh");
+        }
+        let mut bytes = vec![0; f.memory.len()];
+        f.memory.read(0, &mut bytes)?;
+        assert_eq!(bytes, expected);
+        assert_eq!(
+            fs::read(&f.path)?,
+            if op == TransferOp::Write {
+                vec![0x9a; 8]
+            } else {
+                b"abcdefgh".to_vec()
+            }
+        );
+    }
+    Ok(())
+}
+
 #[cfg(feature = "metrics")]
 #[test]
 fn inline_file_metrics_pair_each_public_request_with_one_terminal_attempt() -> Result<()> {

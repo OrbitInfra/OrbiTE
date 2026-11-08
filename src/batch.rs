@@ -1266,7 +1266,7 @@ impl BatchProgress {
         task.state = TaskState::Running;
         true
     }
-    /// Commit a file group on the batch worker. A queued cancellation cuts off
+    /// Commit a file group on its submitting owner. A queued cancellation cuts off
     /// that request and its suffix before any SQE is published.
     #[cfg(any(feature = "io-uring", feature = "gds"))]
     pub(crate) fn begin_file_group(&self, first: usize, count: usize) -> usize {

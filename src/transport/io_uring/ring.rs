@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 
 use io_uring::{EnterFlags, IoUring, squeue, types};
 
-// One submitting/reaping thread and a plain ring (no SQPOLL). Only an explicit
+// One submitting/reaping owner at a time and a plain ring (no SQPOLL). Only an explicit
 // submit consumes SQEs. Waiting for a CQE must never submit a failed tail.
 pub(super) trait Ring: Send {
     fn space(&mut self) -> usize;
@@ -18,6 +18,8 @@ pub(super) trait Ring: Send {
 pub(super) fn create(count: u32) -> io::Result<Box<dyn Ring>> {
     #[cfg(test)]
     super::tests::RING_SETUPS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    // Keep default completion interrupts: the caller may hand reaping to its
+    // worker. COOP_TASKRUN/DEFER_TASKRUN would require a different progress proof.
     Ok(Box::new(IoUring::new(count)?))
 }
 

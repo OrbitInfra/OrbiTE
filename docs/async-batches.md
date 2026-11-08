@@ -20,7 +20,7 @@ accepted groups are never replayed or rolled back. Groups in one batch run FIFO,
 with at most one worker per batch; different batches progress concurrently.
 A small host-file group can complete on its submitting caller when a CQE is
 already ready. Pending I/O moves to that same batch's worker with its ring,
-loans and charges intact; see [file submission](storage.md#dram-transfers-with-io-uring).
+loans and charges intact; see [file submission](storage.md).
 On a file target, SQEs within the group complete independently. Each task
 reports its own bytes, including a short prefix. See [file submission](storage.md).
 

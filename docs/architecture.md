@@ -226,6 +226,10 @@ their original worker. `pending_small_file_handoff_keeps_loans_through_cancel_ti
 holds a real CQE across cancellation, timeout, unregister and close;
 `failed_worker_handoff_quarantines_the_accepted_sqe_without_replay` proves that
 a failed handoff retains the ring and admission instead of replaying a WRITE.
+The plain ring keeps [default completion interrupts](https://man7.org/linux/man-pages/man2/io_uring_setup.2.html);
+it does not defer completion work to the submitting thread's next ring call.
+`pending_native_io_completes_on_worker_while_caller_only_computes` forces
+asynchronous kernel I/O and checks reaping on the worker without caller polling.
 The same preflight, partial-submit drain and prefix aggregation serve both paths.
 CUDA/file submissions use the same
 worker and ring for successive rounds. The optional file pool lends one
