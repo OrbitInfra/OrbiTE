@@ -369,6 +369,86 @@ rule out a shared control-worker effect. The watch item is retained, not
 declared fixed. This PR changes no HP-TCP owner; its own paired run records
 READ p50 changes of −3.6%/−17.8%, also with overlapping ranges.
 
+## Ext4 tail diagnosis
+
+[Run 42521765043](https://github.com/OrbitInfra/OrbiTE/actions/runs/42521765043)
+profiles `7e40c7b`, with production sources identical to `4f6bd35c`, against
+frozen TENT `e1ea5d31`. Each toolchain runs 1,000 byte-checked samples plus
+three warmups for twenty implementation/filesystem/direction/shape cases.
+Both four-vCPU Ubuntu 24.04 runners use Linux 7.0.0-1017-azure; stable
+(Rust 1.99.1) runs on Xeon Platinum 8573C, and Rust 1.85 on EPYC 7763.
+They are different hosts; do not pool their absolute times.
+
+`benches/run.py --tail-profile-only` records monotonic sample windows and
+system-wide io_uring, block-I/O, thread-creation and scheduler tracepoints.
+The collector writes to tmpfs and copies evidence to ext4 only after each
+benchmark exits. An earlier exploratory recording shared the measured ext4
+device and is excluded from the figures here. Raw `perf` data, kernel event
+formats, commands and sample windows remain in `cpu-bench-*` artifacts.
+Run `python3 benches/analyze_io_tail.py "$OUT/orbite-profiles/tail"` to produce
+per-sample submit/first-CQE/last-CQE/return, worker/caller wake and block timelines.
+It rejects missing ring/CQE receipts and incomplete scheduler pairs. Block
+events have no SQE identity: the analysis pairs exact device/operation/sector/
+length receipts issued by the measured process and reports unmatched events.
+That is correlation, not an invented per-SQE block receipt.
+
+The table describes **diagnostic traces**, not benchmark performance. Each
+cell is the median within the slowest ten samples of a 1,000-sample case.
+CQE timestamps are kernel publication, not userspace consumption.
+
+| 64 × 4 KiB gapped | Batch µs | Longest paired block I/O µs | Issuer blocked / runnable µs | Last block completion → last CQE µs | Last CQE → return µs |
+|---|---:|---:|---:|---:|---:|
+| Stable OrbiTE READ | 6,361 | 5,758 | 5,685 / 30 | 2.8 | 266 |
+| Stable OrbiTE WRITE | 5,169 | 1,993 | 4,250 / 62 | 18.0 | 234 |
+| Stable TENT READ | 8,094 | 2,027 | 7,118 / 86 | 3.1 | 994 |
+| Stable TENT WRITE | 6,532 | 3,890 | 5,570 / 77 | 16.3 | 707 |
+| Rust 1.85 OrbiTE READ | 27,175 | 26,288 | 25,866 / 18 | 9.7 | 255 |
+| Rust 1.85 OrbiTE WRITE | 21,679 | 20,786 | 20,556 / 19 | 43.1 | 265 |
+| Rust 1.85 TENT READ | 2,657 | 1,605 | 1,559 / 90 | 13.9 | 426 |
+| Rust 1.85 TENT WRITE | 2,439 | 1,305 | 1,233 / 65 | 20.0 | 355 |
+
+All 64 block issues pair with completions in every measured 64-block sample.
+The longest delays therefore precede device completion, not owner cleanup.
+For example, stable READ sample 697 lasts 8,691 µs: first SQE at +156,
+first CQE at +628, final block completion at +8,396 and final CQE 1.7 µs
+later. Worker wake-to-run never exceeds 6.6 µs; caller return follows the
+last CQE by 293 µs. On 1.85, eight-block gapped/contiguous READ slow-tail
+medians are 1,332/1,047 µs, versus TENT's 1,328/1,687 µs. These traces
+locate a storage-side wait but do not distinguish virtual-device service,
+host scheduling or buffered-reset/direct-I/O coherence as its underlying
+cause. Nor do they explain why the implementations differ on the EPYC run.
+The tail is **not declared fixed**; no production tuning is justified by this
+evidence alone.
+
+The proposed engine explanations can be narrowed:
+
+- Every measured gapped batch uses **one ring, 64 SQEs and one submitting
+  enter** in both implementations. Stable OrbiTE adds a median five
+  zero-submission waits; 1.85 adds zero READ / one WRITE. TENT polls the mapped
+  CQ. These waits never resubmit an SQE.
+- All 64-block CQEs are published on the submitting batch worker. There is
+  no caller-to-worker ring handoff in this case. Worker drain has **zero
+  nanosleeps**; the benchmark caller still uses its documented status backoff.
+- Aligned gaps allocate **no bounce buffer**. The new
+  `aligned_file_batches_use_one_ring_without_bounce_for_gaps_or_contiguous_ranges`
+  control fails every bounce allocation and checks one ring, full bytes and
+  guards for READ/WRITE, 8/64 blocks, contiguous/gapped, ext4/tmpfs.
+- OrbiTE creates **one batch worker** per multi-request submission; TENT
+  creates none. Before-first-SQE time in OrbiTE's slow 64-block samples is
+  152–171 µs, much shorter than the device wait. Removing thread creation
+  cannot by itself explain or eliminate the measured millisecond tail.
+
+Small tmpfs WRITE remains a separate cost: 994/1,000 stable and 992/1,000
+1.85 samples create a batch worker after caller submission, versus zero for
+READ and TENT. Diagnostic WRITE medians are 123/229 µs versus TENT's 58/111 µs;
+these are not replacements for the untraced S26 numbers. Together with the
+earlier `pthread_create`/`Batch::start_worker` stacks, this identifies the
+pending-completion handoff. A later candidate is one short, deadline-capped
+caller CQ wait for the already eligible small request, then handing the same
+owner to the worker if still pending. Expiry would remain a handoff trigger,
+never a release receipt. This needs a separate submission-latency/lifetime
+review and measurement; no wait, pool or new worker is introduced here.
+
 ## CPU fault matrix
 
 [tests/faults/matrix.tsv](https://github.com/OrbitInfra/OrbiTE/blob/main/tests/faults/matrix.tsv)
