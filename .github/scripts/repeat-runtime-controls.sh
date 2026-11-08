@@ -141,6 +141,18 @@ if [[ ${2:-} == rdma-priority ]]; then
   done
   echo "RDMA priority controls: $load_count CPU-load processes on $(nproc) CPUs"
 fi
+if [[ ${2:-} == io-small ]]; then
+  controls=(
+    transport::io_uring::tests::inline::ready_small_file_cqes_finish_on_the_caller_with_exact_prefix_and_guards
+    transport::io_uring::tests::inline::pending_small_file_handoff_keeps_loans_through_cancel_timeout_and_close
+    transport::io_uring::tests::inline::failed_worker_handoff_quarantines_the_accepted_sqe_without_replay
+    transport::io_uring::tests::inline::caller_preflight_rejects_full_sq_before_any_file_io
+    transport::io_uring::tests::inline::aligned_small_file_requests_need_no_bounce_allocation
+    transport::io_uring::tests::short_enter_flushes_only_the_tail_or_drains_the_accepted_prefix
+    transport::io_uring::tests::group_report_counts_only_the_successful_prefix_for_concurrent_file_requests
+    transport::io_uring::tests::file_io_shares_qos_queue_deadline_and_close_but_needs_no_receiver_credit
+  )
+fi
 for ((iteration=1; iteration<=iterations; iteration++)); do
   echo "Iteration $iteration/$iterations with RUST_TEST_THREADS=$RUST_TEST_THREADS"
   output=$("$binary" --exact "${controls[@]}") || { echo "$output"; exit 1; }

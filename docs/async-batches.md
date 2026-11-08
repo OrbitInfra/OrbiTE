@@ -17,7 +17,10 @@ handles whose workers are still running.
 and returns its stable task range. Addresses, permissions, bytes and source
 authority are validated before enqueue; a rejected group adds no tasks, and
 accepted groups are never replayed or rolled back. Groups in one batch run FIFO,
-one worker per batch; different batches progress concurrently.
+with at most one worker per batch; different batches progress concurrently.
+A small host-file group can complete on its submitting caller when a CQE is
+already ready. Pending I/O moves to that same batch's worker with its ring,
+loans and charges intact; see [file submission](storage.md#dram-transfers-with-io-uring).
 On a file target, SQEs within the group complete independently. Each task
 reports its own bytes, including a short prefix. See [file submission](storage.md).
 

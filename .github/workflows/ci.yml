@@ -204,6 +204,12 @@ jobs:
       - name: Build the packaged peer retirement gate without running hardware
         if: matrix.features == 'rdma,cuda'
         run: python3 tests/hardware/build_installed.py --consumer peer-retirement --toolchain "$RUSTUP_TOOLCHAIN" --output "$RUNNER_TEMP/peer-retirement-installed"
+      - name: Repeat small file handoff and drain controls 50 times
+        if: matrix.features == 'io-uring' || matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive,fabric'
+        run: |
+          binary=$(cargo test --locked --features "$ORBITE_FEATURES" --lib --no-run --message-format=json |
+            jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
+          .github/scripts/repeat-runtime-controls.sh "$binary" io-small
       - name: Repeat storage and CUDA release controls 50 times
         if: matrix.toolchain == 'stable' && matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive'
         run: |

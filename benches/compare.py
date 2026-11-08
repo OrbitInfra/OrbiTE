@@ -34,7 +34,9 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("before", type=Path)
     parser.add_argument("after", type=Path)
+    parser.add_argument("--changed-profile", action="append", help="OrbiTE profile changed by this pair; repeat for several (default: tcp)")
     args = parser.parse_args()
+    changed = args.changed_profile or ["tcp"]
     before, before_ids, old = load(args.before)
     after, after_ids, new = load(args.after)
     if before_ids != after_ids:
@@ -53,7 +55,7 @@ def main():
     print("\nCells are before → after, median of the three trial statistics. All cases are included. "
           "R marks any numerical regression (p50/p99/CPU up or throughput down), not statistical significance; "
           "O means all four trial-statistic ranges overlap. U means the payload implementation is unchanged "
-          "(OrbiTE's shared control workers still changed). "
+          "(shared-owner effects still require review). "
           "CPU is process time per batch. Raw trials remain in the linked artifact.\n")
     print("| Profile | Impl | Op | Block × batch, layout | p50 µs | p99 µs | CPU µs | GiB/s | Review |")
     print("|---|---|---|---|---:|---:|---:|---:|---|")
@@ -67,7 +69,7 @@ def main():
             cells.append(f"{ma:.3f} → {mb:.3f}" if metric == "GiB_s" else f"{ma:.1f} → {mb:.1f}")
         profile, impl, op, block, batch, layout = key
         labels = (["R"] if regress else []) + (["O"] if overlap else [])
-        if profile != "tcp" or impl != "orbite":
+        if profile not in changed or impl != "orbite":
             labels.append("U")
         print(f"| {profile} | {impl} | {op} | {block // 1024} KiB × {batch}, {layout} | "
               + " | ".join(cells) + " | " + (", ".join(labels) or "—") + " |")

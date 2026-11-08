@@ -349,3 +349,163 @@ impl TransferEngine {
         report
     }
 }
+
+impl TransferEngine {
+    pub(super) fn finish_file_group(
+        &self,
+        submission: &PreparedSubmission,
+        first: usize,
+        count: usize,
+        _progress: Option<(&BatchProgress, usize)>,
+        result: BatchReport,
+    ) -> BatchReport {
+        #[cfg(feature = "gds")]
+        let result = {
+            let PreparedTarget::File { requests, .. } = &submission.payload else {
+                return result;
+            };
+            submission.finish_gds_range(result, &requests[first..first + count], _progress)
+        };
+        #[cfg(feature = "metrics")]
+        for (i, o) in submission.owners[first..first + count].iter().enumerate() {
+            if let Some(m) = &o.metrics {
+                let failure = result.failure.as_ref().filter(|f| i == f.request_index);
+                m.file_terminal(failure.map(|f| &f.error));
+            }
+        }
+        if result.locally_drained {
+            submission.retire_owners(first, count, result.completed_requests);
+        } else {
+            submission.retain_window(first..first + count);
+        }
+        result
+    }
+
+    #[cfg(feature = "io-uring")]
+    pub(crate) fn can_start_file_inline(&self, submission: &PreparedSubmission) -> bool {
+        let PreparedTarget::File { requests, .. } = &submission.payload else {
+            return false;
+        };
+        // Keep queued/deferred policy and CUDA producer waits on their existing
+        // worker. One small host request needs only one bounded CQ observation.
+        let [request] = requests.as_slice() else {
+            return false;
+        };
+        self.runtime_queue.is_none()
+            && self.progress_worker.is_none()
+            && request.length <= 64 << 10
+            && request.selection.transport == Transport::IoUring
+            && (self.config.max_failover_attempts == 0 || !request.selection.has_fallback())
+            && !request.parts.vectored()
+            && !request.parts.has_cuda()
+            && request.parts[0].local.as_ref().is_some_and(|m| {
+                #[cfg(feature = "cuda")]
+                if m.is_cuda_pinned_host() {
+                    return false;
+                }
+                m.memory_type() == crate::MemoryType::Cpu
+            })
+    }
+
+    #[cfg(feature = "io-uring")]
+    pub(crate) fn start_file_inline(
+        &self,
+        submission: &PreparedSubmission,
+        progress: (&BatchProgress, usize),
+    ) -> std::result::Result<BatchReport, crate::transport::io_uring::Submitted> {
+        let mut report = BatchReport {
+            completed_requests: 0,
+            transferred_bytes: 0,
+            failure: None,
+            locally_drained: true,
+            notification: NotificationStatus::NotRequested,
+        };
+        let attempts = FileAttempts {
+            #[cfg(feature = "metrics")]
+            owners: &submission.owners,
+            progress: Some(progress),
+            outcomes: None,
+        };
+        let run = || -> Result<crate::transport::io_uring::Submitted> {
+            let owner = &submission.owners[0];
+            owner.start(|| progress.0.cancel_requested(progress.1))?;
+            #[cfg(feature = "metrics")]
+            if let Some(m) = &owner.metrics {
+                m.dispatched();
+                m.begin(Transport::IoUring);
+            }
+            if attempts.begin_file_group(0, 1) == 0 {
+                return Err(Error::Cancelled);
+            }
+            let PreparedTarget::File { requests, .. } = &submission.payload else {
+                return Err(Error::Internal("inline file target"));
+            };
+            self.io_uring
+                .as_ref()
+                .ok_or(Error::Unavailable("io_uring"))?
+                .start_host(submission.operation, requests, 1, owner.deadline)
+        };
+        match run() {
+            Ok(started) => match started.poll_one(submission.operation, Some((&attempts, 0))) {
+                Ok(done) => report = done,
+                Err(pending) => {
+                    attempts.posted(0);
+                    return Err(pending);
+                }
+            },
+            Err(error) => {
+                report.locally_drained = !matches!(error, Error::Unquiesced { .. });
+                report.failure = Some(TransferFailure {
+                    request_index: 0,
+                    affected_requests: 1,
+                    error,
+                    remote_effect: RemoteEffect::None,
+                });
+            }
+        }
+        Ok(self.finish_inline_file(submission, progress, report))
+    }
+
+    #[cfg(feature = "io-uring")]
+    pub(crate) fn drain_file_inline(
+        &self,
+        submission: &PreparedSubmission,
+        progress: (&BatchProgress, usize),
+        pending: crate::transport::io_uring::Submitted,
+    ) -> BatchReport {
+        let attempts = FileAttempts {
+            #[cfg(feature = "metrics")]
+            owners: &submission.owners,
+            progress: Some(progress),
+            outcomes: None,
+        };
+        let report = pending.finish(submission.operation, Some((&attempts, 0)));
+        self.finish_inline_file(submission, progress, report)
+    }
+
+    #[cfg(feature = "io-uring")]
+    pub(crate) fn finish_inline_file(
+        &self,
+        submission: &PreparedSubmission,
+        progress: (&BatchProgress, usize),
+        report: BatchReport,
+    ) -> BatchReport {
+        #[cfg(feature = "metrics")]
+        for o in &submission.owners {
+            if let Some(m) = &o.metrics {
+                m.finish(
+                    report.failure.as_ref().map(|f| &f.error),
+                    m.file_posted.load(std::sync::atomic::Ordering::Relaxed),
+                );
+            }
+        }
+        let report = self.finish_file_group(submission, 0, 1, Some(progress), report);
+        #[cfg(feature = "metrics")]
+        for o in &submission.owners {
+            if let Some(m) = &o.metrics {
+                m.settle_skipped(|| progress.0.cancel_requested(progress.1));
+            }
+        }
+        report
+    }
+}

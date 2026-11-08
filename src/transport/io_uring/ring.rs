@@ -6,7 +6,7 @@ use io_uring::{EnterFlags, IoUring, squeue, types};
 
 // One submitting/reaping thread and a plain ring (no SQPOLL). Only an explicit
 // submit consumes SQEs. Waiting for a CQE must never submit a failed tail.
-pub(super) trait Ring {
+pub(super) trait Ring: Send {
     fn space(&mut self) -> usize;
     fn queued(&mut self) -> usize;
     fn push(&mut self, entries: &[squeue::Entry]) -> io::Result<()>;
