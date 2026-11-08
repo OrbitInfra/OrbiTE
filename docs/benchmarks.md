@@ -395,6 +395,10 @@ That is correlation, not an invented per-SQE block receipt.
 The table describes **diagnostic traces**, not benchmark performance. Each
 cell is the median within the slowest ten samples of a 1,000-sample case.
 CQE timestamps are kernel publication, not userspace consumption.
+Issuer runnable time covers observed wake/preemption intervals after its first
+scheduling; initial thread creation/scheduling is included in before-first-SQE
+time and the fork/switch timeline. Block completion means the kernel event,
+not a timestamp from physical hardware.
 
 | 64 × 4 KiB gapped | Batch µs | Longest paired block I/O µs | Issuer blocked / runnable µs | Last block completion → last CQE µs | Last CQE → return µs |
 |---|---:|---:|---:|---:|---:|
