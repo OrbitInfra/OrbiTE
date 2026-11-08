@@ -22,6 +22,17 @@ def match_cpu(before, after):
     return (af, bf) if af != bf else None
 
 
+def match_reset(before, after, reset_comparison):
+    if reset_comparison:
+        if (before, after) != (
+            "buffered reset before each sample; warmed ext4 O_DIRECT / tmpfs; no fsync, no durability or SSD performance claim",
+            "preallocated once; in-place pwrite + fdatasync before each sample; warmed ext4 O_DIRECT / tmpfs; timed writes are not durability receipts",
+        ):
+            raise ValueError("unexpected reset comparison")
+    elif before != after:
+        raise ValueError("unmatched file_state")
+
+
 def controls():
     cpu = "Model name: example\nCPU(s): 4\nCPU max MHz: 2600\nCPU(s) scaling MHz: 116%\n"
     changed = cpu.replace("116%", "154%")
@@ -33,6 +44,12 @@ def controls():
         except ValueError:
             continue
         raise ValueError("CPU configuration mismatch was accepted")
+    for enabled in (False, True):
+        try:
+            match_reset('unknown', 'different', enabled)
+        except ValueError:
+            continue
+        raise ValueError("unknown reset regime was accepted")
 
 
 def load(path):
@@ -63,6 +80,7 @@ def main():
     parser.add_argument("before", type=Path)
     parser.add_argument("after", type=Path)
     parser.add_argument("--changed-profile", action="append", help="OrbiTE profile changed by this pair; repeat for several (default: tcp)")
+    parser.add_argument("--reset-comparison", action="store_true", help="explicit old truncate/reset versus preallocated pwrite/fdatasync harness comparison")
     args = parser.parse_args()
     changed = args.changed_profile or ["tcp"]
     before, before_ids, old = load(args.before)
@@ -70,20 +88,23 @@ def main():
     if before_ids != after_ids:
         raise ValueError("different workload rows")
     clock_observation = match_cpu(before["cpu"], after["cpu"])
-    for key in ("host", "kernel", "affinity", "rustc", "cxx", "tent_revision", "caller_threads", "workers_per_engine", "tent_rpc_pools", "merge", "engine_max_failover_attempts", "tent_tcp_local_retry", "poll", "metrics", "timing", "checks", "file_state", "builds"):
+    match_reset(before["file_state"], after["file_state"], args.reset_comparison)
+    for key in ("host", "kernel", "affinity", "rustc", "cxx", "tent_revision", "caller_threads", "workers_per_engine", "tent_rpc_pools", "merge", "engine_max_failover_attempts", "tent_tcp_local_retry", "poll", "metrics", "timing", "checks", "builds"):
         if before[key] != after[key]:
             raise ValueError(f"unmatched {key}")
     for key in ("samples", "warmup", "workers", "trials", "sizes", "batches", "ext4", "tmpfs"):
         if before["parameters"][key] != after["parameters"][key]:
             raise ValueError(f"unmatched parameter {key}")
     for key in ("tent.cpp", "transfer.rs"):
-        if before["harness_sha256"][key] != after["harness_sha256"][key]:
+        if before["harness_sha256"][key] != after["harness_sha256"][key] and not args.reset_comparison:
             raise ValueError(f"changed workload {key}")
     print(f"Before `{before['orbite_revision'][:8]}`; after `{after['orbite_revision'][:8]}`; "
           f"host `{after['host']}`; {len(after_ids)} verified rows on each side.")
     if clock_observation:
         print(f"\nInstantaneous CPU clock observation changed: {clock_observation[0]} → {clock_observation[1]}. "
               "All other lscpu fields match. Frequency was not locked; timings are not frequency-normalized.")
+    if args.reset_comparison:
+        print("\nIntentional harness change in both implementations: truncate/buffered reset → preallocated in-place pwrite/fdatasync before timing. H marks those file rows; timed operations and byte checks are unchanged.")
     print("\nCells are before → after, median of the three trial statistics. All cases are included. "
           "R marks any numerical regression (p50/p99/CPU up or throughput down), not statistical significance; "
           "O means all four trial-statistic ranges overlap. U means the payload implementation is unchanged "
@@ -101,6 +122,8 @@ def main():
             cells.append(f"{ma:.3f} → {mb:.3f}" if metric == "GiB_s" else f"{ma:.1f} → {mb:.1f}")
         profile, impl, op, block, batch, layout = key
         labels = (["R"] if regress else []) + (["O"] if overlap else [])
+        if args.reset_comparison and profile.startswith('io_uring-'):
+            labels.append("H")
         if profile not in changed or impl != "orbite":
             labels.append("U")
         print(f"| {profile} | {impl} | {op} | {block // 1024} KiB × {batch}, {layout} | "

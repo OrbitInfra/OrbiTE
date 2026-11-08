@@ -53,10 +53,12 @@ requires actual ext4 and tmpfs mounts and checks OrbiTE's descriptor route.
 Both file profiles leave TCP installed for host registration (TENT does not
 include IOURING in its memory-registration transport list), but requests carry
 an explicit io_uring hint. TENT attempts O_DIRECT on both; on tmpfs the flag may be accepted without a
-direct path. Each iteration initializes the file through buffered I/O before
-the measured operation. These are warmed, page-cache/coherence-sensitive
-measurements, **not cold SSD throughput**. Completion does not include fsync
-and makes no durability claim. Maximum payload per batch is 64 MiB; the
+direct path. Both harnesses open and preallocate the file once, reset it in
+place with `pwrite`, and finish `fdatasync` before the timing window. Buffered
+reset keeps verification simple without leaving dirty reset pages or allocation
+work for the measured direct I/O. Payload, gap and guard checks are unchanged.
+These are warmed measurements, **not cold SSD throughput**. Timed WRITE
+completion still excludes a durability barrier. Maximum payload per batch is 64 MiB; the
 allocation and guard extent is bounded separately.
 
 On a Linux runner with the native dependencies from the
@@ -370,6 +372,10 @@ declared fixed. This PR changes no HP-TCP owner; its own paired run records
 READ p50 changes of −3.6%/−17.8%, also with overlapping ranges.
 
 ## Ext4 tail diagnosis
+
+The evidence below used the **old harness**: each sample truncated and rewrote
+the file through the page cache without syncing the reset. Its ext4 timings
+include reset interference and must not be treated as isolated transfer cost.
 
 [Run 42521765043](https://github.com/OrbitInfra/OrbiTE/actions/runs/42521765043)
 profiles `7e40c7b`, with production sources identical to `4f6bd35c`, against

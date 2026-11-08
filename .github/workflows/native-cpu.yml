@@ -88,24 +88,33 @@ jobs:
           fi
           echo "ORBITE_EXT4_DIR=$ext" >> "$GITHUB_ENV"
       - name: Profile the target owners (traced timings are not performance results)
-        if: inputs.profile_only || inputs.baseline_ref != ''
+        if: (inputs.profile_only || inputs.baseline_ref != '') && !inputs.tail_profile_only
         env:
           CARGO_PROFILE_RELEASE_DEBUG: 1
           CARGO_TARGET_DIR: ${{ runner.temp }}/profile-target
         run: python3 benches/run.py --reference "$RUNNER_TEMP/orbite-native-cpu" --output "$RUNNER_TEMP/orbite-profiles" --ext4 "$ORBITE_EXT4_DIR" --samples 100 --warmup 3 --workers 2 --trials 3 --profile-only
+      - name: Prepare the matched baseline checkout
+        if: inputs.baseline_ref != ''
+        env:
+          BASELINE_REF: ${{ inputs.baseline_ref }}
+        run: git worktree add --detach "$RUNNER_TEMP/orbite-before" "$BASELINE_REF"
       - name: Trace io_uring sample tails (diagnostic only)
         if: inputs.tail_profile_only
         env:
           CARGO_PROFILE_RELEASE_DEBUG: 1
           CARGO_TARGET_DIR: ${{ runner.temp }}/profile-target
-        run: python3 benches/run.py --reference "$RUNNER_TEMP/orbite-native-cpu" --output "$RUNNER_TEMP/orbite-profiles" --ext4 "$ORBITE_EXT4_DIR" --samples 1000 --warmup 3 --workers 2 --trials 3 --tail-profile-only
+          BASELINE_REF: ${{ inputs.baseline_ref }}
+        run: |
+          if test -n "$BASELINE_REF"; then
+            (cd "$RUNNER_TEMP/orbite-before" && CARGO_TARGET_DIR="$RUNNER_TEMP/baseline-profile-target" python3 benches/run.py --reference "$RUNNER_TEMP/orbite-native-cpu" --output "$RUNNER_TEMP/orbite-profiles-before" --ext4 "$ORBITE_EXT4_DIR" --samples 1000 --warmup 3 --workers 2 --trials 3 --tail-profile-only)
+            python3 benches/analyze_io_tail.py "$RUNNER_TEMP/orbite-profiles-before/tail"
+          fi
+          python3 benches/run.py --reference "$RUNNER_TEMP/orbite-native-cpu" --output "$RUNNER_TEMP/orbite-profiles" --ext4 "$ORBITE_EXT4_DIR" --samples 1000 --warmup 3 --workers 2 --trials 3 --tail-profile-only
       - name: Matched baseline sweeps on the same runner
         if: inputs.baseline_ref != '' && !inputs.profile_only && !inputs.tail_profile_only
         env:
-          BASELINE_REF: ${{ inputs.baseline_ref }}
           CARGO_TARGET_DIR: ${{ runner.temp }}/baseline-target
         run: |
-          git worktree add --detach "$RUNNER_TEMP/orbite-before" "$BASELINE_REF"
           cd "$RUNNER_TEMP/orbite-before"
           python3 benches/run.py --reference "$RUNNER_TEMP/orbite-native-cpu" --output "$RUNNER_TEMP/orbite-bench-before" --ext4 "$ORBITE_EXT4_DIR" --samples 100 --warmup 3 --workers 2 --trials 3
       - name: Matched byte-checked CPU sweeps (no hardware)
@@ -126,6 +135,7 @@ jobs:
             ${{ runner.temp }}/orbite-bench-before/*.stdout
             ${{ runner.temp }}/orbite-bench-before/*.stderr
             ${{ runner.temp }}/orbite-profiles/**
+            ${{ runner.temp }}/orbite-profiles-before/**
       - name: Preserve comparison evidence
         if: always()
         uses: actions/upload-artifact@v7.0.2

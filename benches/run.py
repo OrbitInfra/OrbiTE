@@ -106,7 +106,7 @@ def main():
                 "poll": "128 hot then 1,2,4,...,128,200 us capped", "metrics": False,
                 "timing": "allocate batch + submit + poll + free; per-batch wall and whole-process CPU",
                 "checks": "every warmup and sample; changed pattern, reset destination, full bytes and guards; excluded from time",
-                "file_state": "buffered reset before each sample; warmed ext4 O_DIRECT / tmpfs; no fsync, no durability or SSD performance claim",
+                "file_state": "preallocated once; in-place pwrite + fdatasync before each sample; warmed ext4 O_DIRECT / tmpfs; timed writes are not durability receipts",
                 "builds": {"rust": "release, io-uring", "tent": oracle["contract"]["cmake_options"]},
                 "harness_sha256": {f.name: hashlib.sha256(f.read_bytes()).hexdigest() for f in (ROOT / "benches").iterdir() if f.is_file()},
                 "binary_sha256": {k: hashlib.sha256(v.read_bytes()).hexdigest() for k, v in {"orbite": rust, "tent": tent}.items()},

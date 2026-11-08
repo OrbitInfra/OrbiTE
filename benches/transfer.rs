@@ -5,9 +5,30 @@ use orbite::{
 };
 use std::{
     fs,
+    os::unix::fs::FileExt,
     sync::Arc,
     time::{Duration, Instant},
 };
+
+#[cfg(target_os = "linux")]
+fn preallocate(path: &str, length: usize) -> Result<fs::File> {
+    use std::os::fd::AsRawFd;
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(path)?;
+    // SAFETY: the live fd and bounded positive length describe this new file.
+    let code = unsafe { libc::posix_fallocate(file.as_raw_fd(), 0, length as libc::off_t) };
+    if code != 0 {
+        return Err(std::io::Error::from_raw_os_error(code).into());
+    }
+    Ok(file)
+}
+#[cfg(not(target_os = "linux"))]
+fn preallocate(_: &str, _: usize) -> Result<fs::File> {
+    Err(Error::Unavailable("file benchmark requires Linux"))
+}
 
 const PAGE: usize = 4096;
 const LIMIT: usize = 64 << 20;
@@ -255,8 +276,10 @@ fn run(p: &Parameters) -> Result<()> {
         Permission::RemoteReadWrite,
     )?;
     let is_file = transport == Transport::IoUring;
+    let reset_file = is_file
+        .then(|| preallocate(&p.path, p.extent() + 2 * PAGE))
+        .transpose()?;
     let file = if is_file {
-        fs::write(&p.path, vec![0xa5; p.extent() + 2 * PAGE])?;
         Some(
             requester
                 .open_file_segment(&format!("file://{}", p.path), Permission::RemoteReadWrite)?,
@@ -297,12 +320,15 @@ fn run(p: &Parameters) -> Result<()> {
         } else if !is_file {
             remote.write(ro, &image)?;
         }
-        if is_file {
+        if let Some(file) = &reset_file {
             let mut bytes = vec![0xa5; p.extent() + 2 * PAGE];
             if p.op == TransferOp::Read {
                 bytes[PAGE..PAGE + p.extent()].copy_from_slice(&image);
             }
-            fs::write(&p.path, bytes)?;
+            // In-place buffered reset keeps verification simple; fdatasync
+            // finishes its writeback before timing the direct-I/O operation.
+            file.write_all_at(&bytes, 0)?;
+            file.sync_data()?;
         }
         // Diagnostic windows use perf's monotonic clock and surround the timed
         // region. Disabled in matched sweeps; no core instrumentation or API.

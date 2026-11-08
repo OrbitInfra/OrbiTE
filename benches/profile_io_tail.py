@@ -34,6 +34,7 @@ def record(out, executables, args, env, tent_env):
               "syscalls:sys_enter_close", "syscalls:sys_exit_close",
               "syscalls:sys_enter_munmap", "syscalls:sys_exit_munmap",
               "syscalls:sys_enter_futex", "syscalls:sys_exit_futex",
+              "syscalls:sys_enter_fdatasync", "syscalls:sys_exit_fdatasync",
               "block:block_rq_issue", "block:block_rq_complete"]
     shapes = [("ext4", 64, "gapped"), ("ext4", 8, "gapped"),
               ("ext4", 8, "contiguous"), ("ext4", 1, "contiguous"),
