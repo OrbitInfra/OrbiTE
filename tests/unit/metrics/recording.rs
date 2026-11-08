@@ -53,6 +53,19 @@ fn exported_names_help_and_report_logs_use_orbite() {
     for path in ["/metrics", "/metrics/json", "/metrics/summary"] {
         let text = scrape(port, path);
         assert!(!text.contains("TENT"), "{path}: {text}");
+        if path == "/metrics" {
+            for line in text
+                .lines()
+                .filter(|l| !l.is_empty() && !l.starts_with('#'))
+            {
+                assert!(line.starts_with("orbite_"), "{line}");
+            }
+        } else if path == "/metrics/json" {
+            let json: Value = serde_json::from_str(&text).unwrap();
+            for name in json.as_object().unwrap().keys() {
+                assert!(name.starts_with("orbite_"), "{name}");
+            }
+        }
     }
     // Join the reporter, including its initial line, without a timing-based sample.
     drop(engine);
