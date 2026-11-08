@@ -4,7 +4,7 @@ use std::ffi::c_void;
 
 use super::*;
 
-/// TENT's caller-sync event lifetime, attached to an allocation across threads.
+/// Producer event and context retained with an allocation across threads.
 pub(super) struct CallerSyncEvent {
     context: Arc<Context>,
     event: Option<NonNull<sys::CUevent_st>>,

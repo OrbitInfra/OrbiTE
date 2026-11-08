@@ -70,7 +70,7 @@ records the source alignment. The [design-reference map](tent-parity.md) identif
 | Transport failover | Implemented | Bounded physical retries, epoch-pinned Describe and release evidence. Installed RNIC profile unqualified. See [transport attempts](async-batches.md#transport-attempts) |
 | RDMA rail cooldown and recovery | Implemented; installed gate unrun | [Rail health](rdma-cuda.md#rail-health) |
 | Offline version diagnostics | Implemented | Packaged CLI and Rust API. See [diagnostics](diagnostics.md). |
-| OrbiTE metrics, request/attempt accounting and exporter health | Implemented (P6, opt-in) | [Metrics](metrics.md) |
+| OrbiTE metrics, request/attempt accounting and exporter health | Implemented (P6, opt-in) | OrbiTE names, HELP text and reporter logs; unchanged types, labels and buckets. [Metrics](metrics.md) |
 
 ## Failure handling
 

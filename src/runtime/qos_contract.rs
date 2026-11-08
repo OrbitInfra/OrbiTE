@@ -12,7 +12,7 @@ pub(crate) use admission::{QosCharge, QosPermit, QosReservation};
 
 const MAX_CONTRACTS: usize = 4096;
 
-/// Supported TENT action allowlist. Empty or absent actions preserve rejection;
+/// Actions allowed under quota pressure. Empty or absent actions preserve rejection;
 /// allowing delay requires EngineConfig::runtime_queue. If both are allowed,
 /// temporary quota pressure delays; impossible groups still fail admission.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -61,7 +61,7 @@ pub struct QosTenantContract {
     pub intents: BTreeMap<String, QosPolicyFields>,
 }
 
-/// Typed TENT-style global -> tenant -> intent resolution. EngineConfig::qos
+/// Global -> tenant -> intent policy inheritance. EngineConfig::qos
 /// opts in; budgets aggregate by the resolved contract, not by a parent tree.
 #[derive(Clone, Debug)]
 #[non_exhaustive]

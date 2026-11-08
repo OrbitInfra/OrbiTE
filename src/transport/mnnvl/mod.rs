@@ -13,20 +13,25 @@ pub enum MnnvlHandleType {
     PosixFd,
 }
 
-/// Typed counterparts of TENT's NVLink handle, host registration and threshold
-/// settings and transports/mnnvl/egm. Selecting this profile replaces legacy IPC.
+/// Opt-in multi-node NVLink mappings. Selecting this profile replaces legacy IPC;
+/// imported mappings remain owned until their copies physically complete.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 #[derive(serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct MnnvlConfig {
+    /// Shareable mapping handle; Fabric by default. PosixFd is restricted to one host.
     pub handle_type: MnnvlHandleType,
+    /// Register ordinary host allocations with CUDA; true by default.
+    /// Already-owned pinned allocations retain their existing registration.
     pub host_register: bool,
+    /// Enable host-NUMA VMM allocations; false by default. Copies use the owning socket's GPU.
     pub egm: bool,
     /// Same fabric/IMEX domain on cooperating hosts. None restricts placement to this boot.
     #[serde(deserialize_with = "domain")]
     pub fabric_domain: Option<SourceEpoch>,
-    /// Frozen TENT configuration units (128 KiB). Both sides of the threshold use event completion.
+    /// Threshold in units of 128 KiB; defaults to 1024 (128 MiB), with checked scaling.
+    /// Currently does not change dispatch: all sizes use asynchronous copies and event completion.
     pub async_memcpy_threshold: usize,
 }
 fn domain<'de, D: serde::Deserializer<'de>>(

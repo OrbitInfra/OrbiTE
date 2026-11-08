@@ -1,4 +1,4 @@
-//! Local file descriptors, corresponding to TENT's SegmentManager file entries.
+//! Local file descriptors retained through admitted I/O and close/drain.
 use std::collections::HashMap;
 use std::fs::{File, OpenOptions};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, RwLock, Weak};
@@ -13,7 +13,7 @@ const DESCRIPTOR_TTL: Duration = Duration::from_secs(3600);
 #[derive(Clone, Debug)]
 pub struct FileSegment(Weak<Entry>);
 
-/// Snapshot of TENT's single regular-file buffer. Its base offset is zero.
+/// Snapshot of a regular-file segment. Request offsets are relative to file byte zero.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct FileSegmentInfo {

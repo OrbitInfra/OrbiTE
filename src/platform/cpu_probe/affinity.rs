@@ -1,4 +1,4 @@
-//! TENT worker socket binding, restricted to the creator's allowed CPU set.
+//! Worker socket binding, restricted to the creator's allowed CPU set.
 
 #![allow(unsafe_code)]
 

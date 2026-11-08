@@ -30,7 +30,8 @@ pub enum RdmaCudaMemory {
     Direct,
 }
 
-/// Shared CQ progress policy. The frozen TENT polling path remains the default.
+/// Shared completion-queue progress policy. Polling is the default; both modes
+/// keep posted work owned until completion or a physical retirement receipt.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[non_exhaustive]
 #[derive(serde::Deserialize)]
@@ -57,55 +58,64 @@ pub struct RdmaConfig {
     /// Applied before opening a device. A nonempty whitelist supersedes blacklist.
     pub rdma_whitelist: Vec<String>,
     pub rdma_blacklist: Vec<String>,
-    /// TENT location -> [preferred NIC names, available NIC names] JSON.
-    /// Takes precedence over custom_json_path. Resolved once against discovery.
+    /// Location -> [preferred NIC names, available NIC names] JSON, at most 1 MiB.
+    /// Defaults to None. Overrides custom topology input and resolves once against
+    /// discovery; it changes routing ranks, not physical NIC identity.
     pub priority_matrix: Option<String>,
-    /// TENT priority matrix or native nics/mems JSON file (at most 1 MiB).
-    /// Overrides ranks, preserving discovered NIC IDs and physical metadata.
+    /// Priority-matrix or nics/mems JSON file (at most 1 MiB); None by default.
+    /// Overrides ranks while preserving discovered NIC IDs and physical metadata.
     pub custom_json_path: Option<PathBuf>,
-    /// Contents captured from a TENT custom topology file before engine construction.
+    /// Immutable topology JSON captured before construction, at most 1 MiB.
+    /// Defaults to None; overrides custom_json_path when priority_matrix is absent.
     pub custom_topology_json: Option<String>,
     /// Explicit memory-location hint; discovery never assumes allocation placement.
     pub preferred_numa_node: Option<u32>,
-    /// TENT strict_local_numa: exclude only known cross-NUMA NICs. Unknown
-    /// locality remains eligible; device masks still apply independently.
+    /// Exclude known cross-NUMA NICs when true; false by default. Unknown locality
+    /// remains eligible; device masks still apply independently.
     pub strict_local_numa: bool,
     /// Allowed topology NIC IDs for dispatch (up to 64); never compacts context slots.
     pub device_mask: u64,
-    /// Frozen TENT rail circuit settings, per local/remote NIC pair.
+    /// Errors within rail_error_window that open a local/remote NIC pair's circuit.
+    /// Must be positive; defaults to 3. Opening a rail does not release in-flight work.
     pub rail_error_threshold: u32,
+    /// Error accumulation window per rail; defaults to 10 seconds.
     #[serde(
         rename = "rail_error_window_us",
         deserialize_with = "crate::config::json::duration"
     )]
     pub rail_error_window: Duration,
+    /// Initial exclusion period before probing a failed rail; defaults to 30 seconds.
+    /// Recovery backoff is capped at 300 seconds and never reuses an uncertain QP.
     #[serde(
         rename = "rail_cooldown_us",
         deserialize_with = "crate::config::json::duration"
     )]
     pub rail_cooldown: Duration,
+    /// Minimum interval between recovery probes; defaults to one second.
     #[serde(
         rename = "rail_probe_interval_us",
         deserialize_with = "crate::config::json::duration"
     )]
     pub rail_probe_interval: Duration,
-    /// Maximum distinct active or unhealthy pair identities retained by this engine.
+    /// Maximum retained active or unhealthy rail identities; positive, default 4096.
     pub max_rail_pairs: usize,
-    /// Optional TENT rail topology JSON with all/direct named pairs.
+    /// Optional rail topology JSON with all/direct named NIC pairs, at most 1 MiB.
+    /// Defaults to None, using discovered routes.
     pub rail_topology: Option<String>,
-    /// TENT bandwidth-aware selection and payload transmit meter.
+    /// Bandwidth-aware NIC selection and the separate payload transmit-rate meter.
     #[serde(deserialize_with = "crate::runtime::config::object")]
     pub scheduling: super::SchedulingParams,
-    /// TENT deadline_bw_arbitration: reorder ready payloads within a priority
+    /// Reorder ready payloads within a priority
     /// tier and NIC by predicted completion time / remaining deadline. Off by default.
     pub deadline_bw_arbitration: bool,
-    /// TENT aging threshold, measured from the original enqueue (default 10 ms).
+    /// Priority aging threshold from the original enqueue; defaults to 10 ms.
+    /// Must fit in u64 nanoseconds. Promotion changes order, not retained charges.
     #[serde(
         rename = "priority_promotion_timeout_us",
         deserialize_with = "crate::config::json::duration"
     )]
     pub priority_promotion_timeout: Duration,
-    /// False preserves TENT's head-only tier promotion; true checks each entry.
+    /// False (the default) promotes only the tier head; true checks every queued entry.
     pub priority_promotion_per_entry: bool,
     /// Optional POSIX shared-memory name, e.g. /orbite-rdma-slots. Disabled by default.
     pub shared_quota_shm_path: Option<String>,
@@ -116,7 +126,8 @@ pub struct RdmaConfig {
     )]
     pub slot_rotation_interval: Duration,
     pub progress_mode: RdmaProgressMode,
-    /// TENT lane count: transport workers and SQ/RQ CQ pairs per context (1..=64).
+    /// Transport workers and send/receive completion-queue pairs per context.
+    /// Defaults to 1; range 1..=64. Each lane owns its posted work through drain.
     pub num_lanes: usize,
     pub service_level: u8,
     pub traffic_class: u8,
@@ -136,7 +147,8 @@ pub struct RdmaConfig {
     /// Log the selected local and peer NIC for each planned slice at debug level.
     pub log_slice_affinity: bool,
     pub max_direct_bytes: usize,
-    /// TENT's base slice size. Large requests adapt to a bounded slice count.
+    /// Base slice size in bytes; defaults to 64 KiB, range 1..=64 MiB.
+    /// Large requests use larger slices to stay within the bounded slice count.
     pub block_size: usize,
     /// Maximum unresolved sends per QP (1..=64). RQ depth uses max_cqes.
     pub max_send_wr: usize,

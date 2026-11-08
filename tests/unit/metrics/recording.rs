@@ -1,5 +1,63 @@
 use super::*;
 use crate::metrics::schema::{self, Metric as M};
+
+#[test]
+fn exported_names_help_and_report_logs_use_orbite() {
+    const CHILD: &str = "ORBITE_TEST_METRICS_WORDING";
+    if std::env::var_os(CHILD).is_none() {
+        // A logger is process-global. Isolate it from parallel allocation controls.
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "metrics::tests::recording::exported_names_help_and_report_logs_use_orbite",
+                "--nocapture",
+            ])
+            .env(CHILD, "1")
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let stderr = String::from_utf8(output.stderr).unwrap();
+        assert!(output.status.success(), "{stdout}\n{stderr}");
+        assert!(stdout.contains("OrbiTE Metrics:"), "{stdout}");
+        assert!(!stdout.contains("TENT"), "{stdout}");
+        assert!(!stderr.contains("TENT"), "{stderr}");
+        return;
+    }
+
+    struct Reporter;
+    impl log::Log for Reporter {
+        fn enabled(&self, metadata: &log::Metadata<'_>) -> bool {
+            metadata.target().starts_with("orbite::metrics")
+        }
+        fn log(&self, record: &log::Record<'_>) {
+            if self.enabled(record.metadata()) {
+                println!("{}", record.args());
+            }
+        }
+        fn flush(&self) {}
+    }
+    log::set_logger(&Reporter).unwrap();
+    log::set_max_level(log::LevelFilter::Info);
+    // Include unobserved series: zero-valued labeled cells may be absent from a scrape.
+    for spec in &schema::SPECS {
+        assert!(spec.name.starts_with("orbite_"), "{}", spec.name);
+        assert!(!spec.name.contains("TENT"), "{}", spec.name);
+        assert!(!spec.help.contains("TENT"), "{}", spec.help);
+    }
+    let (listener, _guard) = guarded_port();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    let mut cfg = config(port);
+    cfg.metrics.report_interval_seconds = 3600;
+    let engine = TransferEngine::new(cfg).unwrap();
+    for path in ["/metrics", "/metrics/json", "/metrics/summary"] {
+        let text = scrape(port, path);
+        assert!(!text.contains("TENT"), "{path}: {text}");
+    }
+    // Join the reporter, including its initial line, without a timing-based sample.
+    drop(engine);
+}
+
 #[test]
 fn concurrent_cells_keep_exact_transport_counts_and_inclusive_buckets() {
     let cells = Arc::new(Recorder::new());

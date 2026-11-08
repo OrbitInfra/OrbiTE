@@ -1,4 +1,4 @@
-//! Fixed series and inclusive bucket bounds from the frozen TENT registry.
+//! Fixed metric series and inclusive histogram bucket bounds.
 use crate::{TransferOp, Transport};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering::Relaxed};
 
@@ -99,37 +99,37 @@ pub(super) enum Metric {
 pub(super) const SPECS: [Spec; 27] = [
     Spec::new(
         "orbite_read_bytes_total",
-        "Total bytes read via TENT",
+        "Total bytes read via OrbiTE",
         Labels::Transport,
         Kind::Counter,
     ),
     Spec::new(
         "orbite_write_bytes_total",
-        "Total bytes written via TENT",
+        "Total bytes written via OrbiTE",
         Labels::Transport,
         Kind::Counter,
     ),
     Spec::new(
         "orbite_read_requests_total",
-        "Total read requests via TENT",
+        "Total read requests via OrbiTE",
         Labels::Transport,
         Kind::Counter,
     ),
     Spec::new(
         "orbite_write_requests_total",
-        "Total write requests via TENT",
+        "Total write requests via OrbiTE",
         Labels::Transport,
         Kind::Counter,
     ),
     Spec::new(
         "orbite_read_failures_total",
-        "Total read failures via TENT",
+        "Total read failures via OrbiTE",
         Labels::Transport,
         Kind::Counter,
     ),
     Spec::new(
         "orbite_write_failures_total",
-        "Total write failures via TENT",
+        "Total write failures via OrbiTE",
         Labels::Transport,
         Kind::Counter,
     ),

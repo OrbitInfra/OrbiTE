@@ -15,8 +15,10 @@ helpers are stable candidates. Hidden owner helpers are release-private, so the
 Python packaging crate pins the exact core version. The hidden adaptive core
 has no stability promise. Remaining missing docs close before `0.1.0`; source
 readiness does not qualify a native device.
-API, configuration and wire compatibility are out of scope. Architectural
-alignment alone establishes no behavior or performance result. See [capabilities](capabilities.md) for support and the
+API, configuration and wire compatibility are out of scope. Provenance lives
+in the [owner and settings map](tent-parity.md#owner-correspondence); public
+setting docs describe OrbiTE's units, defaults, bounds and ownership effects.
+Architectural alignment alone establishes no behavior or performance result. See [capabilities](capabilities.md) for support and the
 [completion plan](completion-plan.md#p4-remaining-delivery) for open work.
 
 :::{image} _static/architecture.svg
@@ -248,7 +250,7 @@ GPU/RDMA/GDS installed fixtures stay unqualified until run on their hardware.
 
 ## Transport selector ownership
 
-`runtime/transport_selector.rs` owns TENT-style first-match selection and
+`runtime/transport_selector.rs` owns compiled first-match selection and
 `transport_selector/config.rs` compiles bounded typed or JSON policies.
 `segment/metadata.rs` owns the placement and provider metadata published in
 Describe, plus the process identity shared with CUDA IPC. `TransferEngine::prepare`
@@ -702,7 +704,7 @@ and the readiness handoff in
 
 ## Platform pointer and location ownership
 
-`memory/location.rs` defines TENT-style memory types and bounded `RangeLocation`
+`memory/location.rs` defines host and CUDA memory types and bounded `RangeLocation`
 metadata supplied by the actual owners; CUDA-pinned host memory stays CPU memory.
 `cuda/probe.rs` validates external CUDA pointers with one batched attribute query
 and a mapped-range check, and caches each context's PCI/NUMA discovery. This

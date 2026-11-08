@@ -1,6 +1,6 @@
-//! Callable device and route byte-window core from Mooncake v0.3.14.
-//! Domain owners supply generations, feedback and control ticks. TENT does
-//! not attach this core to its workers. OrbiTE follows the same boundary.
+//! Callable device and route byte-window core, not integrated into engine workers.
+//! Domain owners supply generations, feedback and control ticks. This module is
+//! unstable and outside the public API freeze.
 mod classification;
 mod config;
 pub use classification::{

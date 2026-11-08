@@ -2,7 +2,7 @@
 
 use std::fmt;
 
-/// TENT platform memory types supported by this build's owner API.
+/// Host or CUDA device memory, determined by the allocation owner.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum MemoryType {

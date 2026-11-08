@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 #[cfg(feature = "rdma")]
 mod config;
 
-/// TENT's three NIC priority ranks, ordered from preferred to fallback.
+/// Three NIC preference tiers, ordered from most preferred to fallback.
 pub const DEVICE_PRIORITY_RANKS: usize = 3;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -12,7 +12,7 @@ pub enum NicType {
     Rdma,
 }
 
-/// TENT Topology::TopologyMemoryKind: a topology location kind, not a registration backing.
+/// A host or CUDA topology location; this does not identify a registration backing.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum TopologyMemoryKind {

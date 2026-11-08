@@ -2,8 +2,10 @@ use std::time::Duration;
 
 use crate::{Error, Result};
 
-/// TENT DeviceSelector scheduling parameters. Rates are in Gbit/s; EWMA
-/// coefficients weight the old estimate (zero learns entirely from the sample).
+/// NIC selection and transmit-rate estimates. Rates are in Gbit/s; EWMA
+/// coefficients must be in 0..=1 and weight the old estimate (zero learns entirely
+/// from the sample). Smart selection defaults on; byte reservations stay charged
+/// until the selected slice releases its owner.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 #[derive(serde::Deserialize)]

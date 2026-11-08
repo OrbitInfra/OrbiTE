@@ -1,4 +1,4 @@
-//! TENT's single-issuer file sub-batch. The caller or existing Batch worker owns the ring.
+//! Single-issuer file sub-batches. The caller or existing batch worker owns the ring.
 mod config;
 pub(crate) mod pool;
 pub use config::IoUringConfig;

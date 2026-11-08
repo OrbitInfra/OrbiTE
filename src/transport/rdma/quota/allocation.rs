@@ -208,7 +208,7 @@ impl DeviceSelector {
     }
 }
 
-/// TENT selectMultiPath: inverse-score floors, then the best NIC gets leftovers.
+// Follows TENT selectMultiPath: inverse-score floors, then the best NIC gets leftovers.
 fn select_multi_path(candidates: &[Candidate], devices: &mut [u8], epsilon: f64) {
     // Normalizing to the best score keeps the equivalent weights in [0, 1].
     let best = (candidates[0].score + epsilon).min(f64::MAX);

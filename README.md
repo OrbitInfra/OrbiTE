@@ -52,15 +52,28 @@ Non-goals:
 
 ## Updates
 
+- **Nov 8, 2026**: TCP reuses bounded connections keyed by peer epoch and waits
+  on socket readiness. The CPU performance pass records matched results and
+  remaining regressions. [Benchmarks](docs/benchmarks.md#paired-results-and-regressions)
+- **Nov 8, 2026**: OrbiTE owns its strict JSON/`ORBITE_CONF` configuration and
+  Rust-shaped Python API. TENT API, configuration and naming compatibility are
+  removed; frozen TENT remains the design reference and benchmark baseline.
+- **Nov 8, 2026**: The beta.1 Rust and Python API freeze decisions are settled.
+  Publishing remains the maintainer's action. [Release notes](docs/releases.md)
+- **Nov 7, 2026**: Byte-checked CPU size/batch sweeps compare against frozen
+  TENT, with an executable CPU fault matrix and explicit hardware gaps.
+  [Method and limits](docs/benchmarks.md)
+- **Nov 7, 2026**: The opt-in libfabric host path moves real bytes through the
+  software TCP provider in Linux CI. EFA remains unqualified. [Libfabric](docs/fabric.md)
 - **Nov 3, 2026**: Local file segments support DRAM transfers through io_uring,
   CUDA staging through pinned DRAM, and GDS through cuFile. The DRAM path is
   qualified on ext4 and tmpfs in CI. [Local storage](docs/storage.md)
-- **Nov 3, 2026**: TENT-style transport selection picks NVLink, RDMA or TCP
+- **Nov 3, 2026**: Ordered transport policies pick NVLink, RDMA or TCP
   per request.
 - **Nov 2, 2026**: FIFO/EDF admission windows, compiled QoS contracts and
   receiver credit windows.
 - **Nov 1, 2026**: Bandwidth-aware multirail selection from CUDA/NUMA topology
-  and TENT priority matrices; CUDA 13 native batch copies for NVLink groups.
+  and configured NIC preference tiers; CUDA 13 native batch copies for NVLink groups.
 - **Oct 28, 2026**: Bounded GPUDirect RDMA, CUDA IPC and remote CUDA staging
   profiles pass installed H20/RoCE tests.
 - **Oct 27, 2026**: The bounded host RDMA RoCE profile is independently accepted.
@@ -79,7 +92,7 @@ Non-goals:
 - **Bounded admission and QoS.** High/Medium/Low priority, FIFO/EDF dispatch
   windows, per-tenant QoS budgets and receiver credits limit what each peer
   can hold in flight.
-- **Policy-based transport selection.** TENT-style ordered rules choose an
+- **Policy-based transport selection.** Ordered, first-match rules choose an
   eligible NVLink, RDMA or TCP path once per request and honor explicit
   [hints](docs/transport-selection.md).
 
@@ -97,7 +110,7 @@ Non-goals:
 | libfabric | Host DRAM RMA, opt-in software TCP/EFA profiles | Implemented; EFA installed profile unqualified |
 | MPComm | Optional network provider | Deferred: no consumer; provider unavailable |
 
-Rust is the primary API; the [Python API](docs/python.md) follows TENT's P2P subset. See the [wire and consumer boundary](docs/tent-parity.md#wire-and-consumer-boundaries).
+Rust is the primary API; the [Python API](docs/python.md) mirrors OrbiTE's owned P2P operations. See the [wire and consumer boundary](docs/tent-parity.md#wire-and-consumer-boundaries).
 [Capabilities](docs/capabilities.md) lists the exact limits of each path.
 
 ## Quick Start
@@ -135,7 +148,7 @@ is published on crates.io for early development; its API is unstable.
 | --- | --- |
 | Getting started | [Quick Start](docs/getting-started.md), [Build](docs/build.md), [Capabilities](docs/capabilities.md) |
 | Using the engine | [TCP and memory ownership](docs/cpu-tcp.md), [Async batches](docs/async-batches.md), [RDMA and CUDA](docs/rdma-cuda.md), [CUDA IPC](docs/cuda-ipc.md), [Staging](docs/staging.md) |
-| Design and API | [Architecture](docs/architecture.md), [Rust API](docs/rust-api.md), [TENT parity](docs/tent-parity.md) |
+| Design and API | [Architecture](docs/architecture.md), [Rust API](docs/rust-api.md), [TENT design reference](docs/tent-parity.md) |
 | Development | [Contributing](docs/contributing.md), [Qualification](docs/qualification.md), [Completion plan](docs/completion-plan.md) |
 | Operations | [Troubleshooting](docs/troubleshooting.md), [Installed host validation](docs/installed-host.md), [Native cleanup](docs/native-cleanup.md) |
 

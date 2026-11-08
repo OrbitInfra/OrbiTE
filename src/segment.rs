@@ -189,7 +189,8 @@ impl RemoteSegment {
     }
 
     /// Resolves a source-granted absolute address within this epoch's descriptor
-    /// snapshot. Matches TENT's first containing buffer in address/length order.
+    /// snapshot. Uses the first containing buffer in ascending address order,
+    /// preferring the longer buffer at equal bases.
     /// This lookup does not acquire a source grant or refresh authority.
     pub fn resolve_address(&self, address: u64, length: usize) -> Result<(RemoteRegion, usize)> {
         if length == 0 || address.checked_add(length as u64).is_none() {

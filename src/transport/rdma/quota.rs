@@ -37,7 +37,7 @@ impl CqQuota {
     }
 }
 
-/// TENT's DeviceSelector boundary: stable NIC IDs, topology tiers and byte charges.
+/// Stable NIC identities, topology preference tiers and retained byte charges.
 pub(super) struct DeviceSelector {
     priorities: BTreeMap<MemoryLocation, DevicePriority>,
     fallback: DevicePriority,

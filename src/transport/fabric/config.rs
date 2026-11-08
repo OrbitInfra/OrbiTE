@@ -1,7 +1,8 @@
 use crate::{Error, Result};
 use std::time::Duration;
 
-/// Frozen TENT provider profiles. Auto tries EFA, never the software provider.
+/// Provider selection. The default Auto tries EFA, never the software provider.
+/// Select Tcp explicitly for the software profile; missing providers are unavailable.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[non_exhaustive]
 #[derive(serde::Deserialize)]

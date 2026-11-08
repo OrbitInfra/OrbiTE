@@ -1,7 +1,7 @@
 //! Requester-side peer admission and reference-retained epoch fences.
 //!
-//! Unlike TENT's reversible handle invalidation, retirement is a membership
-//! fence. A borrowed descriptor cannot reopen admission to a retired identity.
+//! Retirement is a membership fence. A borrowed descriptor cannot reopen
+//! admission to a retired identity.
 
 use crate::{Error, RemoteSegment, Result, SourceEpoch};
 use std::collections::HashMap;

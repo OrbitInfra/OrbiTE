@@ -83,7 +83,7 @@ impl Workers {
                     .name("orbite-metrics-log".into())
                     .spawn(move || {
                         loop {
-                            log::info!("TENT Metrics: {}", scrape.summary());
+                            log::info!("OrbiTE Metrics: {}", scrape.summary());
                             if stop.wait(Duration::from_secs(interval.into())) {
                                 break;
                             }

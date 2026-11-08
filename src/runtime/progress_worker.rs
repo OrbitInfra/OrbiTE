@@ -1,4 +1,4 @@
-//! A TENT wake drives one batch turn. Payload I/O stays on the admitted batch worker.
+//! One wake drives one batch turn. Payload I/O stays on the admitted batch worker.
 use std::collections::VecDeque;
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};

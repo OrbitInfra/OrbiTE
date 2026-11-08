@@ -1,4 +1,4 @@
-//! TENT's bounded greedy deadline/bandwidth ordering within one priority and NIC.
+//! Bounded greedy deadline/bandwidth ordering within one priority tier and NIC.
 
 use std::time::Instant;
 

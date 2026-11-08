@@ -1,4 +1,4 @@
-//! Native epoch-scoped grants around TENT's host RMA and domain progress model.
+//! Native epoch-scoped grants around host RMA and per-domain progress owners.
 use super::{
     FabricConfig, FabricStats,
     fabric_attrs::{self as attrs, BufferAttr, Chunk, PeerAttr},

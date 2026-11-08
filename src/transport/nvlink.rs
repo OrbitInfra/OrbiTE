@@ -1,4 +1,4 @@
-//! TENT NVLink transport boundary: same-host IPC relocation and CUDA completion.
+//! Same-host NVLink IPC relocation and event-confirmed CUDA completion.
 
 use std::sync::Arc;
 use std::time::Instant;

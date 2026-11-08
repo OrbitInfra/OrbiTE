@@ -366,6 +366,9 @@ CPU controls scrape a real loopback endpoint with the Prometheus reference
 parser, reconcile public and physical outcomes across retries and toggles, compare JSON histogram counts, inject exporter failures, exercise a busy port and check shutdown
 with an incomplete request. Real TCP and io_uring, the RDMA and CUDA shims,
 and the cuFile table check transport attribution at their executing owners.
+`metrics::tests::recording::exported_names_help_and_report_logs_use_orbite`
+checks every metric specification, real HTTP exports and the actual log reporter
+in an isolated child process for OrbiTE terminology.
 The release control in `tests/metrics/overhead.rs` compares empty CPU submissions, a physical owner that expires before payload I/O,
 and guarded 64-byte and 4 MiB TCP, HP-TCP and SHM same-host READs and WRITEs with metrics compiled out, configured
 off, and enabled. The [S10 handoff](https://github.com/OrbitInfra/OrbiTE/pull/138) records the original TCP measurements. The [same-host comparison](https://github.com/OrbitInfra/OrbiTE/pull/145) includes all three transports and both sizes. The [HP-TCP comparison](hp-tcp.md#rails-and-ownership) reports same-host medians for rotating and least-loaded lanes. Physical

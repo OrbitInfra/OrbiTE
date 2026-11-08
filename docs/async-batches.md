@@ -202,7 +202,7 @@ and the [verification controls](qualification.md#runtime-admission-and-dispatch-
 ## QoS contracts
 
 `EngineConfig::qos` defaults to `None`. `Some(QosConfig)` enables version-1
-contracts with TENT's overlay order: global defaults, tenant defaults, then the
+contracts in specificity order: global defaults, tenant defaults, then the
 tenant's intent override. Each field overrides independently; `None` inherits,
 an effective `None` means no cap, and `Some(0)` is a hard zero. Blank identities
 resolve to `default`/`unspec`. Names are trimmed and lowercased, at most 256

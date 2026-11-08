@@ -1,4 +1,4 @@
-//! TENT custom topology input, resolved against discovered physical owners.
+//! Custom topology input, resolved against discovered physical owners.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
