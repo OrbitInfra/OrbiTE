@@ -137,6 +137,14 @@ and tracer perturbation, **not critical-path percentages**. The CPU stack
 samples distinguish hot polling from sleeping; the untraced paired sweeps
 quantify the effect on actual batch latency and CPU cost.
 
+The same `perf stat` processes report 23,674 / 30,312 context switches for
+OrbiTE's gapped TCP READ / WRITE, versus TENT's 46,849 / 46,749. Each process
+includes setup, three warmups and 100 samples. That is approximately
+230 / 294 versus 455 / 454 switches per executed batch, including setup;
+it is not an exact count of owner handoffs. The one new thread per OrbiTE
+batch is the measurable caller-to-worker handoff. A syscall count alone
+cannot assign every remaining scheduler switch to an owner.
+
 The change follows frozen HP-TCP's clean/dirty lane ownership without adding a
 worker: one exclusive epoch-scoped stream, deadline-bounded socket waits, and
 source readiness monitoring in the existing control workers. Dirty streams
@@ -144,6 +152,76 @@ are retired, never replayed; admission, backing loans, per-request snapshots,
 physical drain and sticky cleanup remain. The native frame bytes and offsets
 are unchanged; a stream now carries successive complete TCP frames. See
 [the owner contract](cpu-tcp.md) and its negative controls.
+
+### Paired results and regressions
+
+[Run 42441063520](https://github.com/OrbitInfra/OrbiTE/actions/runs/42441063520)
+completed 480 checked rows **before and after on each toolchain**, comparing
+`f0556448` with `de9fd60b`. Later commits change fixtures and reporting only.
+Both sides of each pair share one GitHub `ubuntu-24.04` VM, compiler,
+filesystems and parameters above. Stable (Rust 1.99.1) uses four EPYC 7763
+logical CPUs, matching S26's processor class; Rust 1.85 uses four EPYC 9V45
+logical CPUs. Both report hostname `runnervm7aw5e` and Linux 7.0.0-1017-azure;
+that hostname alone does not identify a processor. Do not pool the toolchains'
+absolute times. The order is before then after, with implementation order
+alternating across the three trials, not randomized across revisions.
+
+The stable results below are medians of the three trial statistics. The
+[PR's complete tables](https://github.com/OrbitInfra/OrbiTE/pull/180) include
+**every** workload/implementation case, throughput and every numerical
+regression; all 480 raw trial rows per side remain in `cpu-bench-*` artifacts.
+Reproduce those tables with `python3 benches/compare.py BEFORE AFTER`. It
+rejects mismatched manifests, workload hashes, missing trials and unchecked data.
+
+| Workload | OrbiTE p50 µs before → after | TENT p50 µs after | OrbiTE p99 µs before → after | OrbiTE CPU µs before → after |
+|---|---:|---:|---:|---:|
+| TCP, 1 × 4 KiB READ | 275.3 → 153.5 | 284.2 | 320.4 → 261.8 | 370.3 → 190.3 |
+| TCP, 1 × 4 KiB WRITE | 277.0 → 160.6 | 281.6 | 339.3 → 288.2 | 385.2 → 215.2 |
+| TCP, 64 × 4 KiB gapped READ | 8,591.0 → 4,231.4 | 6,175.9 | 9,133.9 → 4,556.8 | 15,908.6 → 5,449.1 |
+| TCP, 64 × 4 KiB gapped WRITE | 9,331.6 → 6,296.2 | 6,071.6 | 9,856.6 → 6,641.5 | 16,946.6 → 7,055.2 |
+| tmpfs, 1 × 4 KiB READ | 156.8 → 155.4 | 82.4 | 329.3 → 309.8 | 168.0 → 164.8 |
+| tmpfs, 1 × 4 KiB WRITE | 194.4 → 194.2 | 82.6 | 326.5 → 305.1 | 247.4 → 243.9 |
+| ext4, 64 × 4 KiB gapped READ | 926.5 → 933.2 | 1,018.8 | 16,517.1 → 17,418.5 | 1,107.6 → 1,041.9 |
+| ext4, 64 × 4 KiB gapped WRITE | 873.3 → 892.3 | 917.5 | 7,269.4 → 8,969.2 | 1,096.4 → 1,116.3 |
+
+The after profile confirms zero warmed TCP connects and zero `sched_yield`
+calls per batch, versus 64 connects and 308/342 yields for scattered READ/WRITE.
+Futex calls fall from 429/431 to 226/242; epoll waits rise from 67/67 to 75/77.
+One batch-thread creation remains. Pattern generation now occupies 49%/48% of
+the scattered user-CPU stacks, outside the measured interval; the very short
+single-request after profiles have only 61/26 stack samples, so their individual
+frame percentages are not a reliable ranking. The untraced CPU times above
+are the evidence for the cost reduction.
+
+The EPYC 9V45 pair independently reduces scattered READ/WRITE p50 by 46%/29%
+and CPU by 64%/58%. Its resulting p50s are 2.26/3.50 ms versus TENT's
+2.92/2.91 ms: WRITE remains 20% slower there. Regressions are not omitted:
+
+- Stable TCP's 64 MiB WRITE p50 rises 0.3% (overlapping trial ranges), while
+  its p99 and CPU improve. On 1.85, 64 MiB READ p50 rises 2.8%, p99 10.7%
+  and throughput falls 3.2%, while CPU falls 4.2%. Blocking wakeups can trade
+  latency for CPU on a large transfer whose handshake is already amortized;
+  the contribution is not isolated, and the latency trial ranges overlap.
+  This is not a claim of a large-transfer improvement.
+- Untuned paths also vary. Stable HP-TCP 1 MiB READ p50 rises 17.3%, with
+  overlapping ranges for all four statistics. Stable ext4 1 MiB READ p50
+  rises 40.8% (nonoverlapping median ranges); unchanged TENT rises 23.1%
+  on that case. Ext4 64-block contiguous WRITE p99 rises 51.7%, with overlapping
+  trial ranges. On 1.85, ext4 eight-block gapped READ p99 rises 55.8%.
+  Warmed page-cache/coherence and VM scheduling are plausible contributors;
+  shared control-worker effects are not ruled out. The cause remains open.
+- Every smaller regression is flagged in the complete tables. Memcpy and
+  TENT controls do not execute the changed TCP pool; their changes show run,
+  cache and scheduling variation. OrbiTE HP-TCP, SHM and file payload owners
+  are unchanged, but their shared idle control worker changed. Range overlap
+  is descriptive, not a significance test or permission to discard a result.
+
+The standard [480-row run on both toolchains](https://github.com/OrbitInfra/OrbiTE/actions/runs/42441786027)
+also passed, alongside [all feature gates and 50-repeat controls](https://github.com/OrbitInfra/OrbiTE/actions/runs/42441786080)
+and the [installed-wheel matrix](https://github.com/OrbitInfra/OrbiTE/actions/runs/42441786046).
+These are single-caller cloud-loopback and warmed-file results. No concurrent-caller,
+physical two-host, GPU, RNIC or SSD performance claim follows. Storage latency,
+ext4 tails and any remaining bookkeeping cost stay separate work.
 
 ## CPU fault matrix
 

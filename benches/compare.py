@@ -39,17 +39,21 @@ def main():
     after, after_ids, new = load(args.after)
     if before_ids != after_ids:
         raise ValueError("different workload rows")
-    for key in ("host", "kernel", "cpu", "affinity", "rustc", "cxx", "tent_revision", "caller_threads", "workers_per_engine", "merge", "metrics", "checks", "file_state"):
+    for key in ("host", "kernel", "cpu", "affinity", "rustc", "cxx", "tent_revision", "caller_threads", "workers_per_engine", "tent_rpc_pools", "merge", "engine_max_failover_attempts", "tent_tcp_local_retry", "poll", "metrics", "timing", "checks", "file_state", "builds"):
         if before[key] != after[key]:
             raise ValueError(f"unmatched {key}")
-    for key in ("samples", "warmup", "workers", "trials", "sizes", "batches"):
+    for key in ("samples", "warmup", "workers", "trials", "sizes", "batches", "ext4", "tmpfs"):
         if before["parameters"][key] != after["parameters"][key]:
             raise ValueError(f"unmatched parameter {key}")
+    for key in ("tent.cpp", "transfer.rs"):
+        if before["harness_sha256"][key] != after["harness_sha256"][key]:
+            raise ValueError(f"changed workload {key}")
     print(f"Before `{before['orbite_revision'][:8]}`; after `{after['orbite_revision'][:8]}`; "
           f"host `{after['host']}`; {len(after_ids)} verified rows on each side.")
     print("\nCells are before → after, median of the three trial statistics. All cases are included. "
           "R marks any numerical regression (p50/p99/CPU up or throughput down), not statistical significance; "
-          "O means all four trial-statistic ranges overlap. U means an unchanged implementation/path. "
+          "O means all four trial-statistic ranges overlap. U means the payload implementation is unchanged "
+          "(OrbiTE's shared control workers still changed). "
           "CPU is process time per batch. Raw trials remain in the linked artifact.\n")
     print("| Profile | Impl | Op | Block × batch, layout | p50 µs | p99 µs | CPU µs | GiB/s | Review |")
     print("|---|---|---|---|---:|---:|---:|---:|---|")

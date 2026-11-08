@@ -330,14 +330,30 @@ are neither installed hardware qualification nor a general performance claim.
 | TCP WRITE, 64 × 4 KiB gapped | 9,543.9 / 6,233.4 | 9,992.8 / 6,483.5 | 0.026 / 0.039 | 17,181.7 / 13,064.4 |
 | io_uring ext4 READ, 64 × 4 KiB gapped | 926.5 / 979.2 | 15,716.4 / 1,779.6 | 0.125 / 0.232 | 1,015.2 / 1,143.6 |
 
-OrbiTE is materially slower for scattered small TCP batches: the 64-block
+In that S26 artifact, OrbiTE was materially slower for scattered small TCP batches: the 64-block
 READ/WRITE p50s are 1.36×/1.53× TENT's. Four-KiB tmpfs READ/WRITE p50s are
-1.88×/2.34×. Likely contributors are the per-batch worker and per-owner TCP
-connections, versus TENT's task/RPC pools and caller-driven file submission;
-these are source-based hypotheses, not profiler findings. Ext4's gapped
+1.88×/2.34×. Its source-based hypotheses were the per-batch worker and per-request
+TCP connections, versus TENT's task/RPC pools and caller-driven file submission.
+The subsequent [profile](benchmarks.md#tcp-profile-and-connection-reuse)
+confirmed connection churn and hot reply polling; this TCP change removes
+those costs while retaining the batch worker and all ownership checks. Ext4's gapped
 64-block READ/WRITE tails also inflate (p99 15.7/8.8 ms versus 1.8/1.7 ms),
 reducing throughput despite similar medians. That tail cause is unresolved in
-this warmed, page-cache/coherence-sensitive workload. No path was tuned here.
+this warmed, page-cache/coherence-sensitive workload. The storage payload paths
+are unchanged by the TCP fix and remain separate P11 work.
+
+The [paired TCP pass](benchmarks.md#paired-results-and-regressions),
+[run 42441063520](https://github.com/OrbitInfra/OrbiTE/actions/runs/42441063520),
+records 480 byte-checked rows per revision per toolchain, `f0556448` →
+`de9fd60b`, on one VM per pair. Stable uses S26's EPYC 7763 class; Rust 1.85
+uses EPYC 9V45 and is reported separately. Stable scattered READ/WRITE p50
+changes 8.59→4.23 / 9.33→6.30 ms; small READ CPU changes 370→190 µs.
+The full tables include every workload and every numerical regression,
+including the 1.85 large-READ latency tradeoff and unresolved file tails.
+The [CPU owner controls](https://github.com/OrbitInfra/OrbiTE/actions/runs/42441786080)
+repeat 16 default / 17 combined-feature controls 50 times on each toolchain,
+including dirty-stream retirement, retained backing/charges, peer epochs and
+ordered byte/guard checks. This changes no hardware qualification.
 
 [CI run 42362843121](https://github.com/OrbitInfra/OrbiTE/actions/runs/42362843121)
 records 24 passing CPU fault controls and two N/A dispositions per toolchain

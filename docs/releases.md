@@ -84,22 +84,32 @@ Physical two-host TCP and physical multi-rail remain unqualified. CPU shims and
 software libfabric TCP-provider tests are not device evidence. Required installed
 gates remain in the [verification queue](qualification.md#verification-queue).
 
-S26 recorded these CPU slow paths on its four-vCPU Linux runner against frozen
-TENT. They are known P11 issues, not generalized performance claims or release
-speed guarantees. No tuning was attempted in the benchmark preparation.
+The profile-guided TCP pass repeats S26 on a four-vCPU EPYC 7763 Linux runner,
+with `f0556448` and `de9fd60b` on the same VM. The table reports medians of three
+100-sample trials, with full byte checks and frozen TENT on the same runner.
+These are scoped measurements, not release speed guarantees.
 
-| Workload | OrbiTE relative to TENT / measured latency |
+| Workload | Paired result / remaining limit |
 | --- | --- |
-| Scattered 64 × 4 KiB TCP READ / WRITE | p50 **1.36× / 1.53×** TENT |
-| 4 KiB buffered tmpfs READ / WRITE | p50 **1.88× / 2.34×** TENT |
-| Gapped ext4 READ / WRITE | p99 **15.7 / 8.8 ms**, versus **1.8 / 1.7 ms** for TENT |
+| Scattered 64 × 4 KiB TCP READ / WRITE | p50 **8.59 → 4.23 / 9.33 → 6.30 ms**; TENT after **6.18 / 6.07 ms**. WRITE remains 3.7% slower than TENT |
+| Single 4 KiB TCP READ | CPU **370 → 190 µs** per batch; TENT after **256 µs** |
+| 4 KiB buffered tmpfs READ / WRITE | after p50 **1.89× / 2.35×** TENT; storage submission is unchanged |
+| Gapped ext4 READ / WRITE | after p99 **17.4 / 9.0 ms**, versus **2.2 / 2.0 ms** for TENT; cause unresolved |
 
-The [original measurement table](qualification.md#cpu-benchmark-evidence)
-pins revisions, host, workload and sample counts. `TcpTransport::transfer`
-opens a new control connection per physical request and polls it with backoff.
-That and per-batch workers are possible contributors; the ext4 tail cause is
-unresolved. p99 uses only 100 samples per trial, and files were warmed without
-fsync. These results say nothing about RNIC, GPU or physical SSD performance.
+The [original S26 evidence](qualification.md#cpu-benchmark-evidence) keeps its
+historical values and labels. The [profile and complete paired results](benchmarks.md#paired-results-and-regressions)
+pin revisions, hosts, parameters and every numerical regression. The profile confirmed one
+connection per physical request and substantial reply-poll CPU. TCP now reuses
+bounded, epoch-scoped streams and uses deadline-bounded socket waits. Dirty
+streams retire without replay, and uncertain cleanup retains its owners.
+Per-batch workers and the storage payload paths remain unchanged. There is one
+exclusive direct-TCP lane per peer, without a concurrent-caller performance
+claim. The separate Rust 1.85 pair used a newer EPYC 9V45: scattered TCP
+improved, but 64 MiB READ p50/p99 regressed 2.8%/10.7% while CPU fell 4.2%.
+Blocking wakeups can trade latency for CPU; the exact contribution is not isolated.
+p99 uses only 100 samples per trial, and files were warmed
+without fsync. These results say nothing about RNIC, GPU or physical SSD
+performance.
 
 Timeout, cancellation and terminal status remain distinct from a physical
 release receipt. Uncertain cleanup retains owners; uncertain WRITEs are never

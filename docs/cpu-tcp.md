@@ -26,7 +26,8 @@ replica grants and recovery policy stay with OrbitKV.
 
 Ordinary TCP leases one exclusive stream per endpoint and authoritative source
 epoch to the executing caller or batch worker. Completed frames reuse it;
-WRITEs on that stream stay ordered. The requester pool uses
+WRITEs on that stream stay ordered. Concurrent direct-TCP submissions to that
+peer serialize on this lane; independent peers have separate lanes. The requester pool uses
 `max_peer_segments` slots, including borrowed and uncertain entries. At capacity
 it can evict only an idle, clean, unreferenced entry. A busy or failed entry
 stays charged. `close_segment` fences admission and drains the peer before
