@@ -334,7 +334,8 @@ impl TransferEngine {
         // RDMA returns only after close_slices/abort has reaped/flushed its QP
         // and returned its loan. NVLink joins its CUDA completion and cleanup.
         // ProxyManager joins its session and releases the stage registrations.
-        // TCP drops its socket and private READ snapshot on this call boundary.
+        // Failed TCP attempts retire their socket and private READ snapshot
+        // on this call boundary; only complete frames return to the pool.
         // A failed physical release is Unquiesced, regardless of original cause.
         if !retryable(&failure.error)
             || failure.remote_effect == RemoteEffect::Unknown

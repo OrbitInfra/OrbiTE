@@ -78,6 +78,10 @@ pub(super) struct Pool {
     shutdown: ShutdownFn,
 }
 impl Pool {
+    #[cfg(test)]
+    pub(super) fn set_shutdown(&mut self, shutdown: ShutdownFn) {
+        self.shutdown = shutdown;
+    }
     pub(super) fn new(capacity: usize) -> Self {
         Self {
             lanes: Mutex::default(),

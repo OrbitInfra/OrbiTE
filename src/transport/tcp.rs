@@ -18,6 +18,13 @@ pub(crate) struct TcpTransport {
 }
 
 impl TcpTransport {
+    #[cfg(test)]
+    pub(crate) fn set_shutdown(
+        &mut self,
+        shutdown: fn(&std::net::TcpStream) -> std::io::Result<()>,
+    ) {
+        self.pool.set_shutdown(shutdown);
+    }
     pub(crate) fn new(capacity: usize) -> Self {
         Self {
             pool: pool::Pool::new(capacity),

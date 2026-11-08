@@ -1470,3 +1470,63 @@ fn rejected_hp_submissions_leave_no_lane_load() -> Result<()> {
     assert_eq!(got, want);
     Ok(())
 }
+
+#[test]
+fn tcp_failed_retirement_keeps_actual_backing_and_admission_without_retry() {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static CALLS: AtomicUsize = AtomicUsize::new(0);
+    fn fail(_: &std::net::TcpStream) -> std::io::Result<()> {
+        CALLS.fetch_add(1, Ordering::SeqCst);
+        Err(std::io::Error::from_raw_os_error(libc::EIO))
+    }
+    CALLS.store(0, Ordering::SeqCst);
+    let wait = crate::test_support::EVENTUAL_PROGRESS;
+    let source = TransferEngine::new(EngineConfig::default()).unwrap();
+    let remote = source
+        .register_memory(vec![0x72; 8].into(), Permission::RemoteRead)
+        .unwrap();
+    let mut engine = TransferEngine::new(EngineConfig::default()).unwrap();
+    engine.tcp.set_shutdown(fail);
+    let peer = engine
+        .open_segment(source.endpoint(), source.source_epoch(), wait)
+        .unwrap();
+    source.unregister_memory(&remote).unwrap();
+    let fixture = crate::test_support::external_memory(&[0xcd; 10]);
+    let memory = fixture.memory.clone();
+    let local = engine
+        .register_host_memory(fixture.memory, 0, 10, Permission::LocalOnly)
+        .unwrap();
+    let request = TransferRequest::new(
+        Transport::Tcp,
+        local.base_address() + 1,
+        remote.base_address(),
+        8,
+    );
+    let report = engine
+        .submit_and_wait(TransferOp::Read, &peer, &[request], wait)
+        .unwrap();
+    assert!(!report.locally_drained);
+    assert_eq!(report.completed_requests, 0);
+    assert!(matches!(
+        report.failure.unwrap().error,
+        Error::Unquiesced {
+            operation: "TCP socket retirement",
+            ..
+        }
+    ));
+    engine.unregister_memory(&local).unwrap();
+    drop(local);
+    assert_eq!(engine.stats().unwrap().inflight_bytes, 8);
+    assert_eq!(engine.stats().unwrap().active_peer_operations, 1);
+    assert!(matches!(
+        engine.close_segment(peer.endpoint, peer.epoch, Duration::ZERO),
+        Err(Error::Unquiesced { .. })
+    ));
+    let mut bytes = [0; 10];
+    memory.read(0, &mut bytes).unwrap();
+    assert_eq!(bytes, [0xcd; 10]);
+    drop((memory, peer, engine));
+    assert_eq!(CALLS.load(Ordering::SeqCst), 1);
+    assert!(fixture.owner.upgrade().is_some());
+    assert_eq!(fixture.drops.load(Ordering::SeqCst), 0);
+}

@@ -76,6 +76,75 @@ uploads `cpu-bench-*` artifacts. GPU, RDMA, GDS and EFA are emitted as
 **not run (hardware)**, without estimated numbers. The scoped summary lives in
 [qualification](qualification.md#cpu-benchmark-evidence).
 
+## TCP profile and connection reuse
+
+The pre-change profile is [run 42439141061](https://github.com/OrbitInfra/OrbiTE/actions/runs/42439141061),
+`cpu-oracle (stable)`, revision `ec103db` (production sources unchanged from
+`f0556448`). Its host `runnervm7aw5e` exposes four AMD EPYC 7763 logical CPUs,
+Ubuntu 24.04, Linux 7.0.0-1017-azure and Rust 1.99.1. The reference is
+`e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c`. Both toolchains passed all sixteen
+profile cases with byte checks. These are diagnostic observations, not timings
+used in the comparison table.
+
+`benches/run.py --profile-only` uses the same executables, sizes, layouts,
+workers and warmup as S26. `strace -f -c -w` counts 100 samples minus a one-sample
+setup control, divided by 99. `perf record` samples user CPU at a 10-microsecond
+period with DWARF stacks and 1,000 samples per workload: millisecond sampling
+misses short-lived batch threads. `perf stat` separately records process CPU,
+context switches and migrations. Raw traces, call stacks and exact commands
+remain in the workflow's `cpu-bench-*` artifacts, outside Git. Profiling includes
+verification/setup; latency measurements below exclude them.
+
+| Baseline calls per batch (READ / WRITE) | OrbiTE | TENT | Interpretation |
+|---|---:|---:|---|
+| TCP connect, single 4 KiB | 1 / 1 | 0 / 0 | TENT reuses warmed connections |
+| TCP connect, gapped 64 × 4 KiB | 64 / 64 | 0 / 0 | One handshake per physical request is confirmed |
+| TCP nanosleep, gapped 64 × 4 KiB | 219 / 236 | 129 / 128 | Traced polling sleeps include the common benchmark poll loop |
+| TCP futex, gapped 64 × 4 KiB | 429 / 431 | 481 / 469 | This is not a count of locks or thread handoffs |
+| Batch thread creation, every OrbiTE target | 1 / 1 | 0 / 0 | One caller→new batch-worker handoff, retained for a later PR |
+| tmpfs ring setup / enter, single 4 KiB | 1 / 1 | 1 / 1 | No extra ring is created per request |
+| tmpfs futex, single 4 KiB | 13.7 / 13.0 | approximately 0 / 0 | Publication, progress and worker retirement remain measurable |
+| ext4 ring enter, gapped 64 × 4 KiB | 1.14 / 1.11 | 1 / 1 | Reaping can need another enter |
+| ext4 statx, gapped 64 × 4 KiB | 65 / 65 | 0 / 0 | Per-request file/descriptor checks remain; no safety checks removed |
+
+The single TCP READ's user samples attribute 18.2% to `recv`, 14.4% to
+`sched_yield`, 12.1% to the main VDSO clock frame and 10.2% to
+`TcpTransport::transfer`. For gapped READ/WRITE, `recv` is 9.9%/10.2%,
+`sched_yield` 9.5%/9.2%, and `ControlChannel::poll_read` 2.1%/2.3%.
+Pattern generation/verification accounts for another 17% and is outside the
+benchmark interval. This supports removing direct TCP's hot-poll/backoff loop
+as well as reconnects. No admission or loan frame reaches 1% of these samples;
+inlining and sample size prevent treating that as proof of zero bookkeeping
+cost. Those owners and checks stay unchanged.
+
+The tmpfs READ profile instead attributes 23.0% to `Batch::status`, 4.6% to
+`ProgressState::status`, 19.4% to the VDSO clock frame and 2.0% to batch
+publication. The file path still creates a worker and publishes completion to
+the polling caller. Ext4 READ samples include 1.2% `statx`, 0.7% selector and
+0.5% preparation; pattern generation alone is 46.1%. Aligned ext4 route checks
+pass, so these runs do not implicate an accidental buffered fallback. They do
+not isolate the historical p99 tail's cause; storage and VM scheduling need
+a separate pass.
+
+Waiting and working cannot be inferred by subtracting multi-thread process CPU
+from wall latency. In the separate `perf stat` run, mean wall / process CPU per
+batch was 285 / 398 microseconds for one TCP READ, 8,861 / 16,408 for gapped TCP
+READ, 174 / 176 for tmpfs READ, and 1,960 / 1,053 for gapped ext4 READ.
+Under `strace`, summed sleep / futex / epoll wall time for gapped TCP READ was
+63.9 / 249.2 / 123.4 ms per batch, versus 3.0 / 46.4 / 21.3 ms for gapped ext4
+READ (plus 0.39 ms in `io_uring_enter`). These include concurrent idle threads
+and tracer perturbation, **not critical-path percentages**. The CPU stack
+samples distinguish hot polling from sleeping; the untraced paired sweeps
+quantify the effect on actual batch latency and CPU cost.
+
+The change follows frozen HP-TCP's clean/dirty lane ownership without adding a
+worker: one exclusive epoch-scoped stream, deadline-bounded socket waits, and
+source readiness monitoring in the existing control workers. Dirty streams
+are retired, never replayed; admission, backing loans, per-request snapshots,
+physical drain and sticky cleanup remain. The native frame bytes and offsets
+are unchanged; a stream now carries successive complete TCP frames. See
+[the owner contract](cpu-tcp.md) and its negative controls.
+
 ## CPU fault matrix
 
 [tests/faults/matrix.tsv](https://github.com/OrbitInfra/OrbiTE/blob/main/tests/faults/matrix.tsv)

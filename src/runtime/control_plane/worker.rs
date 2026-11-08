@@ -23,12 +23,19 @@ impl Slots {
         })
     }
     fn reserve(self: &Arc<Self>) -> Option<Slot> {
-        self.used
-            .fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| {
-                (n < self.limit).then_some(n + 1)
-            })
-            .ok()
-            .map(|_| Slot(self.clone()))
+        let mut used = self.used.load(Ordering::Acquire);
+        while used < self.limit {
+            match self.used.compare_exchange_weak(
+                used,
+                used + 1,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => return Some(Slot(self.clone())),
+                Err(actual) => used = actual,
+            }
+        }
+        None
     }
 }
 

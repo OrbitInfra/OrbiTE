@@ -97,7 +97,8 @@ foreign-requester, cleanup-held and concurrent reclaim/open/admit/close controls
 check that only an explicit authoritative open can recreate admission.
 
 After drain, each transport removes only matching requester resources. TCP
-sockets live in the drained call. HP-TCP caches now key lanes by control endpoint
+leases an epoch-keyed cached stream to the drained call; retirement then closes
+that stream. HP-TCP caches key lanes by control endpoint
 and epoch. SHM imports include that pair in their mapping key. RDMA fences its
 matching endpoint arrays and uses the existing CQ retirement receipt; registration
 MRs, contexts and workers remain shared. NVLink and MNNVL close matching relocation
@@ -166,6 +167,20 @@ request framing and source handlers, and dispatches payload work to the sibling
 TCP, RDMA and NVLink transports. RDMA negotiates paths, connections and exact
 memory grants over the control connection and moves bytes through verbs; see
 [wire boundaries](tent-parity.md#wire-and-consumer-boundaries).
+
+Ordinary TCP follows HP-TCP's exclusive clean/dirty stream ownership, using the
+existing caller/batch and control workers rather than adding a coordinator.
+Both requester and source idle caches charge a bounded `max_peer_segments`
+slot per entry. Direct requests block on deadline-bounded socket readiness;
+staged requests keep bounded progress. Only complete frames permit reuse, and
+the native frame layout is unchanged. This is deliberately stricter than
+TENT's RPC retry pool: no inner replay, no cross-epoch reuse, and failed shutdown
+is sticky `Unquiesced`. `transport::tcp::pool::tests` covers epoch separation,
+borrowed-capacity pressure, idle eviction, EOF before posting and one-shot failed
+cleanup. `runtime::control_plane::tests::tcp_reuse` checks ordered scattered
+bytes, dirty-frame retirement without replay and idle source admission. The
+held-reply peer-retirement control proves a timeout cannot release backing or
+close the active stream before the drain receipt.
 
 HP-TCP is built into the CPU transport set and is disabled by default. When
 enabled, it replaces the ordinary TCP payload and retains the control service.
