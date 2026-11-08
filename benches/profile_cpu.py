@@ -48,13 +48,17 @@ def record(out, executables, args, env, tent_env):
         if value.get("verified") is not True or len(value["samples_ns"]) != samples:
             raise ValueError("profile did not finish every byte check")
 
-    shapes = [("tcp", 1, "contiguous"), ("tcp", 64, "gapped"),
-              ("io_uring-tmpfs", 1, "contiguous"), ("io_uring-ext4", 64, "gapped")]
-    for profile, batch, layout in shapes:
+    shapes = [("tcp", 4096, 1, "contiguous"), ("tcp", 4096, 64, "gapped"),
+              ("io_uring-tmpfs", 4096, 1, "contiguous"),
+              ("io_uring-ext4", 4096, 64, "gapped"),
+              ("hp_tcp", 1 << 20, 1, "contiguous")]
+    for profile, block, batch, layout in shapes:
         backend = "io_uring" if profile.startswith("io_uring") else profile
         directory = args.ext4 if profile.endswith("ext4") else args.tmpfs
         for op in ("read", "write"):
             for implementation, exe in executables:
+                if profile == "hp_tcp" and implementation == "tent":
+                    continue  # The matched reference executable exposes CPU/TCP/io_uring only.
                 name = f"{implementation}-{profile}-{op}-{batch}"
                 path = directory.resolve() / ("orbite-profile-" + name)
                 if path.exists():
@@ -62,7 +66,7 @@ def record(out, executables, args, env, tent_env):
                 overrides = tent_env if implementation == "tent" else {}
 
                 def command(samples):
-                    return [exe, backend, op, 4096, batch, layout, args.warmup,
+                    return [exe, backend, op, block, batch, layout, args.warmup,
                             samples, args.workers, path]
 
                 try:
@@ -94,7 +98,7 @@ def record(out, executables, args, env, tent_env):
                                                        "--", *command(args.samples)], overrides)
                     verified(output, args.samples)
                     records.append({"implementation": implementation, "profile": profile, "op": op,
-                                    "block": 4096, "batch": batch, "layout": layout,
+                                    "block": block, "batch": batch, "layout": layout,
                                     "warmup": args.warmup, "samples": args.samples, "cpu_samples": cpu_samples,
                                     "syscalls": rates, "verified": True})
                     (root / "summary.json").write_text(json.dumps(records, indent=2) + "\n")
