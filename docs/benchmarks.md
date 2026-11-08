@@ -449,6 +449,17 @@ owner to the worker if still pending. Expiry would remain a handoff trigger,
 never a release receipt. This needs a separate submission-latency/lifetime
 review and measurement; no wait, pool or new worker is introduced here.
 
+The [paired control run](https://github.com/OrbitInfra/OrbiTE/actions/runs/42522826931)
+uses `7e40c7b` → `23f6911` on each toolchain: identical production sources and
+workload hashes, with the ordinary S26 three trials, 100 samples and byte checks.
+All 480 rows per side, including every slower row, go in the
+[PR's complete tables](https://github.com/OrbitInfra/OrbiTE/pull/184).
+Reproduce them with `benches/compare.py BEFORE AFTER --changed-profile none`.
+All payloads are marked unchanged. Differences in this control pair are
+run/build-placement variation, not an optimization result; comparison with
+unchanged TENT bounds the interpretation without claiming statistical
+equivalence or dismissing a large regression. Raw results remain outside Git.
+
 ## CPU fault matrix
 
 [tests/faults/matrix.tsv](https://github.com/OrbitInfra/OrbiTE/blob/main/tests/faults/matrix.tsv)
