@@ -411,6 +411,8 @@ impl WorkerContext {
         loop {
             exit.lanes
                 .append(&mut self.pending.lock().unwrap_or_else(|p| p.into_inner()));
+            #[cfg(test)]
+            tests::before_pass(&exit.lanes);
             let stopping = self.stopping.load(Ordering::Acquire);
             if stopping && exit.lanes.is_empty() {
                 return;

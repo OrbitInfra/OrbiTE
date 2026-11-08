@@ -2671,6 +2671,15 @@ worker post ordering and bounded greedy deadline/bandwidth formula are the
 reference. [The dispatch contract](rdma-cuda.md#request-priority-and-bandwidth-arbitration)
 records scope and deliberate differences.
 
+Current CPU controls hold the entire worker before its context snapshots and
+retain the exact FIFO/deadline post-order assertions. The negative control
+`pausing_one_lane_cannot_include_a_registration_after_another_lanes_snapshot`
+forces late registration between two snapshots without sleeps. The CI stability
+mode `.github/scripts/repeat-runtime-controls.sh "$binary" rdma-priority`
+repeats both controls 1,000 times under bounded CPU load on both toolchains.
+This is fixture synchronization evidence; it changes no production arbitration
+and does not qualify installed RDMA ordering.
+
 The recorded controls covered ordinary/sliced public requests retaining Medium/Low,
 the former TCP/NVLink preflight rejection, actual worker dispatch across two contexts under
 one shared CQ credit in polling and event-driven modes, FIFO versus enabled

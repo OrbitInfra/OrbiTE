@@ -11,9 +11,29 @@ struct Gate {
     entered: bool,
     events: bool,
     posted: Vec<u64>,
+    pause_after: Option<usize>,
+    snapshotted: bool,
 }
 static SERIAL: Mutex<()> = Mutex::new(());
 static GATE: OnceLock<(Mutex<Gate>, Condvar)> = OnceLock::new();
+
+pub(super) fn before_pass(lanes: &[Lane]) {
+    if !lanes
+        .iter()
+        .any(|lane| lane.state.config.device.as_deref() == Some("priority_copy"))
+    {
+        return;
+    }
+    let (lock, changed) = GATE.get_or_init(Default::default);
+    let mut gate = lock.lock().unwrap();
+    gate.snapshotted = false;
+    // Stop before any context snapshot, not halfway through a worker pass.
+    while gate.hold && gate.pause_after.is_none() {
+        gate.entered = true;
+        changed.notify_all();
+        gate = changed.wait(gate).unwrap();
+    }
+}
 
 pub(super) fn before_tick(state: &ProgressState) {
     if state.config.device.as_deref() != Some("priority_copy") {
@@ -21,10 +41,21 @@ pub(super) fn before_tick(state: &ProgressState) {
     }
     let (lock, changed) = GATE.get_or_init(Default::default);
     let mut gate = lock.lock().unwrap();
-    while gate.hold {
-        gate.entered = true;
-        changed.notify_all();
-        gate = changed.wait(gate).unwrap();
+    if gate.pause_after == Some(std::ptr::from_ref(state) as usize) {
+        gate.snapshotted = true;
+        // If this is the last context, revisit with the next rotation instead
+        // of parking an otherwise idle worker before reaching the pause.
+        if gate.hold {
+            thread::current().unpark();
+        }
+    } else {
+        // Reproduce the old fixture: a previous lane has already snapshotted,
+        // and this lane has not. Reset at before_pass to keep this in one pass.
+        while gate.hold && gate.pause_after.is_some() && gate.snapshotted {
+            gate.entered = true;
+            changed.notify_all();
+            gate = changed.wait(gate).unwrap();
+        }
     }
 }
 
@@ -81,6 +112,32 @@ impl Drop for Release {
 #[test]
 fn shared_worker_dispatches_priority_then_optional_deadline_across_contexts() {
     let _serial = SERIAL.lock().unwrap();
+    for (arbitrate, events) in [(false, false), (true, false), (false, true), (true, true)] {
+        let expected = if arbitrate {
+            [4, 2, 1, 0, 3]
+        } else {
+            [2, 4, 1, 0, 3]
+        };
+        assert_eq!(
+            dispatch_order(arbitrate, events, false),
+            expected,
+            "arbitrate={arbitrate}"
+        );
+    }
+}
+
+#[test]
+fn pausing_one_lane_cannot_include_a_registration_after_another_lanes_snapshot() {
+    let _serial = SERIAL.lock().unwrap();
+    for events in [false, true] {
+        // Grant 4 is registered after its context snapshot. Grant 2 can post in
+        // that pass, so the later, more urgent grant cannot overtake it. The
+        // full-pass fixture above includes both and requires [4, 2, 1, 0, 3].
+        assert_eq!(dispatch_order(true, events, true), [2, 4, 1, 0, 3]);
+    }
+}
+
+fn dispatch_order(arbitrate: bool, events: bool, after_snapshot: bool) -> Vec<usize> {
     static VERBS: sys::Verbs = sys::Verbs {
         discover,
         post,
@@ -91,99 +148,105 @@ fn shared_worker_dispatches_priority_then_optional_deadline_across_contexts() {
         post,
         ..crate::transport::rdma::cq::tests::VERBS
     };
-    for (arbitrate, events) in [(false, false), (true, false), (false, true), (true, true)] {
-        let mut runtime = if events {
-            fixture::event_runtime("priority_copy")
-        } else {
-            fixture::runtime("priority_copy")
-        };
-        runtime.config.block_size = 64 << 10;
-        runtime.config.block_size = 64 << 10;
-        runtime.config.max_cqes = 16;
-        runtime.config.max_endpoints = 8;
-        runtime.config.max_staging_bytes = 128;
-        runtime.config.max_cqes = 1;
-        runtime.config.deadline_bw_arbitration = arbitrate;
-        runtime.config.priority_promotion_timeout = Duration::from_secs(60);
-        runtime.verbs = if events { &EVENT_VERBS } else { &VERBS };
-        let mut grants: Vec<_> = (0..5)
-            .map(|_| runtime.staging_endpoint(8, 0).unwrap())
-            .collect();
-        assert!(!Arc::ptr_eq(&grants[0].progress, &grants[1].progress));
-        assert!(Arc::ptr_eq(&grants[2].progress, &grants[4].progress));
-        for grant in &mut grants {
-            grant.connect(&grant.descriptor()).unwrap();
-        }
-        let (lock, changed) = GATE.get_or_init(Default::default);
-        *lock.lock().unwrap() = Gate {
-            hold: true,
-            events,
-            ..Default::default()
-        };
-        let release = Release;
-        grants[0].progress.shared.wake();
-        let state = lock.lock().unwrap();
-        let (state, timeout) = changed
-            .wait_timeout_while(state, EVENTUAL_PROGRESS, |gate| !gate.entered)
-            .unwrap();
-        assert!(!timeout.timed_out());
-        drop(state);
-        let end = Instant::now() + Duration::from_secs(20);
-        let mut addresses = Vec::new();
-        for (index, (grant, priority)) in grants
-            .iter()
-            .zip([
-                Priority::Low,
-                Priority::Medium,
-                Priority::High,
-                Priority::Low,
-                Priority::High,
-            ])
-            .enumerate()
-        {
-            let descriptor = grant.descriptor();
-            addresses.push(descriptor.address);
-            grant
-                .progress
-                .submit(
-                    &grant.record,
-                    grant.claim,
-                    descriptor,
-                    TransferOp::Read,
-                    priority,
-                    if index == 4 {
-                        end - Duration::from_secs(10)
-                    } else {
-                        end
-                    },
-                )
-                .unwrap();
-        }
-        drop(release);
-        for grant in &grants {
-            grant
-                .progress
-                .wait(&grant.record, grant.claim, end)
-                .unwrap();
-        }
-        let expected = if arbitrate {
-            [4, 2, 1, 0, 3]
-        } else {
-            [2, 4, 1, 0, 3]
-        };
-        assert_eq!(
-            lock.lock().unwrap().posted,
-            expected.map(|index| addresses[index]),
-            "arbitrate={arbitrate}"
-        );
-        assert_eq!(runtime.stats().unwrap().work_requests, 0);
-        for grant in &mut grants {
-            grant.close().unwrap();
-        }
-        drop(grants);
-        runtime.close(end).unwrap();
-        assert_eq!(runtime.stats().unwrap().progress_workers, 0);
+    let mut runtime = if events {
+        fixture::event_runtime("priority_copy")
+    } else {
+        fixture::runtime("priority_copy")
+    };
+    runtime.config.block_size = 64 << 10;
+    runtime.config.block_size = 64 << 10;
+    runtime.config.max_cqes = 16;
+    runtime.config.max_endpoints = 8;
+    runtime.config.max_staging_bytes = 128;
+    runtime.config.max_cqes = 1;
+    runtime.config.deadline_bw_arbitration = arbitrate;
+    runtime.config.priority_promotion_timeout = Duration::from_secs(60);
+    runtime.verbs = if events { &EVENT_VERBS } else { &VERBS };
+    // Instantiate both contexts, then add the final two records while paused.
+    // Only the pause boundary differs between the two ordering controls.
+    let initial = 3;
+    let mut grants: Vec<_> = (0..initial)
+        .map(|_| runtime.staging_endpoint(8, 0).unwrap())
+        .collect();
+    assert!(!Arc::ptr_eq(&grants[0].progress, &grants[1].progress));
+    for grant in &mut grants {
+        grant.connect(&grant.descriptor()).unwrap();
     }
+    let (lock, changed) = GATE.get_or_init(Default::default);
+    *lock.lock().unwrap() = Gate {
+        hold: true,
+        events,
+        pause_after: after_snapshot.then(|| Arc::as_ptr(&grants[0].progress.shared) as usize),
+        ..Default::default()
+    };
+    let release = Release;
+    grants[0].progress.shared.wake();
+    let state = lock.lock().unwrap();
+    let (state, timeout) = changed
+        .wait_timeout_while(state, EVENTUAL_PROGRESS, |gate| !gate.entered)
+        .unwrap();
+    assert!(!timeout.timed_out());
+    assert!(state.posted.is_empty());
+    drop(state);
+    for _ in initial..5 {
+        let mut grant = runtime.staging_endpoint(8, 0).unwrap();
+        grant.connect(&grant.descriptor()).unwrap();
+        grants.push(grant);
+    }
+    assert!(Arc::ptr_eq(&grants[2].progress, &grants[4].progress));
+    let end = Instant::now() + Duration::from_secs(20);
+    let mut addresses = Vec::new();
+    for (index, (grant, priority)) in grants
+        .iter()
+        .zip([
+            Priority::Low,
+            Priority::Medium,
+            Priority::High,
+            Priority::Low,
+            Priority::High,
+        ])
+        .enumerate()
+    {
+        let descriptor = grant.descriptor();
+        addresses.push(descriptor.address);
+        grant
+            .progress
+            .submit(
+                &grant.record,
+                grant.claim,
+                descriptor,
+                TransferOp::Read,
+                priority,
+                if index == 4 {
+                    end - Duration::from_secs(10)
+                } else {
+                    end
+                },
+            )
+            .unwrap();
+    }
+    drop(release);
+    for grant in &grants {
+        grant
+            .progress
+            .wait(&grant.record, grant.claim, end)
+            .unwrap();
+    }
+    let order = lock
+        .lock()
+        .unwrap()
+        .posted
+        .iter()
+        .map(|address| addresses.iter().position(|a| a == address).unwrap())
+        .collect();
+    assert_eq!(runtime.stats().unwrap().work_requests, 0);
+    for grant in &mut grants {
+        grant.close().unwrap();
+    }
+    drop(grants);
+    runtime.close(end).unwrap();
+    assert_eq!(runtime.stats().unwrap().progress_workers, 0);
+    order
 }
 
 #[test]
