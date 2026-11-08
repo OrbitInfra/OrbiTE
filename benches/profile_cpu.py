@@ -10,7 +10,7 @@ def syscall_rows(text):
     rows = {}
     for line in text.splitlines():
         fields = line.split()
-        if len(fields) not in (5, 6) or not re.fullmatch(r"[a-z][a-z0-9_]+", fields[-1]):
+        if len(fields) not in (5, 6) or fields[-1] == "total" or not re.fullmatch(r"[a-z][a-z0-9_]+", fields[-1]):
             continue
         try:
             rows[fields[-1]] = {"seconds": float(fields[1]), "calls": int(fields[3]),
@@ -82,9 +82,12 @@ def record(out, executables, args, env, tent_env):
                                    "wall_us_per_batch": (value["seconds"] - setup.get(key, {}).get("seconds", 0)) * 1e6 / delta}
                              for key, value in measured.items()}
                     data = root / (name + ".perf")
-                    output = run(name + "-cpu", [perf, "record", "-q", "-e", "cpu-clock:u", "-F", "999",
-                                                  "--call-graph", "dwarf,8192", "-o", data, "--", *command(args.samples)], overrides)
-                    verified(output, args.samples)
+                    # Short-lived batch threads can finish before a 1 ms sample.
+                    # These high-rate stack samples are diagnostic, never timed results.
+                    cpu_samples = max(args.samples, 1000)
+                    output = run(name + "-cpu", [perf, "record", "-q", "-e", "cpu-clock:u", "-c", "10000",
+                                                  "--call-graph", "dwarf,8192", "-o", data, "--", *command(cpu_samples)], overrides)
+                    verified(output, cpu_samples)
                     path.unlink(missing_ok=True)
                     run(name + "-frames", [perf, "report", "--stdio", "--no-children", "--percent-limit", "0.5", "-i", data], {})
                     output = run(name + "-switches", [perf, "stat", "-x,", "-e", "task-clock,context-switches,cpu-migrations",
@@ -92,9 +95,10 @@ def record(out, executables, args, env, tent_env):
                     verified(output, args.samples)
                     records.append({"implementation": implementation, "profile": profile, "op": op,
                                     "block": 4096, "batch": batch, "layout": layout,
-                                    "warmup": args.warmup, "samples": args.samples,
+                                    "warmup": args.warmup, "samples": args.samples, "cpu_samples": cpu_samples,
                                     "syscalls": rates, "verified": True})
                     (root / "summary.json").write_text(json.dumps(records, indent=2) + "\n")
+                    print(json.dumps(records[-1]), flush=True)
                 finally:
                     path.unlink(missing_ok=True)
     return len(records)
