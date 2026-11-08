@@ -174,6 +174,7 @@ fn peer_errors_are_retried_immediately_and_a_bad_listener_exits() {
         sender,
         &AtomicBool::new(false),
         EVENTUAL_PROGRESS,
+        &[],
     )
     .unwrap_err();
     assert_eq!(err.kind(), io::ErrorKind::InvalidInput);

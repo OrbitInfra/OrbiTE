@@ -22,7 +22,7 @@ records the source alignment. The [design-reference map](tent-parity.md) identif
 
 | Path | Status | Limits |
 | --- | --- | --- |
-| CPU DRAM over TCP | Qualified on Linux CI | [Exact CI jobs and tests](qualification.md#linux-ci-release-profiles): loopback and multi-process byte, restart and lifetime controls; no physical two-host profile. See [CPU and TCP](cpu-tcp.md) |
+| CPU DRAM over TCP | Qualified on Linux CI | [Exact CI jobs and tests](qualification.md#linux-ci-release-profiles): loopback and multi-process byte, restart and lifetime controls, including bounded epoch-scoped TCP reuse and dirty-stream retirement; no physical two-host profile. See [CPU and TCP](cpu-tcp.md) |
 | Host DRAM over RDMA | Accepted (RoCE) | Two-host RoCEv2 READ/WRITE with restart, cleanup and in-flight DMA faults. InfiniBand and physical link or device loss are unqualified. See [RDMA and CUDA](rdma-cuda.md) |
 | GPUDirect RDMA | Accepted (H20/RoCE, with limits) | Host/GPU READ/WRITE and two-rail slices. The H20 evidence covers private GPU source grants. Opt-in GPU source QP/MR reuse is implemented; installed profile unqualified. Host-wide context non-growth is unqualified |
 | CUDA IPC / NVLink on one host | Accepted (H20, cooperative profiles) | GPU/GPU, pinned host/GPU, subbatch reuse and a fixed-working-set import cache. Grouped completion, stream pool, native batch copy, cache reclamation and the single-task synchronous path await installed verification. See [CUDA IPC](cuda-ipc.md) |

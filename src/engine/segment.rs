@@ -50,6 +50,9 @@ impl TransferEngine {
 
     fn retire_peer_resources(&self, peer: PeerKey, deadline: Instant) -> Result<()> {
         let mut failure = None;
+        if let Err(error) = self.tcp.close_peer(peer) {
+            failure.get_or_insert(error);
+        }
         if let Some(credits) = &self.receiver_credits {
             if let Err(e) = credits.close_peer(peer, deadline) {
                 failure.get_or_insert(e);
@@ -84,9 +87,8 @@ impl TransferEngine {
                 failure.get_or_insert(e);
             }
         }
-        // TCP has no persistent requester sockets. Their admitted call owns the
-        // socket and backing until drain. Shared registration MRs, contexts and
-        // worker pools belong to the engine, not to this peer.
+        // Shared registration MRs, contexts and worker pools belong to the
+        // engine, not to this peer.
         failure.map_or(Ok(()), Err)
     }
 }

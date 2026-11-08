@@ -51,6 +51,8 @@ def main():
     p.add_argument("--sizes", type=int, nargs="+", default=[4096, 65536, 1048576, 67108864])
     p.add_argument("--batches", type=int, nargs="+", default=[1, 8, 64])
     p.add_argument("--trials", type=int, default=3)
+    p.add_argument("--profile", action="store_true", help="also collect strace/perf evidence for the slow-path targets")
+    p.add_argument("--profile-only", action="store_true", help="collect profiles without reporting traced timings as benchmark rows")
     a = p.parse_args()
     out, ref = a.output.resolve(), a.reference.resolve()
     if out.is_relative_to(ROOT) or out.is_relative_to(ref) or platform.system() != "Linux":
@@ -113,6 +115,13 @@ def main():
         text = run(name+"-bad-byte", [exe, "tcp", "read", 4096, 1, "contiguous", 1, 1, a.workers, "-"], overrides=({**(tent_env if name == "tent" else {}), "ORBITE_BENCH_CORRUPT_BYTE": "1"}), expect_failure=True)
         if '"verified":true' in text:
             raise ValueError("corrupted guard produced a report")
+    if a.profile or a.profile_only:
+        from profile_cpu import record
+        manifest["profile_cases"] = record(out, [("orbite", rust), ("tent", tent)], a, env, tent_env)
+        if a.profile_only:
+            manifest["status"] = "passed-profiles"
+            (out / "manifest.json").write_text(json.dumps(manifest, indent=2)+"\n")
+            return
     shapes = [(size, 1, "contiguous") for size in a.sizes]
     shapes += [(4096, n, shape) for n in a.batches if n != 1 for shape in ("contiguous", "gapped")]
     rows = []

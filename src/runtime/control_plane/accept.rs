@@ -58,6 +58,7 @@ pub(super) fn run(
     sender: mpsc::SyncSender<(TcpStream, Instant)>,
     stopping: &AtomicBool,
     timeout: Duration,
+    workers: &[Arc<mio::Waker>],
 ) -> io::Result<()> {
     let mut events = mio::Events::with_capacity(2);
     let mut warned = false;
@@ -78,7 +79,11 @@ pub(super) fn run(
                 if stream.set_nonblocking(false).is_ok() && stream.set_nodelay(true).is_ok() {
                     if let Ok(deadline) = deadline(timeout) {
                         // The fixed queue and worker count bound sockets and payloads.
-                        let _ = sender.try_send((stream, deadline));
+                        if sender.try_send((stream, deadline)).is_ok() {
+                            for worker in workers {
+                                let _ = worker.wake();
+                            }
+                        }
                     }
                 }
                 continue;

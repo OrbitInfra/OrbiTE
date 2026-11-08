@@ -95,6 +95,9 @@ fn peer_retirement_tcp_reply_drain_keeps_backing_and_allows_another_peer() {
     stream.write_all(&[0x52; 8]).unwrap();
     assert_eq!(batch.wait(wait).unwrap().completed_tasks, 1);
     close.join().unwrap().unwrap();
+    // The completed stream is cached only until the peer's drain receipt.
+    // Retirement closes it, rather than leaving an epoch-scoped lane behind.
+    assert_eq!(stream.read(&mut [0]).unwrap(), 0);
     memory.read(0, &mut got).unwrap();
     assert_eq!(
         got,

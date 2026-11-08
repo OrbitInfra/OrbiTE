@@ -400,6 +400,7 @@ pub struct EngineStats {
 
 /// Engine, source registry and bounded control-service handler ownership.
 pub struct TransferEngine {
+    tcp: TcpTransport,
     hp_tcp: Option<crate::transport::hp_tcp::HpTcpTransport>,
     #[cfg(feature = "metrics")]
     metrics: Option<crate::metrics::Metrics>,
@@ -599,6 +600,7 @@ impl TransferEngine {
             SenderCreditLedger::new(config.max_receiver_credit_sessions, runtime_queue.as_ref())
         });
         let engine = Self {
+            tcp: TcpTransport::new(config.max_peer_segments),
             hp_tcp,
             #[cfg(feature = "metrics")]
             metrics: None,
@@ -2416,6 +2418,7 @@ impl TransferEngine {
                 .0;
         }
         drop(usage);
+        self.tcp.close()?;
         self.peers.close_cleanup(deadline)?;
         self.files.close_all(deadline)?;
         #[cfg(feature = "io-uring")]

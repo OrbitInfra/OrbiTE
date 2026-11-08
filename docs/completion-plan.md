@@ -440,8 +440,10 @@ bounded ownership, no early reuse and eventual cleanup.
 
 Requirements: F22 and the applicable accepted backend and compatibility profiles.
 S26 implements reproducible, byte-checked CPU/TCP/io_uring comparisons against
-frozen TENT, plus OrbiTE HP-TCP/SHM sweeps ([method](benchmarks.md)). No tuning or
-general performance claim follows from these scoped runs. Add NIXL (for example
+frozen TENT, plus OrbiTE HP-TCP/SHM sweeps ([method](benchmarks.md)). The CPU
+performance pass profiles those same owners before changing them: bounded TCP
+stream reuse comes first; file submission, ext4 tails and bookkeeping remain
+separate measured steps. These scoped runs make no general performance claim. Add NIXL (for example
 NIXL+UCX) as a second baseline during the hardware P11 pass; there is no NIXL
 dependency in this step.
 

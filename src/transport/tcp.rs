@@ -1,3 +1,4 @@
+mod pool;
 mod task;
 
 pub(crate) use task::TcpTask;
@@ -6,15 +7,37 @@ use std::time::Instant;
 
 use crate::engine::{PreparedTransfer, remaining};
 use crate::runtime::control_plane::{ControlChannel, Operation, Request, buffer};
+use crate::runtime::segment_manager::PeerKey;
 use crate::{
     Error, RegisteredMemory, RemoteEffect, RemoteSegment, Result, SourceEpoch, TransferOp,
 };
 
 /// Standard TCP READ/WRITE payload ownership, independent of native RDMA.
-pub(crate) struct TcpTransport;
+pub(crate) struct TcpTransport {
+    pool: pool::Pool,
+}
 
 impl TcpTransport {
+    #[cfg(test)]
+    pub(crate) fn set_shutdown(
+        &mut self,
+        shutdown: fn(&std::net::TcpStream) -> std::io::Result<()>,
+    ) {
+        self.pool.set_shutdown(shutdown);
+    }
+    pub(crate) fn new(capacity: usize) -> Self {
+        Self {
+            pool: pool::Pool::new(capacity),
+        }
+    }
+    pub(crate) fn close_peer(&self, peer: PeerKey) -> Result<()> {
+        self.pool.close_peer(peer)
+    }
+    pub(crate) fn close(&self) -> Result<()> {
+        self.pool.close()
+    }
     pub(crate) fn transfer(
+        &self,
         operation: TransferOp,
         peer: &RemoteSegment,
         request: &PreparedTransfer,
@@ -33,32 +56,26 @@ impl TcpTransport {
             proxy,
         )
         .map_err(|error| (error, RemoteEffect::None))?;
-        let mut channel = ControlChannel::connect(peer.endpoint, deadline)
+        let mut lane = self
+            .pool
+            .checkout(peer.into(), deadline)
             .map_err(|error| (error, RemoteEffect::None))?;
         let result = (|| {
-            let mut idle = 0u32;
             loop {
                 let mut advanced = false;
-                if task.progress(
-                    &mut channel,
+                if task.progress_blocking(
+                    lane.channel()?,
                     &mut advanced,
                     #[cfg(feature = "cuda")]
                     proxy,
                 )? {
                     return Ok(());
                 }
-                if advanced {
-                    idle = 0;
-                } else {
-                    crate::runtime::progress_worker::wait_for_poll(
-                        u64::from(idle),
-                        remaining(deadline)?,
-                    );
-                }
-                idle = idle.saturating_add(1);
             }
         })();
         *posted = task.payload_started();
+        lane.finish(result.is_ok())
+            .map_err(|error| (error, task.effect()))?;
         result.map_err(|error| (error, task.effect()))
     }
 

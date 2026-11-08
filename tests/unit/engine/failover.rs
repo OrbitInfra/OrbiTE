@@ -448,12 +448,17 @@ mod native {
             let epoch = peer.source_epoch();
             let server = std::thread::spawn(move || {
                 let mut image = [0x2a; 12];
+                let mut tcp = None;
                 for op in [
                     Operation::TcpWrite,
                     Operation::RdmaWrite,
                     Operation::TcpWrite,
                 ] {
-                    let (mut stream, _) = listener.accept().unwrap();
+                    let mut stream = if op == Operation::TcpWrite {
+                        tcp.take().unwrap_or_else(|| listener.accept().unwrap().0)
+                    } else {
+                        listener.accept().unwrap().0
+                    };
                     stream.set_read_timeout(Some(WAIT)).unwrap();
                     let mut header = [0; REQUEST_SIZE];
                     stream.read_exact(&mut header).unwrap();
@@ -497,7 +502,9 @@ mod native {
                             )
                             .unwrap();
                     }
+                    tcp = Some(stream);
                 }
+                drop(tcp);
                 image
             });
             let mut first = p.request(2, 2);

@@ -151,6 +151,7 @@ pub struct EngineConfig {
     pub max_file_segments: usize,
     /// Live endpoint/epoch identities, including referenced retirement fences
     /// and failed native cleanup. Unreferenced safe entries are reclaimed; at most 4096.
+    /// Also bounds each separate TCP ledger: requester lanes and source idle streams.
     pub max_peer_segments: usize,
     /// Maximum descriptors in one transfer or host-registration batch.
     pub max_batch_requests: usize,

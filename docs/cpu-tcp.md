@@ -24,16 +24,39 @@ protocol, source admission and dispatch. TENT keeps its TCP payload handlers in
 a `ControlChannel` for setup without going through `TcpTransport`. Cache keys,
 replica grants and recovery policy stay with OrbitKV.
 
-Each ordinary TCP request opens a connection. The control acceptor waits for
-socket readiness and hands each accepted stream to the bounded handler queue.
-A full queue closes the new connection. A peer reset or timeout leaves the
-listener available. Descriptor or memory exhaustion logs once per burst and
-retries on a bounded interval, even with clients waiting. A fatal listener
-error is logged. Shutdown signals the same acceptor and
-joins it before the handlers. Both ends enable TCP_NODELAY. The previous
-2 ms sleep after an empty accept delayed short loopback READs by an idle
-polling interval. The S10 benchmark measures this path with a 64-byte payload
-and checks both guards.
+Ordinary TCP leases one exclusive stream per endpoint and authoritative source
+epoch to the executing caller or batch worker. Completed frames reuse it;
+WRITEs on that stream stay ordered. Concurrent direct-TCP submissions to that
+peer serialize on this lane; independent peers have separate lanes. The requester pool uses
+`max_peer_segments` slots, including borrowed and uncertain entries. At capacity
+it can evict only an idle, clean, unreferenced entry. A busy or failed entry
+stays charged. `close_segment` fences admission and drains the peer before
+closing its cached stream. No new worker thread or public configuration field
+is added.
+
+The existing control workers monitor idle streams through `mio` readiness.
+Idle streams hold neither source-memory admission nor registration loans. Their
+shared cache is also bounded by `max_peer_segments`, in addition to the fixed
+active handlers and bounded accept queue. Each complete TCP frame gets fresh
+source admission and the existing handler deadline. Direct TCP waits on the
+socket with deadline-bounded waits; the staged CUDA pipeline retains its
+bounded nonblocking progress path.
+
+A timeout, partial frame, invalid reply, lost acknowledgement or abandoned lease
+retires the stream; it never returns to the cache. A confirmed EOF on an idle,
+already completed stream can reconnect **before** the next request posts.
+There is no transport-local replay. Failed socket retirement returns
+`Unquiesced`, retains the descriptor and its slot, and is never attempted again.
+The existing task owner keeps backing and transfer charges on that outcome.
+Running TCP cancellation remains unsupported; queued cancellation posts nothing.
+
+The control acceptor uses readiness and a bounded handler queue. A full queue
+closes the new connection. Peer resets/timeouts leave the listener available;
+resource exhaustion logs once per burst and retries on a bounded interval.
+Fatal listener errors are logged. Shutdown wakes and joins the acceptor and
+handlers. Both ends enable TCP_NODELAY. See the
+[profile and matched measurements](benchmarks.md#tcp-profile-and-connection-reuse)
+for the measured costs and limits.
 
 ## Rust contracts
 

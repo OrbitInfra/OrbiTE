@@ -1034,14 +1034,15 @@ fn dropping_async_handle_retains_engine_allocator_and_capacity_until_worker_exit
     let (admitted_tx, admitted_rx) = mpsc::channel();
     let (release_tx, release_rx) = mpsc::channel();
     let handler = thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        let mut channel = ControlChannel {
+            stream,
+            deadline: deadline(TIMEOUT).unwrap(),
+            stopping: None,
+            nonblocking: false,
+        };
         for index in 0..2 {
-            let (stream, _) = listener.accept().unwrap();
-            let mut channel = ControlChannel {
-                stream,
-                deadline: deadline(TIMEOUT).unwrap(),
-                stopping: None,
-                nonblocking: false,
-            };
+            channel.deadline = deadline(TIMEOUT).unwrap();
             channel.read_exact(&mut [0; REQUEST_SIZE]).unwrap();
             if index == 0 {
                 admitted_tx.send(()).unwrap();
@@ -1689,9 +1690,9 @@ fn shuffled_owners_keep_the_public_failure_prefix_and_do_not_replay_a_write() {
         });
         let epoch = peer.epoch;
         let handle = thread::spawn(move || {
+            let (mut s, _) = listener.accept().unwrap();
+            s.set_read_timeout(Some(timeout)).unwrap();
             for (off, len) in [(0, 4), (5, 2)] {
-                let (mut s, _) = listener.accept().unwrap();
-                s.set_read_timeout(Some(timeout)).unwrap();
                 let mut h = [0; REQUEST_SIZE];
                 s.read_exact(&mut h).unwrap();
                 let r = Request::decode(&h).unwrap();
@@ -1722,6 +1723,7 @@ fn shuffled_owners_keep_the_public_failure_prefix_and_do_not_replay_a_write() {
                     assert_eq!(bytes, [6, 7]);
                 } // second WRITE loses its final receipt
             }
+            drop(s);
             listener
         });
         let (completed, bytes, index, span, effect) = if asynchronous {
@@ -1875,6 +1877,8 @@ fn accept_readiness_preserves_bounded_handoff_and_serves_the_next_connection() {
 
 #[path = "control_plane/peer_retirement.rs"]
 mod peer_retirement;
+#[path = "control_plane/tcp_reuse.rs"]
+mod tcp_reuse;
 
 #[cfg(target_os = "linux")]
 #[test]
