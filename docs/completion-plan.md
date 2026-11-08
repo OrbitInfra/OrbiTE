@@ -39,7 +39,7 @@ artifacts and hardware profiles.
 
 | Stage | Concrete delivery | Prerequisites | Current state |
 | --- | --- | --- | --- |
-| P0 | Frozen contracts, test mapping and differential oracle | Reference inventory | CPU oracle and S16 acceptance inventory/wire fixtures implemented; broader differential fault and performance cases open |
+| P0 | Frozen contracts, test mapping and differential oracle | Reference inventory | CPU oracle and native-boundary rejection fixtures implemented; broader differential fault and performance cases open |
 | P1 | Rust engine, configuration and resource ownership | Frozen P0 subset | P1.1–P1.5 and S0 implemented; broader P1 open |
 | P2 | P2P control plane and standard TCP path | Corresponding P1 substage | P2.1–P2.3 and S0b implemented; broader P2 open |
 | P3 | HP-TCP and shared-memory paths | P2 | Complete at source level |
@@ -48,7 +48,7 @@ artifacts and hardware profiles.
 | P6 | Routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | Complete at source level. Installed RDMA profiles remain in the verification queue |
 | P7 | File, io_uring and GDS paths | P2; GDS also P5 | S1–S5 complete at source level. DRAM/file io_uring qualified in Linux CI. Installed CUDA staging and native GDS gates unrun |
 | P8 | Additional CPU/NVIDIA-compatible network providers | P1/P2; relevant P4–P6 | P8.2 libfabric implemented; EFA unqualified. P8.1 MPComm is deferred: no consumer; provider unavailable |
-| P9 | Rust/Python and operational compatibility | P0/P2/P6 | Configuration and Python CPU/TCP wheels qualified on Linux CI; beta.1 freeze decisions recorded; S19/S20/S22 removed and out of scope |
+| P9 | Rust/Python APIs and operations | P0/P2/P6 | OrbiTE configuration and Python CPU/TCP qualified on Linux CI; S19/S20/S22 removed and out of scope |
 | P10 | Cross-backend fault and lifetime acceptance | Relevant P3–P9 deliveries | CPU fixture matrix implemented; installed acceptance remains open |
 | P11 | Consumer integration, matched performance and release | Accepted P2–P10 profiles | Scoped CPU comparisons implemented; consumer/hardware release gates remain open |
 
@@ -91,8 +91,9 @@ direct/staged batches. S15b implements OrbitKV's local GPU↔pinned DRAM
 copy mechanics on the caller's stream, including strided DMA, batched 1D
 copies and a mapped-host kernel. The [installed comparison](qualification.md#caller-stream-local-cuda-copy)
 and the P5 hardware verification queue remain open.
-S16 freezes the reference acceptance inventory and native wire fixtures. S17
-implements F01 against its configuration, environment and precedence cases.
+S16 reference fixtures remain only where the oracle or native wire controls use them.
+S17 TENT configuration compatibility is superseded by OrbiTE JSON/file/ORBITE_CONF
+snapshots. S21 compatibility is superseded by the Rust-shaped Python API.
 S19 (C ABI) and S20 (C++/classic TE) are removed and out of scope.
 The P2P-only discovery boundary precedes S21. External etcd/Redis/HTTP stores,
 cluster membership and KV indexes belong to the consumer; S18 is out of scope
@@ -131,13 +132,10 @@ Done:
   observations, and six comparator controls must reject broken results. See
   [CPU oracle](cpu-oracle.md). It covers selected valid-input CPU behavior only.
 
-- **S16 — acceptance inventory and wire fixtures (Implemented).** The
-  [reference inventory](https://github.com/OrbitInfra/OrbiTE/tree/main/tests/reference/inventory)
-  maps all 33 C functions, configuration and environment inputs, direction flags,
-  metrics, metadata, logical RPCs and 88 reference test sources. A native C probe
-  freezes LP64 layouts. The pinned C++ codecs and loopback dispatcher check
-  control RPCs, memory/file metadata, HP-TCP frames and provider attributes.
-  S17 and S21 extend their in-scope cases with evidence; C/C++/plugin rows remain reference-only and explicitly out of scope.
+- **S16 — reference fixtures.** Retain the CPU trace contract and three frozen
+  request prefixes used by native-listener rejection. Compatibility inventories
+  and unused codec/metadata captures are removed; OrbiTE's wire fixtures live
+  beside their native owners.
 
 Open:
 
@@ -150,8 +148,7 @@ Open:
 - [ ] Write the run-manifest schema and freeze workload-specific resource and
   performance guards before formal measurements.
 
-Exit: any inventory row resolves to its reference path, Rust owner, test trigger
-and result format, and the oracle runs its CPU controls independently of OrbitKV.
+Exit: every in-scope owner has reference paths, negative controls and result formats, and the oracle runs its CPU controls independently of OrbitKV.
 
 ## P1 — Core engine and physical ownership
 
@@ -185,7 +182,7 @@ Open:
 - [ ] Explicit separation of logical outcome and physical quiescence for every
   remaining owner, with unregister retry and documented unsafe raw-pointer APIs.
 - [ ] CPU allocation, copy and probing. P6 covers merge/alias ownership.
-- [x] TENT file, inline and constructor precedence, effective per-engine settings and path diagnostics (F01, S17).
+- [x] OrbiTE JSON/file/ORBITE_CONF snapshots, strict types and path diagnostics; TENT compatibility is out of scope.
 
 Exit: CPU property and negative tests, concurrent registration and shutdown
 controls, and allocator failure and partial-construction tests pass on
@@ -265,7 +262,7 @@ observation; neither proves termination of physically interrupted DMA. Process-
 local syscall and dependency faults prove retention, not spontaneous hardware
 error coverage. RoCE results never satisfy the InfiniBand profile. Priority,
 spraying and retry policy belong to P6, GPU paths to P5/P7 and native API/wire
-compatibility to P9.
+public API review to P9.
 
 ## P5 — CUDA, GPUDirect and staged transfers
 
@@ -330,7 +327,7 @@ Source-level exit complete. The following contracts have CPU controls.
 - **Priority and arbitration.** RDMA High/Medium/Low dispatch across contexts,
   TENT's urgency ordering, head-only or per-entry aging and shared priority
   slots; TCP and NVLink accept every priority as advisory.
-- **QoS contracts.** Typed and TENT-format JSON global/tenant/intent policies
+- **QoS contracts.** Typed and OrbiTE JSON global/tenant/intent policies
   with per-contract byte/request caps and delay/reject admission.
 - **Quotas and credits (S11, F15).** Each NIC accounts its own slices. Host
   processes share the mapped priority slot. The sender ledger atomically
@@ -342,7 +339,7 @@ Source-level exit complete. The following contracts have CPU controls.
 - **Progress and notifications (F09/F11).** One bounded progress turn,
   observational status, optional event worker, deferred retirement and
   target-specific notification receipts with transport and control RPC fallback.
-- **Metrics (S10, F20).** The opt-in TENT exporter records physical attempts, logical results, failure reasons and bounded-owner gauges. CPU and TCP measurements compare disabled and enabled recording. See [metrics](metrics.md).
+- **Metrics (S10, F20).** The opt-in OrbiTE exporter records physical attempts, logical results, failure reasons and bounded-owner gauges. CPU and TCP measurements compare disabled and enabled recording. See [metrics](metrics.md).
 - **RDMA rail health (S9, F18).** A pair-level circuit under the existing
   context monitor gates new slices. Recovery requires a native probe receipt.
   Real link-loss qualification is queued. See [rail health](rdma-cuda.md#rail-health).
@@ -391,31 +388,31 @@ unavailable instead of instantiating stubs.
 
 | Substage | Required implementation | Parity IDs | Hardware acceptance |
 | --- | --- | --- | --- |
-| P8.1 | Deferred: no consumer; provider unavailable. Keep the MPComm constant recognized and unavailable | B15 | No verification gate; revisit with a consumer, provider and hardware |
+| P8.1 | Deferred: no consumer; provider unavailable. No public identity or provider | B15 | No verification gate; revisit with a consumer, provider and hardware |
 | P8.2 | Implemented: libfabric attributes, bounded exact-range registration, domain progress and host READ/WRITE | B17 | Software `tcp;ofi_rxm` exercised in Linux CI; EFA installed gate written but unrun |
 
 Exit per row: build without the provider, explicit unavailable result,
 fake-provider contract tests, then real installed bytes, permissions, faults,
 drain and peer retirement.
 
-## P9 — External APIs and operational compatibility
+## P9 — Rust and Python APIs
 
-Requirements: F01/F06/F20–F22 and the complete language inventory.
+TENT API, ABI and configuration compatibility are out of scope by design.
 
-- [x] Immutable F01 configuration snapshots and per-key dispositions in the S16 inventory.
-- S19 C ABI and S20 C++/classic TE are removed and out of scope.
-- [x] F21 Python classes, properties, overloads, enums, defaults and context
-  managers; typed errors, GIL release and exporter lifetime through physical drain.
-  Installed-wheel controls map all three S16 Python binding rows and 128 detailed
-  surface rows. S21b adds retained CAI/DLPack CUDA owners with driver-validated
-  bounds, producer readiness and sticky cleanup. Native profiles remain unqualified.
-- [x] F06 P2P-only configuration boundary; S18 external stores and cluster discovery are out of scope by design.
-- [x] Rust per-peer close: fence endpoint/epoch admissions, drain owners and retire matching transport caches. Identity charges follow live handles/operations; safe unreferenced entries reclaim, while uncertain cleanup remains charged. Python segment close retains TENT's reversible handle contract. RNIC/NVLink/MNNVL installed profiles remain unqualified.
-- [x] Metrics names, labels, histograms and HTTP/JSON/Prometheus endpoints (P6).
-- S22/F03 device plugins are removed and out of scope.
+- [x] Immutable OrbiTE JSON/file/ORBITE_CONF snapshots, strict keys and types.
+- [x] Rust-shaped Python owners, batch operations, notifications, file segments
+  and statistics; typed errors, GIL release and exporter lifetime through drain.
+  Retained CAI/DLPack owners validate native bounds and producer readiness.
+  Native GPU profiles remain unqualified.
+- [x] Consumer-owned discovery and authoritative endpoint/epoch input.
+- [x] Rust per-peer close fences admissions, drains owners and retires caches.
+  Live references bound identity charges; uncertain cleanup stays charged.
+  Python segment close releases a handle. RNIC/CUDA retirement remains unqualified.
+- [x] OrbiTE metric names with bounded recording, labels and histograms.
+- S19, S20, S22 and S23 are removed and out of scope.
 
-Exit: independent Rust and Python consumers run the parity cases
-against installed artifacts, with explicit provider/feature matrices.
+Exit: independent Rust and Python consumers exercise installed artifacts with
+explicit provider/feature matrices and physical-lifetime negative controls.
 
 ## P10 — Fault and physical lifetime acceptance
 
@@ -512,7 +509,7 @@ across that series. A breaking wire or Rust API change requires a minor-version
 bump under 0.x semver. Until `0.1.0`, deploy the same build on both peers under
 the [pre-release wire policy](tent-parity.md#wire-and-consumer-boundaries).
 
-**Complete NVIDIA-scope TENT parity** requires every in-scope capability to be
+**Complete NVIDIA-scope design implementation** requires every in-scope capability to be
 accepted; it never claims the excluded accelerators or UB. A slower or
 unqualified feature is recorded as such.
 
@@ -534,7 +531,7 @@ lives under `/root/orbitte-artifacts/` and is valid only for those artifacts.
 | `src/runtime/` | Control plane, transport selection, admission queue, QoS, receiver credits and ProxyManager |
 | `src/transport/tcp/`, `src/transport/rdma/`, `src/transport/nvlink/` | Payload transports and their native resource owners |
 | `src/cuda/`, `src/platform/` | NVIDIA allocation, streams, IPC and host topology |
-| `crates/orbite-python/`, `python/` | Python packaging boundary, retained exporters and TENT-shaped P2P API |
+| `crates/orbite-python/`, `python/` | Python packaging boundary, retained exporters and Rust-shaped P2P API |
 | `tests/` | Unit (mirroring `src/`), integration, reference, fault and installed tests |
 | `benches/` | Future reusable traces and matched-run drivers |
 | `docs/` | Contracts, recipes, support matrix and this plan |

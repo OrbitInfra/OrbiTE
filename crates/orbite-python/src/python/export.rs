@@ -1,5 +1,5 @@
 //! Retained Python buffer and CUDA interchange owners. No integer is an owner.
-use super::{InvalidArgumentError, NotImplementedError};
+use super::{InvalidRangeError, UnavailableError};
 use crate::memory::{ExportKind, Owner};
 use pyo3::{buffer::PyBuffer, prelude::*, types::PyMemoryView};
 use std::sync::Arc;
@@ -25,7 +25,7 @@ pub(super) fn get(value: &Bound<'_, PyAny>) -> PyResult<(usize, usize, Owner)> {
     if value.hasattr("__dlpack__")? && value.hasattr("__dlpack_device__")? {
         let (kind, device): (i32, i32) = value.call_method0("__dlpack_device__")?.extract()?;
         if !matches!(kind, 1 | 2) || device < 0 {
-            return Err(NotImplementedError::new_err(
+            return Err(UnavailableError::new_err(
                 "DLPack registration requires CUDA device memory; use a writable buffer for host storage",
             ));
         }
@@ -55,11 +55,11 @@ pub(super) fn get(value: &Bound<'_, PyAny>) -> PyResult<(usize, usize, Owner)> {
     ))
 }
 fn invalid(message: &str) -> PyErr {
-    InvalidArgumentError::new_err(message.to_owned())
+    InvalidRangeError::new_err(message.to_owned())
 }
 #[cfg(not(feature = "cuda"))]
 fn unavailable() -> PyErr {
-    NotImplementedError::new_err(
+    UnavailableError::new_err(
         "CUDA exporters unavailable: install an orbite wheel built with the cuda feature",
     )
 }

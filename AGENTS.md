@@ -19,19 +19,18 @@ do not turn this file into a second status diary.
   cross-node reuse come first; P/D is a later integration target, not a current
   qualification claim. The [release ladder](docs/completion-plan.md#release-ladder)
   fixes the test-consolidation and post-0.1.0 NIXL design sequence.
-- The capability and architecture reference is Mooncake v0.3.14, frozen at
-  `OrbitInfra/Mooncake@e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c`, directory
-  `mooncake-transfer-engine/tent/`. README, docs site, doc style, module
-  boundaries and naming follow Mooncake/TENT. OrbiTE is Rust and must not
-  depend on the Mooncake C++ runtime; the C++ build is only a test oracle.
+- Architecture, behavior and module boundaries follow Mooncake TENT as a design
+  reference, frozen at `OrbitInfra/Mooncake@e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c`
+  (v0.3.14), directory `mooncake-transfer-engine/tent/`. README, docs site and
+  doc style keep following Mooncake. Public API, configuration and naming are
+  OrbiTE's own: no wire, API or configuration compatibility with TENT.
+  The frozen C++ build is a CPU oracle and benchmark baseline, never a runtime dependency.
 - Platforms: CPU and NVIDIA CUDA only.
 - In-scope transports (9): `TCP`, `HP_TCP`, `SHM`, `RDMA`, `NVLINK`, `MNNVL`,
   `IOURING`, `GDS` are core; `FABRIC` is an optional network module.
-- B15 `MPCOMM` is deferred: no consumer; provider unavailable. Keep its Python
-  constant recognized and unavailable; add no provider implementation.
+- B15 `MPCOMM` is deferred: no consumer; provider unavailable. Add no public identity or provider implementation.
 - Excluded: `UB`/URMA, Ascend, Sunrise, TPU/PJRT, XPU/SYCL, MLU, Hylink,
-  MemFabric and ROCm/HIP. Their Python constants stay recognized and return
-  unavailable. Never implement them or add their SDKs.
+  MemFabric and ROCm/HIP. Do not expose compatibility constants, implement them or add their SDKs.
 - Cluster discovery, membership, KV indexes and external metadata stores
   (etcd, Redis, HTTP) belong to the consumer. OrbiTE is point-to-point and
   keeps only the self-description handshake: segment descriptors,
@@ -504,31 +503,17 @@ codec compute. Keep the consumer contract in [local copies](docs/local-copy.md).
 - Verify byte ranges, event ordering and owner retention with the CUDA shim
   and write the installed GPU gate for the verification queue.
 
-### S16 — P0 inventory and wire freeze [CPU, docs + fixtures]
+### S16 — Reference fixtures
 
-- Map to acceptance cases:
-  - the 33 C functions;
-  - config keys, defaults and environment precedence;
-  - capability bits, metrics and metadata;
-  - wire messages;
-  - the 88 reference C++ sources ending in `test.cpp`.
-- Freeze, with small fixtures in source:
-  - control RPC framing and serialization (`include/tent/rpc/rpc.h`,
-    `src/rpc/rpc.cpp`);
-  - the segment metadata format;
-  - HP-TCP frames and provider bootstrap.
-- Required before S17–S22 and later reference comparisons.
+Compatibility inventories are removed. Keep fixtures only when the CPU oracle
+or a native OrbiTE wire control consumes them. Keep TENT as the frozen design
+reference and performance baseline, including upstream issue/PR work.
 
-### S17 — F01 configuration compatibility [CPU]
+### S17 — Configuration compatibility (superseded)
 
-- **TENT:** `common/config*`, `config_lifecycle*`,
-  `transfer_engine_config_override_test`.
-- **Implement:**
-  - `MC_TENT_CONF` as a file or inline JSON.
-  - Legacy environment mappings and precedence; typed parsing.
-  - Invalid root/path diagnostics.
-  - Immutable per-engine snapshots; never mutate process environment to
-    configure engines.
+TENT configuration compatibility is out of scope by design. The immutable
+OrbiTE loader provides `EngineConfig::from_json`, `from_file` and `from_env`;
+only `ORBITE_CONF` selects an environment document. Unknown keys/types fail.
 
 ### S18 — F06 external metadata stores
 
@@ -536,21 +521,18 @@ Out of scope by design: the consumer owns discovery and etcd/Redis/HTTP; OrbiTE 
 
 ### S19 — C ABI (F21)
 
-Removed and out of scope: no consumer requires a C ABI; retain frozen declarations as reference inventory only.
+Removed and out of scope: no consumer requires a C ABI; Rust and Python own the public interfaces.
 
 ### S20 — C++ adapters and classic-TE shim (F21)
 
 Removed and out of scope: no native or classic-TE adapter is shipped.
 
-### S21 — Python bindings (F21) [CPU]
+### S21 — Python compatibility (superseded)
 
-- **TENT:** `src/python/pybind.cpp`.
-- **Implement:**
-  - Every class, property, overload and context manager.
-  - GIL release during blocking calls.
-  - Buffer/exporter lifetime through native work; guards cannot free
-    submitted work early.
-- Record the tooling choice (for example pyo3 with maturin).
+TENT Python API compatibility is out of scope by design. The OrbiTE Python
+API mirrors Rust owners with PEP 8 names and typed errors. Retain GIL release,
+buffer/CAI/DLPack exporters through physical drain, installed-wheel controls,
+and the CPython 3.10–3.14 x86_64/aarch64 matrix.
 
 ### S22 — Device plugin ABI (F03)
 

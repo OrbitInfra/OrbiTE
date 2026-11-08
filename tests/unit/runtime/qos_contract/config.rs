@@ -3,10 +3,10 @@ use crate::runtime::qos_contract::QosContractResolver;
 use crate::{QosRequestContext, SourceEpoch};
 
 #[test]
-fn tent_json_preserves_enablement_units_and_compiled_overlays() {
+fn json_preserves_enablement_units_and_compiled_overlays() {
+    assert!(QosConfig::from_json(r#"{"other_engine_setting":123}"#).is_err());
     for input in [
         "{}",
-        r#"{"other_engine_setting":123}"#,
         r#"{"qos":null}"#,
         r#"{"qos":{}}"#,
         r#"{"qos":{"version":1}}"#,
@@ -111,7 +111,6 @@ fn tent_json_preserves_enablement_units_and_compiled_overlays() {
         assert_eq!(policy.fields().allowed_degraded_actions, Some(expected));
     }
     let input = r#"{
-        "transports": ["rdma", "tcp"],
         "qos": {
             "version":1,
             "defaults":{"priority":"medium", "max_inflight_requests":128},

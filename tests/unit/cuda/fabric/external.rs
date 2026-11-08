@@ -124,34 +124,10 @@ fn physical_aliases_merge_only_within_the_same_execution_context() -> Result<()>
 }
 
 #[test]
-fn loader_switch_uses_presence_and_allows_typed_disable() {
-    const TEST: &str =
-        "cuda::tests::fabric::external::loader_switch_uses_presence_and_allows_typed_disable";
-    if let Ok(expected) = std::env::var("ORBITE_TEST_MNNVL_SWITCH") {
-        assert_eq!(
-            EngineConfig::default().mnnvl.is_some(),
-            expected == "present"
-        );
-        let c = EngineConfig {
-            mnnvl: None,
-            ..Default::default()
-        };
-        assert!(c.mnnvl.is_none());
-        return;
-    }
-    for enabled in [false, true] {
-        let mut child = std::process::Command::new(std::env::current_exe().unwrap());
-        child.args(["--exact", TEST]).env_remove("MC_ENABLE_MNNVL");
-        if enabled {
-            child.env("MC_ENABLE_MNNVL", "0");
-        }
-        let out = child
-            .env(
-                "ORBITE_TEST_MNNVL_SWITCH",
-                if enabled { "present" } else { "absent" },
-            )
-            .output()
-            .unwrap();
-        assert!(out.status.success(), "{:?}", out);
-    }
+fn mnnvl_is_explicitly_configured_and_typed_disable_stays_disabled() {
+    assert!(EngineConfig::default().mnnvl.is_none());
+    let enabled = EngineConfig::from_json(r#"{"mnnvl":{}}"#).unwrap();
+    assert!(enabled.mnnvl.is_some());
+    let disabled = EngineConfig::from_json(r#"{"mnnvl":null}"#).unwrap();
+    assert!(disabled.mnnvl.is_none());
 }

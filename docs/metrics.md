@@ -17,21 +17,19 @@ and logging. `metrics().http_port()` on the enabled handle returns zero in
 that case. Set `enabled` to false at construction to omit the listener,
 periodic reporter and recording cells.
 
-| File key (under `metrics`) | Environment | Default |
-| --- | --- | --- |
-| `enabled` | `TENT_METRICS_ENABLED` | `true` |
-| `http_host` | `TENT_METRICS_HTTP_HOST` | `0.0.0.0` |
-| `http_port` | `TENT_METRICS_HTTP_PORT` | `9100` |
-| `http_server_threads` | `TENT_METRICS_HTTP_SERVER_THREADS` | `2` |
-| `report_interval_seconds` | `TENT_METRICS_REPORT_INTERVAL` | `30`. Zero disables periodic logging. |
+| Key (under `metrics`) | Default |
+| --- | --- |
+| `enabled` | `true` when the feature is built |
+| `http_host` | `0.0.0.0` |
+| `http_port` | `9100` |
+| `http_server_threads` | `2` |
+| `report_interval_seconds` | `30`; zero disables periodic logging |
 
-Resolution is per field. A key in the JSON file wins over the environment,
-which wins over the typed `EngineConfig.metrics` value. Omitted typed fields
-take the defaults above. Set `EngineConfig.metrics_config_file` to the JSON
-file path. The host accepts an IP literal or a DNS hostname. The loader accepts
-nested keys and slash paths such as
-`metrics/http_port`. Invalid settings return a typed construction error. Ports
-range from 1 to 65535. The fixed HTTP pool accepts 1–64 threads per engine.
+Use typed `EngineConfig.metrics` or the [OrbiTE loader](rust-api.md#configuration-loading).
+There are no per-field environment aliases or secondary metrics files. Unknown
+fields and wrong types fail. The host accepts an IP literal or DNS hostname;
+ports range from 1 to 65535 and the bounded HTTP pool has 1–64 threads.
+The `orbite_` namespace retains the recording types, labels and bucket boundaries.
 
 ```json
 {"metrics":{"http_host":"127.0.0.1","http_port":9101,"report_interval_seconds":0}}
@@ -52,8 +50,8 @@ returns the summary available via the `log` facade.
 A successful 64-byte TCP READ contributes the following samples.
 
 ```text
-tent_read_bytes_total{transport="tcp"} 64
-tent_transport_attempts_total{transport="tcp",operation="read"} 1
+orbite_read_bytes_total{transport="tcp"} 64
+orbite_transport_attempts_total{transport="tcp",operation="read"} 1
 ```
 
 ## Transfer metrics
@@ -64,28 +62,28 @@ reasons are `submit`, `poll`, `timeout` and `canceled`.
 
 | Family | Type | Labels and meaning |
 | --- | --- | --- |
-| `tent_{read,write}_bytes_total` | Counter | `transport`. Successful logical bytes on the final route. |
-| `tent_{read,write}_requests_total` | Counter | `transport`. Completed and failed logical requests. |
-| `tent_{read,write}_failures_total` | Counter | `transport`. Failed requests, including short file I/O. |
-| `tent_transport_failover_total` | Counter | `from,to`. Each recovery decision that advances an owner. |
-| `tent_transport_attempts_total`, `tent_transport_attempt_failures_total` | Counter | `transport,operation`. Physical attempts and failed attempts. |
-| `tent_logical_requests_started_total`, `tent_logical_requests_inflight` | Counter, gauge | `operation`. Accepted public requests and those awaiting a terminal outcome. |
-| `tent_logical_request_outcomes_total` | Counter | `operation,outcome`. Terminal public requests. |
-| `tent_transport_attempt_outcomes_total` | Counter | `transport,operation,outcome`. Terminal physical attempts. |
-| `tent_task_failures_total` | Counter | `transport,reason`. Terminal task failures by transport and reason. JSON reports the aggregate. |
-| `tent_deadline_infeasible_total` | Counter | `transport`. An expired request deadline at submission or an S8 infeasibility drop. |
-| `tent_quarantined_batches_total` | Counter | Unlabelled. Abandoned batches entering quarantine. |
-| `tent_inflight_attempts`, `tent_registered_buffer_bytes` | Gauge | `transport`. Live attempts and bytes registered with each transport. |
-| `tent_{read,write}_latency_us`, `tent_{read,write}_size_bytes` | Histogram | `transport`. End-to-end latency and successful owner length. |
-| `tent_deadline_mlu_permille` | Histogram | `transport`. Successful transfer latency divided by the request's deadline window, multiplied by 1,000. |
-| `tent_stage_queue_wait_us`, `tent_stage_dispatch_us`, `tent_stage_transport_us` | Histogram | `transport`. Admission to dispatch, dispatch to first attempt, and execution through logical completion. |
-| `tent_transport_attempt_latency_us` | Histogram | `transport,operation`. Elapsed time for one attempt. |
+| `orbite_{read,write}_bytes_total` | Counter | `transport`. Successful logical bytes on the final route. |
+| `orbite_{read,write}_requests_total` | Counter | `transport`. Completed and failed logical requests. |
+| `orbite_{read,write}_failures_total` | Counter | `transport`. Failed requests, including short file I/O. |
+| `orbite_transport_failover_total` | Counter | `from,to`. Each recovery decision that advances an owner. |
+| `orbite_transport_attempts_total`, `orbite_transport_attempt_failures_total` | Counter | `transport,operation`. Physical attempts and failed attempts. |
+| `orbite_logical_requests_started_total`, `orbite_logical_requests_inflight` | Counter, gauge | `operation`. Accepted public requests and those awaiting a terminal outcome. |
+| `orbite_logical_request_outcomes_total` | Counter | `operation,outcome`. Terminal public requests. |
+| `orbite_transport_attempt_outcomes_total` | Counter | `transport,operation,outcome`. Terminal physical attempts. |
+| `orbite_task_failures_total` | Counter | `transport,reason`. Terminal task failures by transport and reason. JSON reports the aggregate. |
+| `orbite_deadline_infeasible_total` | Counter | `transport`. An expired request deadline at submission or an S8 infeasibility drop. |
+| `orbite_quarantined_batches_total` | Counter | Unlabelled. Abandoned batches entering quarantine. |
+| `orbite_inflight_attempts`, `orbite_registered_buffer_bytes` | Gauge | `transport`. Live attempts and bytes registered with each transport. |
+| `orbite_{read,write}_latency_us`, `orbite_{read,write}_size_bytes` | Histogram | `transport`. End-to-end latency and successful owner length. |
+| `orbite_deadline_mlu_permille` | Histogram | `transport`. Successful transfer latency divided by the request's deadline window, multiplied by 1,000. |
+| `orbite_stage_queue_wait_us`, `orbite_stage_dispatch_us`, `orbite_stage_transport_us` | Histogram | `transport`. Admission to dispatch, dispatch to first attempt, and execution through logical completion. |
+| `orbite_transport_attempt_latency_us` | Histogram | `transport,operation`. Elapsed time for one attempt. |
 
 Fabric uses the same logical/attempt families with the `fabric` label. Its
 short-lived exact-range MRs are sampled separately as
 `orbite_fabric_registered_bytes` and `orbite_fabric_memory_regions`; posted/retained
 slices, peer addresses, CQ errors and quarantine events also expose their real
-owners. The registration-lifetime TENT buffer gauge does not count these grants.
+owners. The registration-lifetime buffer gauge does not count these grants.
 
 io_uring uses the published memory without registering it with the provider.
 Host memory can also take a GDS or pinned NVLink path without creating a cuFile
@@ -146,11 +144,11 @@ configured off at startup, without creating a listener or recorder.
 
 | Family | Type | Labels and meaning |
 | --- | --- | --- |
-| `tent_metrics_build_info` | Gauge | `version,commit`. Constant 1 for this build. |
-| `tent_metrics_runtime_enabled`, `tent_metrics_http_server_up` | Gauges | Sampling enabled and endpoint listening. |
-| `tent_metrics_http_start_failures_total` | Counter | Failed server starts on this engine. |
-| `tent_metrics_serialization_attempts_total`, `tent_metrics_serialization_failures_total` | Counters | `format` is `prometheus` or `json`. Attempts include the current scrape. |
-| `tent_metrics_last_success_timestamp_seconds` | Gauge | Unix seconds per format. Zero until the first successful serialization. |
+| `orbite_metrics_build_info` | Gauge | `version,commit`. Constant 1 for this build. |
+| `orbite_metrics_runtime_enabled`, `orbite_metrics_http_server_up` | Gauges | Sampling enabled and endpoint listening. |
+| `orbite_metrics_http_start_failures_total` | Counter | Failed server starts on this engine. |
+| `orbite_metrics_serialization_attempts_total`, `orbite_metrics_serialization_failures_total` | Counters | `format` is `prometheus` or `json`. Attempts include the current scrape. |
+| `orbite_metrics_last_success_timestamp_seconds` | Gauge | Unix seconds per format. Zero until the first successful serialization. |
 
 A serialization error returns HTTP 500. The next successful scrape includes
 the failure. `/health` reports HTTP liveness independently of serialization

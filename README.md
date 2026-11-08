@@ -18,6 +18,8 @@
 
 ## Overview
 
+OrbiTE is an independent transfer engine whose design follows Mooncake TENT; it is not wire-, API- or configuration-compatible with TENT.
+
 OrbiTE is the KV data plane for LLM inference on NVIDIA. It moves KV between
 GPUs, DRAM, local SSD and peer hosts with two guarantees: memory, registrations
 and staging are never released before the hardware provably stops accessing
@@ -55,7 +57,7 @@ Non-goals:
   qualified on ext4 and tmpfs in CI. [Local storage](docs/storage.md)
 - **Nov 3, 2026**: TENT-style transport selection picks NVLink, RDMA or TCP
   per request.
-- **Nov 2, 2026**: FIFO/EDF admission windows, TENT-format QoS contracts and
+- **Nov 2, 2026**: FIFO/EDF admission windows, compiled QoS contracts and
   receiver credit windows.
 - **Nov 1, 2026**: Bandwidth-aware multirail selection from CUDA/NUMA topology
   and TENT priority matrices; CUDA 13 native batch copies for NVLink groups.

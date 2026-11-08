@@ -100,57 +100,5 @@ pub(super) fn parse(text: &str, source: &str) -> Result<Value> {
     let Value::Object(fields) = doc else {
         return Err(invalid("$", "expected an object root"));
     };
-    let mut root = serde_json::json!({});
-    // Config::get prefers a nested value, then tries a full slash key at the root.
-    let (flat, nested): (Vec<_>, Vec<_>) =
-        fields.into_iter().partition(|(key, _)| key.contains('/'));
-    for (key, val) in nested {
-        check_key(&key)?;
-        root[&key] = val;
-    }
-    // Decide eligibility against the original nested document. One flat
-    // subtree cannot shadow another, more specific, full-path spelling.
-    let mut missing = Vec::new();
-    for (key, val) in flat {
-        check_key(&key)?;
-        if get(&root, &key).is_none() {
-            missing.push((key, val));
-        }
-    }
-    missing.sort_by_key(|(key, _)| key.matches('/').count());
-    for (key, val) in missing {
-        set(&mut root, &key, val)?;
-    }
-    Ok(root)
-}
-
-pub(super) fn check_key(path: &str) -> Result<()> {
-    if path.len() > 1024
-        || path.split('/').count() > 32
-        || path
-            .split('/')
-            .any(|s| s.is_empty() || s.chars().any(char::is_control))
-    {
-        return Err(invalid("$", "malformed configuration path"));
-    }
-    Ok(())
-}
-pub(super) fn get<'a>(root: &'a Value, path: &str) -> Option<&'a Value> {
-    let mut at = root;
-    for key in path.split('/') {
-        at = at.get(key)?;
-    }
-    Some(at)
-}
-pub(super) fn set(root: &mut Value, path: &str, value: Value) -> Result<()> {
-    let mut at = root;
-    for key in path.split('/') {
-        at = at
-            .as_object_mut()
-            .ok_or_else(|| invalid(path, "parent must be an object"))?
-            .entry(key)
-            .or_insert_with(|| Value::Object(Map::new()));
-    }
-    *at = value;
-    Ok(())
+    Ok(Value::Object(fields))
 }

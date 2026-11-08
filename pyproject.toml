@@ -5,7 +5,7 @@ build-backend = "maturin"
 [project]
 name = "orbite"
 dynamic = ["version"]
-description = "OrbiTE point-to-point transfer engine, with the TENT-compatible Python API"
+description = "OrbiTE CPU and NVIDIA point-to-point transfer engine"
 requires-python = ">=3.10,<3.15"
 license = "Apache-2.0"
 readme = "docs/python.md"

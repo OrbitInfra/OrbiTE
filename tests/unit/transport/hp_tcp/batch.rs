@@ -164,7 +164,7 @@ fn hp_tcp_bytes_and_attempts_use_the_hp_tcp_metrics_label() {
             .is_complete()
     );
     let metrics = dst.metrics().unwrap().prometheus();
-    assert!(metrics.contains("tent_read_bytes_total{transport=\"hp_tcp\"} 8"));
+    assert!(metrics.contains("orbite_read_bytes_total{transport=\"hp_tcp\"} 8"));
     assert_eq!(
         bytes(&local),
         [

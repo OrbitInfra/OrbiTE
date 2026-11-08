@@ -1,77 +1,56 @@
 use orbite::{Error, NotificationEffect, NotificationFailure};
-use std::ffi::{c_char, c_int};
+use std::ffi::c_char;
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::ptr::NonNull;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct Code(pub c_int);
+#[derive(Clone, Debug)]
+pub(crate) enum Code {
+    Native(Arc<Error>),
+    Invalid,
+    Full,
+    Address,
+    Unknown,
+    Internal,
+    Unsupported,
+}
 pub(crate) type Result<T> = std::result::Result<T, Code>;
-pub(crate) const INVALID: Code = Code(1);
-pub(crate) const FULL: Code = Code(2);
-pub(crate) const ADDRESS: Code = Code(3);
-pub(crate) const UNSENT: Code = Code(134);
-pub(crate) const UNKNOWN: Code = Code(135);
-pub(crate) const INTERNAL: Code = Code(199);
-pub(crate) const UNSUPPORTED: Code = Code(200);
-
-impl From<Error> for Code {
-    fn from(e: Error) -> Self {
-        Self::from(&e)
+pub(crate) const INVALID: Code = Code::Invalid;
+pub(crate) const FULL: Code = Code::Full;
+pub(crate) const ADDRESS: Code = Code::Address;
+pub(crate) const UNKNOWN: Code = Code::Unknown;
+pub(crate) const INTERNAL: Code = Code::Internal;
+pub(crate) const UNSUPPORTED: Code = Code::Unsupported;
+impl Code {
+    pub fn error(&self) -> &Error {
+        match self {
+            Self::Native(e) => e,
+            Self::Invalid => &Error::InvalidRange,
+            Self::Full => &Error::ResourceExhausted,
+            Self::Address => &Error::RegionNotFound,
+            Self::Unknown => &Error::Unquiesced {
+                operation: "Python owner cleanup",
+                code: -1,
+            },
+            Self::Internal => &Error::Internal("Python boundary"),
+            Self::Unsupported => &Error::Unavailable("requested facility is not available"),
+        }
+    }
+    pub fn unquiesced(&self) -> bool {
+        matches!(self.error(), Error::Unquiesced { .. })
     }
 }
-impl From<&Error> for Code {
-    fn from(e: &Error) -> Self {
-        match e {
-            Error::ResourceExhausted | Error::BatchBusy | Error::BatchOpen => FULL,
-            Error::RegionNotFound | Error::ForeignRegistration => ADDRESS,
-            Error::EpochMismatch => Code(7),
-            Error::Unquiesced { .. } => UNKNOWN,
-            Error::Unavailable(_) | Error::TransportPolicy { .. } => UNSUPPORTED,
-            Error::Backend { operation, .. }
-                if operation.starts_with("cu") || operation.contains("CUDA") =>
-            {
-                Code(101)
-            }
-            Error::Backend { operation, .. }
-                if operation.contains("RDMA") || operation.starts_with("ibv") =>
-            {
-                Code(100)
-            }
-            Error::Protocol(_) | Error::Io(_) | Error::Timeout => Code(132),
-            Error::InvalidRange
-            | Error::InvalidTask
-            | Error::PermissionDenied
-            | Error::InvalidConfig(_)
-            | Error::InvalidSelectorConfig(_)
-            | Error::InvalidQosConfig(_)
-            | Error::RegistrationConflict
-            | Error::BatchClosed
-            | Error::FileSegmentClosed
-            | Error::ForeignQosPolicy => INVALID,
-            Error::TentConfig { path, .. }
-                if matches!(path.as_str(), "metadata_type" | "metadata_servers") =>
-            {
-                Code(6)
-            }
-            Error::TentConfig { reason, .. } if reason.contains("JSON") => Code(133),
-            Error::TentConfig { reason, .. } if reason.contains("unsupported") => UNSUPPORTED,
-            Error::TentConfig { .. } => INVALID,
-            Error::SourceClosed
-            | Error::RequesterClosed
-            | Error::PeerClosed
-            | Error::Cancelled
-            | Error::DeadlineInfeasible => Code(5),
-            _ => INTERNAL,
-        }
+impl From<Error> for Code {
+    fn from(e: Error) -> Self {
+        Self::Native(Arc::new(e))
     }
 }
 impl From<NotificationFailure> for Code {
     fn from(f: NotificationFailure) -> Self {
-        match (f.effect, f.error) {
-            (NotificationEffect::Unknown, _) => UNKNOWN,
-            (NotificationEffect::None, Error::Io(_) | Error::Timeout) => UNSENT,
-            (_, e) => e.into(),
+        if f.effect == NotificationEffect::Unknown {
+            UNKNOWN
+        } else {
+            f.error.into()
         }
     }
 }

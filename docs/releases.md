@@ -14,8 +14,8 @@ from `7cc48490`. The beta.1 version is spelled `0.1.0b1` on PyPI.
 ### Changes since 0.1.0-alpha.1
 
 - Rust is the primary interface. Python lives in the separate
-  `orbite-python` packaging crate and exposes the frozen `mooncake.tent`
-  P2P subset as `import orbite as tent`. Installed wheels cover CPython
+  `orbite-python` packaging crate and mirrors the Rust API with PEP 8 names.
+  Installed wheels cover CPython
   3.10–3.14 on Linux x86_64/aarch64; blocking calls release the GIL.
   Buffer exporters and CUDA Array Interface/DLPack owners stay retained
   through native drain, including cancellation and uncertain cleanup.
@@ -29,15 +29,13 @@ from `7cc48490`. The beta.1 version is spelled `0.1.0b1` on PyPI.
   Non-P2P configuration is explicitly rejected. Rust per-peer retirement
   fences new work, drains existing owners and reclaims unreferenced identities;
   failed native cleanup stays retained and charged. Python segment close keeps
-  its TENT-shaped reversible handle semantics.
+  reversible handle semantics.
 - The S23 TENT wire interoperability profile was removed. Both peers run the
-  same OrbiTE build; no autodetection or downgrade is available. TENT-format
-  configuration, metric names, Python API correspondence and the frozen
-  v0.3.14 CPU oracle remain. See the
+  same OrbiTE build; no autodetection or downgrade is available. The frozen v0.3.14 CPU oracle remains as a behavior baseline. See the
   [wire and consumer boundary](tent-parity.md#wire-and-consumer-boundaries).
 - Opt-in libfabric is implemented with real CPU bytes on the software TCP
   provider. MPComm is deferred: no consumer and no available provider;
-  its recognized Python transport constant returns unavailable.
+  it has no public Python transport identity.
 - S26 adds verified size/batch sweeps against frozen TENT and 24 executable
   CPU fault controls, including real requester kills during partial TCP and
   HP-TCP WRITEs. Raw measurements stay outside Git. No tuning is included.
@@ -50,7 +48,7 @@ This preparation unifies package versions and validates wheel/sdist metadata,
 including under optimized Python. Rust public field records and enums are
 non-exhaustive except binary `TransferOp`; construct configs through defaults
 and field assignment. `NVLinkStats` is renamed to `NvlinkStats`, `MemoryBacking`
-is the real type name, and TENT's topology name `MemType` remains. Binding-only
+is the real type name, and `TopologyMemoryKind` names topology entries without reference-specific naming. Binding-only
 helpers and the standalone adaptive core are hidden and outside the freeze;
 the Python crate pins the exact core version. Five accidental Python helper
 imports are private. Python's additive helpers and reversible segment close
@@ -60,6 +58,22 @@ the Python CPU/TCP wheel profile are labeled **Qualified on Linux CI** only
 against the [named jobs and tests](qualification.md#linux-ci-release-profiles).
 HP-TCP loopback, same-host SHM and ext4/tmpfs io_uring retain their bounded
 Linux CI qualification.
+
+### Independent interfaces
+
+TENT remains the frozen design reference, CPU oracle and performance baseline.
+Wire, API, configuration and naming compatibility are out of scope. The
+compatibility loaders, MC_/NCCL/MOONCAKE aliases and S16 compatibility inventories
+are removed. Rust exposes `EngineConfig::from_json/from_file/from_env`;
+only `ORBITE_CONF` configures the environment loader. Python now mirrors Rust
+owners with PEP 8 methods and an `orbite.Error` hierarchy. Exporter retention,
+GIL release, cancellation and physical drain guarantees are unchanged.
+
+Metrics use the `orbite_` prefix. Public TENT transport-ID conversion methods
+and excluded Python transport identities are removed; diagnostics reports only
+OrbiTE transports. `TopologyMemoryKind` replaces `MemType`, distinct from
+registration `MemoryType`. Native comparison jobs have 120-minute headroom;
+the 480 byte-checked rows and sample counts are unchanged.
 
 ### Known limitations
 

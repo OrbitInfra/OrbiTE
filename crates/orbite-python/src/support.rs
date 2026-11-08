@@ -24,19 +24,16 @@ pub(crate) fn clock_pair() -> Result<(Instant, u64)> {
 pub(crate) fn local_topology(e: &engine::Engine) -> Result<String> {
     use serde_json::json;
     let t = e.core.local_topology_snapshot()?;
-    if t.nic_list.is_empty() && t.mem_list.is_empty() {
-        return Ok("{}".into());
-    }
     let nics:Vec<_>=t.nic_list.iter().map(|n|{
-        let mut row=json!({"name":n.name,"pci_bus_id":n.pci_bus_id.as_deref().unwrap_or(""),"type":0,"numa_node":n.numa_node.map(i64::from).unwrap_or(-1)});
+        let mut row=json!({"name":n.name,"pci_bus_id":n.pci_bus_id.as_deref().unwrap_or(""),"numa_node":n.numa_node});
         if !n.device_attrs.is_empty(){row["device_attrs"]=json!(n.device_attrs);}
         row
     }).collect();
-    let mems:Vec<_>=t.mem_list.iter().map(|m| json!({"name":m.name,"pci_bus_id":m.pci_bus_id.as_deref().unwrap_or(""),"numa_node":m.numa_node.map(i64::from).unwrap_or(-1),"type":match m.kind {orbite::MemType::Host=>0,orbite::MemType::Cuda=>1,_=>4},"device_list":{"rank0":m.device_list[0],"rank1":m.device_list[1],"rank2":m.device_list[2]}})).collect();
-    Ok(json!({"nics":nics,"mems":mems}).to_string())
+    let mems:Vec<_>=t.mem_list.iter().map(|m| json!({"name":m.name,"pci_bus_id":m.pci_bus_id.as_deref().unwrap_or(""),"numa_node":m.numa_node,"kind":match m.kind {orbite::TopologyMemoryKind::Host=>"host",orbite::TopologyMemoryKind::Cuda=>"cuda",_=>"unknown"},"device_list":{"rank0":m.device_list[0],"rank1":m.device_list[1],"rank2":m.device_list[2]}})).collect();
+    Ok(json!({"nic_list":nics,"mem_list":mems}).to_string())
 }
 
 #[cfg(not(target_os = "linux"))]
 pub(crate) fn local_topology(_e: &engine::Engine) -> Result<String> {
-    Ok("{}".into())
+    Ok(r#"{"nic_list":[],"mem_list":[]}"#.into())
 }

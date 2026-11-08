@@ -347,9 +347,9 @@ fn open_mode_selection_and_synchronous_file_bytes() -> Result<()> {
         #[cfg(feature = "metrics")]
         {
             let p = f.engine.metrics().unwrap().prometheus();
-            assert!(p.contains("tent_read_bytes_total{transport=\"gds\"} 7"));
-            assert!(p.contains("tent_write_bytes_total{transport=\"gds\"} 7"));
-            assert!(!p.contains("tent_registered_buffer_bytes{transport=\"gds\"}"));
+            assert!(p.contains("orbite_read_bytes_total{transport=\"gds\"} 7"));
+            assert!(p.contains("orbite_write_bytes_total{transport=\"gds\"} 7"));
+            assert!(!p.contains("orbite_registered_buffer_bytes{transport=\"gds\"}"));
         }
         assert_eq!(f.engine.file_segment_info(&f.segment)?.gds_mode, Some(mode));
         assert_eq!(f.engine.stats()?.gds.mode, Some(mode));
@@ -943,7 +943,7 @@ fn deferred_sweep_skips_permanent_destroy_and_reclaims_independent_work() -> Res
     }
     #[cfg(feature = "metrics")]
     assert_eq!(
-        f.engine.metrics().unwrap().json()["tent_quarantined_batches_total"],
+        f.engine.metrics().unwrap().json()["orbite_quarantined_batches_total"],
         1
     );
     let healthy = f.host(8)?;

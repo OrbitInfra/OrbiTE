@@ -38,14 +38,14 @@ class Pack:
             return self.tensor.__dlpack__(**kwargs)
 
 
-def unregister(engine, address):
+def unregister(registration):
     deadline = time.monotonic() + 30
     while True:
         try:
-            engine.unregister_local_memory(address)
+            registration.close()
             return
-        except te.InternalError as error:
-            if not str(error).endswith('native status 2') or time.monotonic() >= deadline:
+        except te.ResourceExhaustedError:
+            if time.monotonic() >= deadline:
                 raise
             time.sleep(.001)
 
@@ -59,10 +59,10 @@ def main():
             for size in (64, 1024 * 1024):
                 with tempfile.TemporaryDirectory() as directory:
                     cfg = Path(directory) / 'engine.json'
-                    cfg.write_text(json.dumps(dict(metadata_type='p2p', rpc_server_hostname='127.0.0.1',
-                        rpc_server_port=0, transports={'tcp': {'enable': True}, 'rdma': {'enable': False},
-                                                     'hp_tcp': {'enable': False}, 'shm': {'enable': False}})))
-                    source, requester = te.TransferEngine(str(cfg)), te.TransferEngine(str(cfg))
+                    cfg.write_text(json.dumps(dict(bind_addr='127.0.0.1:0', tcp=True,
+                        rdma=None, hp_tcp={'enable': False}, shm={'enable': False})))
+                    source = te.TransferEngine(te.EngineConfig.from_file(str(cfg)))
+                    requester = te.TransferEngine(te.EngineConfig.from_file(str(cfg)))
                     stream = torch.cuda.Stream()
                     with torch.cuda.stream(stream):
                         tensor = torch.full((size + 32,), 0x71, dtype=torch.uint8, device='cuda')
@@ -72,32 +72,33 @@ def main():
                     gpu_address = tensor.data_ptr()
                     gpu_engine = source if gpu_is_source else requester
                     host_engine = requester if gpu_is_source else source
-                    gpu_engine.register_local_memory(gpu_address, tensor.nbytes, owner=owner)
+                    gpu_registration = gpu_engine.register_memory(gpu_address, tensor.nbytes, owner=owner)
                     host = bytearray(b'x' * 16 + b'!' * size + b'x' * 16)
-                    host_address = host_engine.register_buffer(host)
-                    peer = requester.open_segment(source.get_segment_name())
+                    host_registration = host_engine.register_buffer(host)
+                    host_address = host_registration.address
+                    peer = requester.open_segment(source.endpoint(), source.source_epoch())
                     del owner, tensor
                     gc.collect()
                     assert witness() is not None
                     local, remote = (host_address, gpu_address) if gpu_is_source else (gpu_address, host_address)
-                    for opcode in (te.READ, te.WRITE):
-                        if opcode == te.WRITE:
+                    for opcode in (te.TransferOp.READ, te.TransferOp.WRITE):
+                        if opcode == te.TransferOp.WRITE:
                             if gpu_is_source:
                                 host[16:-16] = b'S' * size
                             else:
                                 witness().tensor[16:-16].fill_(0x53)
                                 torch.cuda.synchronize()  # a fresh external producer handoff
-                        with requester.allocate_batch_guard(1) as batch:
-                            requester.submit_transfer(batch, [te.Request(opcode, local + 16, peer,
-                                remote + 16, size, transport_hint=te.TCP)])
-                            result = requester.wait(batch, 30)
-                            assert result.state == te.COMPLETED and result.bytes == size
-                        expected = b'S' if opcode == te.WRITE else (b')' if gpu_is_source else b'!')
+                        with requester.allocate_batch(1) as batch:
+                            batch.submit(opcode, peer, [te.TransferRequest(local + 16,
+                                remote + 16, size, transport=te.Transport.TCP)])
+                            result, = batch.wait(30)
+                            assert result.state == te.TaskState.COMPLETED and result.transferred_bytes == size
+                        expected = b'S' if opcode == te.TransferOp.WRITE else (b')' if gpu_is_source else b'!')
                         assert host == b'x' * 16 + expected * size + b'x' * 16
                         copied = bytes(witness().tensor.cpu().tolist())
                         assert copied == b'q' * 16 + expected * size + b'q' * 16
-                    unregister(gpu_engine, gpu_address)
-                    unregister(host_engine, host_address)
+                    unregister(gpu_registration)
+                    unregister(host_registration)
                     requester.close()
                     source.close()
                     gc.collect()

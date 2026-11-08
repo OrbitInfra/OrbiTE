@@ -32,7 +32,7 @@ fn each_export_lease_is_charged_even_for_duplicate_registration_aliases() {
             )
             .unwrap();
     }
-    assert_eq!(
+    assert!(matches!(
         memory.register_owned(
             &e,
             &[pointer],
@@ -40,8 +40,8 @@ fn each_export_lease_is_charged_even_for_duplicate_registration_aliases() {
             Opt::default(),
             &[Some(owner.clone())],
         ),
-        Err(FULL)
-    );
+        Err(Code::Full)
+    ));
     assert_eq!(memory.regs[&(pointer as usize, 16)].owners.len(), 2);
     drop(owner);
     memory.unregister(&e, &[pointer], Some(&[16])).unwrap();
@@ -81,9 +81,9 @@ fn uncertain_cleanup_keeps_the_real_python_exporter_and_closed_slot() {
                 Ok(())
             })
             .unwrap();
-            assert_eq!(crate::engine::destroy(h), Err(UNKNOWN));
+            assert!(crate::engine::destroy(h).unwrap_err().unquiesced());
             assert!(witness.upgrade().is_some());
-            assert_eq!(crate::engine::destroy(h), Err(INVALID));
+            assert!(matches!(crate::engine::destroy(h), Err(Code::Invalid)));
             assert!(witness.upgrade().is_some());
         });
         // The retained view still prevents resizing the actual Python allocation.

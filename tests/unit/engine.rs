@@ -302,11 +302,7 @@ pub(crate) fn rdma_fixture_with_config(
     };
     #[cfg(feature = "metrics")]
     let engine = {
-        let cfg = engine
-            .config
-            .metrics
-            .load(engine.config.metrics_config_file.as_deref())
-            .unwrap();
+        let cfg = engine.config.metrics.clone();
         engine.install_metrics(&cfg).unwrap()
     };
     engine
@@ -1267,11 +1263,7 @@ pub(crate) fn staging_fixture(
     };
     #[cfg(feature = "metrics")]
     let engine = {
-        let cfg = engine
-            .config
-            .metrics
-            .load(engine.config.metrics_config_file.as_deref())
-            .unwrap();
+        let cfg = engine.config.metrics.clone();
         engine.install_metrics(&cfg).unwrap()
     };
     engine

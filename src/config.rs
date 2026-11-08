@@ -3,21 +3,14 @@ use std::time::Duration;
 
 use crate::{Error, Result};
 
-pub(crate) fn legacy_bool(s: &str) -> Option<bool> {
-    match s.to_ascii_lowercase().as_str() {
-        "true" | "1" | "on" | "yes" => Some(true),
-        "false" | "0" | "off" | "no" => Some(false),
-        _ => None,
-    }
-}
-
-mod tent;
-pub use tent::TentSettings;
+pub(crate) mod json;
 
 /// Host staging location, resolved independently by each GPU owner.
 #[cfg(feature = "cuda")]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[non_exhaustive]
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum StagingLocation {
     /// Preserve CUDA driver allocation; no NUMA placement claim.
     #[default]
@@ -32,6 +25,8 @@ pub enum StagingLocation {
 /// Total retained work remains bounded by EngineConfig's inflight budgets.
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
+#[derive(serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct RuntimeQueueConfig {
     /// Total queued and dispatching physical owners and their bytes.
     pub max_outstanding_owners: usize,
@@ -74,9 +69,6 @@ impl Default for RuntimeQueueConfig {
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct EngineConfig {
-    /// Present for a configuration resolved by the TENT loader. Provider overrides
-    /// have already been consumed and must not be read again at startup.
-    pub tent: Option<TentSettings>,
     /// Enable ordinary TCP payloads. The control service is independent.
     pub tcp: bool,
     pub hp_tcp: crate::HpTcpConfig,
@@ -88,12 +80,9 @@ pub struct EngineConfig {
     #[cfg(feature = "io-uring")]
     pub io_uring_enabled: bool,
     pub shm: crate::ShmConfig,
-    /// Typed metrics defaults. The metrics loader resolves overrides at engine construction.
+    /// Metrics snapshot; recording is opt-in through the metrics build feature.
     #[cfg(feature = "metrics")]
     pub metrics: crate::metrics::MetricsConfig,
-    /// Optional TENT JSON file containing the metrics section.
-    #[cfg(feature = "metrics")]
-    pub metrics_config_file: Option<std::path::PathBuf>,
     /// Merge adjacent requests within the same pair of registered ranges.
     pub merge_requests: bool,
     /// Maximum additional attempts per physical owner. Zero pins the first route.
@@ -208,20 +197,13 @@ pub struct EngineConfig {
 
 impl Default for EngineConfig {
     fn default() -> Self {
-        let config = Self::defaults();
-        #[cfg(feature = "cuda")]
-        let config = Self {
-            mnnvl: std::env::var_os("MC_ENABLE_MNNVL").map(|_| crate::MnnvlConfig::default()),
-            ..config
-        };
-        config
+        Self::defaults()
     }
 }
 
 impl EngineConfig {
     fn defaults() -> Self {
         Self {
-            tent: None,
             tcp: true,
             #[cfg(feature = "io-uring")]
             io_uring_enabled: true,
@@ -233,8 +215,6 @@ impl EngineConfig {
             shm: Default::default(),
             #[cfg(feature = "metrics")]
             metrics: Default::default(),
-            #[cfg(feature = "metrics")]
-            metrics_config_file: None,
             #[cfg(feature = "gds")]
             gds_batch_depth: 32,
             #[cfg(feature = "gds")]
@@ -297,35 +277,8 @@ impl EngineConfig {
 
 impl EngineConfig {
     #[cfg(any(feature = "rdma", feature = "io-uring", feature = "metrics"))]
+    #[allow(unused_mut)]
     pub(crate) fn resolve_subsystems(mut self) -> Result<Self> {
-        if self.tent.is_none() {
-            #[cfg(feature = "rdma")]
-            {
-                self.rdma = self
-                    .rdma
-                    .map(|r| r.resolve_switches(|key| std::env::var_os(key)));
-            }
-            #[cfg(feature = "io-uring")]
-            {
-                self.io_uring = self.io_uring.with_environment()?;
-            }
-            #[cfg(feature = "metrics")]
-            {
-                self.metrics = self
-                    .metrics
-                    .load(self.metrics_config_file.take().as_deref())?;
-            }
-        } else {
-            #[cfg(feature = "metrics")]
-            {
-                if self.metrics_config_file.is_some() {
-                    return Err(Error::InvalidConfig(
-                        "load the metrics section with the TENT constructor document",
-                    ));
-                }
-                self.metrics = self.metrics.resolve(None, |_| Ok(None))?;
-            }
-        }
         #[cfg(feature = "rdma")]
         if let Some(config) = &mut self.rdma {
             config.capture_topology_file()?;
@@ -338,11 +291,10 @@ impl EngineConfig {
         if let Some(fabric) = &self.fabric {
             fabric.validate()?;
         }
-        if let Some(settings) = &self.tent {
-            settings.validate()?;
-        }
         #[cfg(feature = "io-uring")]
         self.io_uring.slot_size()?;
+        #[cfg(feature = "metrics")]
+        self.metrics.validate()?;
         self.hp_tcp.validate(self.tcp)?;
         if self.shm.enable
             && !self.shm.cxl_mount_path.as_os_str().is_empty()

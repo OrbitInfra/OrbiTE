@@ -1,70 +1,52 @@
-"""TENT-compatible, point-to-point OrbiTE bindings.
+"""OrbiTE: retained transfer owners and explicit peer epochs.
 
-Integer addresses must refer to engine allocations or retained buffer exports.
-External buffers are registered with ``owner=buffer`` or ``register_buffer``.
-Do not access registered storage concurrently with a transfer.
+The Python interface mirrors the Rust API. A timeout, cancellation or object
+finalizer is never permission to release memory still used by native work.
 """
-from dataclasses import dataclass as _dataclass, field as _field
-from enum import IntEnum as _IntEnum
-import operator as _operator
-from typing import ClassVar as _ClassVar
+from dataclasses import dataclass as _dataclass
+from enum import Enum as _Enum, IntEnum as _IntEnum
+import json as _json
+from types import MappingProxyType as _MappingProxyType
+from . import _native
 
-from ._native import (
-    _Engine, TentException, InvalidArgumentError, AddressNotRegisteredError,
-    DeviceNotFoundError, InvalidEntryError, RdmaError, CudaError, MetadataError,
-    RpcServiceError, InternalError, NotImplementedError,
-)
-
-LOCAL_SEGMENT_ID = 0
-kWildcardLocation = "*"
-PRIO_HIGH, PRIO_MEDIUM, PRIO_LOW = range(3)
+# One exception per Rust Error variant; ordinary Python type errors remain type errors.
+for _name in dir(_native):
+    if _name == "Error" or _name.endswith("Error"):
+        globals()[_name] = getattr(_native, _name)
 
 
-class OpCode(_IntEnum):
+class Transport(_IntEnum):
+    UNSPEC = 0
+    TCP = 1
+    HP_TCP = 2
+    SHM = 3
+    RDMA = 4
+    FABRIC = 5
+    NVLINK = 6
+    MNNVL = 7
+    IO_URING = 8
+    GDS = 9
+
+
+class TransferOp(_IntEnum):
     READ = 0
     WRITE = 1
 
 
-class TransferStatusEnum(_IntEnum):
-    INITIAL = 0
-    PENDING = 1
-    INVALID = 2
-    CANCELED = 3
-    COMPLETED = 4
-    TIMEOUT = 5
-    FAILED = 6
+class Priority(_IntEnum):
+    HIGH = 0
+    MEDIUM = 1
+    LOW = 2
 
 
 class Permission(_IntEnum):
-    LocalReadWrite = 0
-    GlobalReadOnly = 1
-    GlobalReadWrite = 2
-
-
-class TransportType(_IntEnum):
-    UNSPEC = 0
-    RDMA = 1
-    MNNVL = 2
-    SHM = 3
-    NVLINK = 4
-    GDS = 5
-    IOURING = 6
-    TCP = 7
-    AscendDirect = 8
-    SUNRISE_LINK = 9
-    TPU = 10
-    UB = 11
-    MPCOMM = 12
-    HP_TCP = 13
-    XPU = 14
-    HYLINK = 15
-    FABRIC = 16
-    MLU = 17
-    MEMFABRIC = 18
+    LOCAL_ONLY = 0
+    REMOTE_READ = 1
+    REMOTE_READ_WRITE = 2
 
 
 class IntentType(_IntEnum):
-    INTENT_UNSPEC = 0
+    UNSPEC = 0
     FOREGROUND_GET = 1
     BACKGROUND_PREFETCH = 2
     MIGRATION = 3
@@ -73,276 +55,266 @@ class IntentType(_IntEnum):
     STAGING_INTERNAL = 6
 
 
-class SegmentInfoType(_IntEnum):
-    Memory = 0
-    File = 1
-
-
-for _enum in (OpCode, TransferStatusEnum, Permission, TransportType, IntentType, SegmentInfoType):
-    globals().update(_enum.__members__)
-
-
-class _Record:
-    __slots__ = ()
-    _fields: _ClassVar[dict] = {}
-
-    def __setattr__(self, name, value):
-        rule = self._fields.get(name)
-        if rule in ("u64", "i32"):
-            value = _operator.index(value)
-            low, high = (0, 2**64 - 1) if rule == "u64" else (-2**31, 2**31 - 1)
-            if not low <= value <= high:
-                raise OverflowError(f"{name} is outside {rule}")
-        elif rule is str or rule == "optional_string":
-            if not (rule == "optional_string" and value is None) and not isinstance(value, str):
-                raise TypeError(f"{name} must be a string")
-        elif rule is bool:
-            value = bool(value)
-        elif isinstance(rule, type) and issubclass(rule, _IntEnum):
-            value = rule(_operator.index(value))
-        elif rule == "buffers":
-            if not isinstance(value, (tuple, list)) or any(not isinstance(v, SegmentInfoBuffer) for v in value):
-                raise TypeError("buffers must contain SegmentInfoBuffer records")
-            value = list(value)
-        object.__setattr__(self, name, value)
+class TaskState(str, _Enum):
+    WAITING = "waiting"
+    RUNNING = "running"
+    COMPLETED = "completed"
+    FAILED = "failed"
+    CANCELLED = "cancelled"
+    SKIPPED = "skipped"
 
 
 @_dataclass(slots=True)
-class Notification(_Record):
-    _fields: _ClassVar[dict] = {"name": str, "msg": str}
-    name: str = ""
-    msg: str = ""
-
-
-@_dataclass(slots=True)
-class Request(_Record):
-    _fields: _ClassVar[dict] = {"opcode": OpCode, "source": "u64", "target_id": "u64", "target_offset": "u64", "length": "u64", "priority": "i32", "transport_hint": TransportType, "policy_name": "optional_string", "deadline_ns": "u64", "intent_type": IntentType}
-    opcode: OpCode = OpCode.READ
-    source: int = 0
-    target_id: int = 0
-    target_offset: int = 0
-    length: int = 0
-    priority: int = PRIO_HIGH
-    transport_hint: TransportType = TransportType.UNSPEC
+class TransferRequest:
+    local_address: int
+    remote_address: int
+    length: int
+    transport: Transport = Transport.UNSPEC
+    priority: Priority = Priority.HIGH
     policy_name: str | None = None
-    deadline_ns: int = 0
-    intent_type: IntentType = IntentType.INTENT_UNSPEC
+    deadline_ns: int = 0  # Absolute time.monotonic_ns(); zero means the submit timeout.
+    intent: IntentType = IntentType.UNSPEC
 
 
 @_dataclass(slots=True)
-class TransferStatus(_Record):
-    _fields: _ClassVar[dict] = {"state": TransferStatusEnum, "bytes": "u64"}
-    state: TransferStatusEnum = TransferStatusEnum.INITIAL
-    bytes: int = 0
-
-
-def _status(row):
-    return TransferStatus(TransferStatusEnum(row[0]), row[1])
+class Notification:
+    name: str
+    message: str
 
 
 @_dataclass(slots=True)
-class SegmentInfoBuffer(_Record):
-    _fields: _ClassVar[dict] = {"base": "u64", "length": "u64", "location": str}
-    base: int = 0
-    length: int = 0
-    location: str = ""
-
-
-@_dataclass(slots=True)
-class SegmentInfo(_Record):
-    _fields: _ClassVar[dict] = {"type": SegmentInfoType, "buffers": "buffers"}
-    type: SegmentInfoType = SegmentInfoType.Memory
-    buffers: list[SegmentInfoBuffer] = _field(default_factory=list)
-
-
-@_dataclass(slots=True)
-class MemoryOptions(_Record):
-    _fields: _ClassVar[dict] = {"location": str, "perm": Permission, "type": TransportType, "shm_path": str, "shm_offset": "u64", "internal": bool}
-    location: str = kWildcardLocation
-    perm: Permission = Permission.GlobalReadWrite
-    type: TransportType = TransportType.UNSPEC
+class MemoryOptions:
+    location: str = "*"
+    permission: Permission = Permission.REMOTE_READ_WRITE
+    transport: Transport = Transport.UNSPEC
     shm_path: str = ""
     shm_offset: int = 0
     internal: bool = False
 
 
-class MemoryGuard:
-    """Retains the engine. Early drop never frees registered or active storage."""
-    def __init__(self, engine, address, size):
-        self._engine, self._address, self._size = engine, address, size
+@_dataclass(frozen=True, slots=True)
+class TransferFailure:
+    message: str
+    remote_effect: str  # "none" or "unknown"; observational, never replay permission.
 
-    def address(self):
-        return self._address
 
-    def size(self):
-        return self._size
+@_dataclass(frozen=True, slots=True)
+class TaskStatus:
+    state: TaskState
+    transferred_bytes: int
+    physical_owner: int
+    transport: str
+    failover_count: int
+    cancel_requested: bool
+    locally_drained: bool
+    failure: TransferFailure | None
 
+
+def _tasks(text):
+    rows = _json.loads(text)
+    return [TaskStatus(**{**r, "state": TaskState(r["state"]),
+                         "failure": TransferFailure(**r["failure"]) if r["failure"] else None})
+            for r in rows]
+
+
+class EngineConfig:
+    """Immutable native snapshot. Explicit JSON/file input ignores ORBITE_CONF."""
+    __slots__ = ("_native",)
+
+    def __init__(self, **settings):
+        self._native = _native._Config.from_json(_json.dumps(settings))
+
+    @classmethod
+    def from_json(cls, text):
+        obj = cls.__new__(cls)
+        obj._native = _native._Config.from_json(text)
+        return obj
+
+    @classmethod
+    def from_file(cls, path):
+        obj = cls.__new__(cls)
+        obj._native = _native._Config.from_file(str(path))
+        return obj
+
+    @classmethod
+    def from_env(cls):
+        obj = cls.__new__(cls)
+        obj._native = _native._Config.from_env()
+        return obj
+
+
+class _Owner:
     def __enter__(self):
-        return self.address()
+        return self
 
-    def __exit__(self, *args):
-        if self._address:
-            try:
-                self._engine._native.abandon_memory(self._address)
-            except TentException:
-                if not args or args[0] is None:
-                    raise
-            finally:
-                self._address = 0
-
-    def __del__(self):
-        try:
-            self.__exit__()
-        except Exception:
-            # The native table retains failed cleanup and its budget.
-            pass
+    def __exit__(self, *_):
+        self.close()
 
 
-class BatchGuard:
-    def __init__(self, engine, batch_id):
-        self._engine, self._id, self._released = engine, batch_id, False
-
-    def id(self):
-        return self._id
-
-    def release(self):
-        if not self._released:
-            self._engine._native.abandon_batch(self._id)
-            self._released = True
-
-    def __enter__(self):
-        return self.id()
-
-    def __exit__(self, *args):
-        try:
-            self.release()
-        except TentException:
-            if not args or args[0] is None:
-                raise
-
-    def __del__(self):
-        try:
-            self.release()
-        except Exception:
-            pass
-
-
-class TransferEngine:
-    def __init__(self, config_path=None):
-        self._native = _Engine(config_path)
-
-    def available(self):
-        return self._native.available()
-
-    def get_segment_name(self):
-        return self._native.get_segment_name()
-
-    def get_rpc_server_address(self):
-        return self._native.get_rpc_server_address()
-
-    def get_rpc_server_port(self):
-        return self._native.get_rpc_server_port()
-
-    def get_local_topology(self):
-        return self._native.get_local_topology()
-
-    def export_local_segment(self):
-        return self._native.export_local_segment()
-
-    def import_remote_segment(self, shared_handle):
-        return self._native.import_remote_segment(shared_handle)
-
-    def open_segment(self, segment_name):
-        return self._native.open_segment(segment_name)
-
-    def close_segment(self, handle):
-        return self._native.close_segment(handle)
-
-    def get_segment_info(self, handle):
-        kind, rows = self._native.get_segment_info(handle)
-        return SegmentInfo(SegmentInfoType(kind), [SegmentInfoBuffer(*r) for r in rows])
-
-    def allocate_local_memory(self, size, location=kWildcardLocation):
-        return self.allocate_local_memory_ex(size, MemoryOptions(location=location))
-
-    def allocate_local_memory_ex(self, size, options):
-        return self._native.allocate(size, options)
-
-    def free_local_memory(self, addr):
-        return self._native.free(addr)
-
-    def allocate_memory_guard(self, size, location=kWildcardLocation):
-        return self.allocate_memory_guard_ex(size, MemoryOptions(location=location))
-
-    def allocate_memory_guard_ex(self, size, options):
-        return MemoryGuard(self, self.allocate_local_memory_ex(size, options), size)
-
-    def register_local_memory(self, addr, size, permission=Permission.GlobalReadWrite, *, owner=None):
-        return self.register_local_memory_ex(addr, size, MemoryOptions(perm=permission), owner=owner)
-
-    def register_local_memory_ex(self, addr, size, options, *, owner=None):
-        return self._native.register([addr], [size], options, [owner])
-
-    def register_local_memory_batch(self, addr_list, size_list, permission=Permission.GlobalReadWrite, *, owners=None):
-        return self.register_local_memory_batch_ex(addr_list, size_list, MemoryOptions(perm=permission), owners=owners)
-
-    def register_local_memory_batch_ex(self, addr_list, size_list, options, *, owners=None):
-        return self._native.register(addr_list, size_list, options, owners)
-
-    def register_buffer(self, buffer, permission=Permission.GlobalReadWrite):
-        """Register a writable contiguous exporter and return its retained address."""
-        return self._native.register_buffer(buffer, MemoryOptions(perm=permission))
-
-    def unregister_local_memory(self, addr, size=0):
-        return self._native.unregister([addr], [size])
-
-    def unregister_local_memory_batch(self, addr_list, size_list=()):
-        return self._native.unregister(addr_list, size_list)
-
-    def allocate_transfer_batch(self, batch_size):
-        return self._native.allocate_transfer_batch(batch_size)
-
-    def free_transfer_batch(self, batch_id):
-        return self._native.free_transfer_batch(batch_id)
-
-    def allocate_batch_guard(self, batch_size):
-        return BatchGuard(self, self.allocate_transfer_batch(batch_size))
-
-    def submit_transfer(self, batch_id, request_list, notifi=None):
-        return self._native.submit_transfer(batch_id, request_list, notifi)
-
-    def submit_transfer_notif(self, batch_id, request_list, name, message):
-        return self.submit_transfer(batch_id, request_list, Notification(name, message))
-
-    def cancel_transfer(self, batch_id, task_id):
-        return self._native.cancel_transfer(batch_id, task_id)
-
-    def send_notifi(self, target_id, notifi):
-        return self._native.send_notifi(target_id, notifi)
-
-    def recv_notifi(self):
-        return [Notification(*n) for n in self._native.recv_notifi()]
-
-    def get_transfer_status(self, batch_id, task_id):
-        return _status(self._native.get_transfer_status(batch_id, task_id))
-
-    def get_transfer_status_list(self, batch_id):
-        return [_status(s) for s in self._native.get_transfer_status_list(batch_id)]
-
-    def get_transfer_status_overall(self, batch_id):
-        return _status(self._native.get_transfer_status_overall(batch_id))
-
-    # Additive ownership/progress helpers; not part of frozen pybind.cpp.
-    def progress_batch(self, batch_id):
-        return _status(self._native.progress_batch(batch_id))
-
-    def wait(self, batch_id, timeout):
-        """Wait for logical completion and physical drain; timeout retains owners."""
-        return _status(self._native.wait(batch_id, timeout))
-
-    def terminal_result(self, batch_id, task_id=None):
-        """Return (native_code, effect_known); observational, never replay permission."""
-        return self._native.terminal_result(batch_id, task_id)
+class Memory(_Owner):
+    """Engine allocation. Dropping it defers free while native loans exist."""
+    def __init__(self, engine, address, length):
+        self._engine, self.address, self.length = engine, address, length
+        self._closed = False
 
     def close(self):
-        return self._native.close()
+        if not self._closed:
+            self._engine._native.free(self.address)
+            self._closed = True
+
+    def __del__(self):
+        if not getattr(self, "_closed", True):
+            try:
+                self._engine._native.abandon_memory(self.address)
+            except Error:
+                pass  # Native engine retains uncertain owners and their charges.
+            self._closed = True
+
+
+class RegisteredMemory(_Owner):
+    """Registration retaining its exporter through physical drain, including aliases."""
+    def __init__(self, engine, address, length):
+        self._engine, self.address, self.length = engine, address, length
+        self._closed = False
+
+    def close(self):
+        if not self._closed:
+            self._engine._native.unregister([self.address], [self.length])
+            self._closed = True
+
+    def __del__(self):
+        if not getattr(self, "_closed", True):
+            try:
+                self.close()
+            except Error:
+                pass  # The charged registration remains in its engine until drain/close.
+
+
+class RemoteSegment(_Owner):
+    """Requester-owned descriptor for an explicitly supplied endpoint and epoch."""
+    def __init__(self, engine, handle, endpoint, epoch):
+        self._engine, self._handle = engine, handle
+        self.endpoint, self.epoch = endpoint, epoch
+        self._closed = False
+
+    def info(self):
+        return self._engine._native.segment_info(self._handle)
+
+    def close(self):
+        if not self._closed:
+            self._engine._native.close_segment(self._handle)
+            self._closed = True
+
+    def __del__(self):
+        if not getattr(self, "_closed", True):
+            try:
+                self.close()
+            except Error:
+                pass
+
+
+class FileSegment(RemoteSegment):
+    """Local file owner. Close fences admissions and drains through the native owner."""
+
+
+class Batch(_Owner):
+    """Bounded batch; abandoning it transfers outstanding work to deferred retirement."""
+    def __init__(self, engine, handle):
+        self._engine, self._handle, self._closed = engine, handle, False
+
+    def submit(self, operation, target, requests, notification=None):
+        if target._engine is not self._engine:
+            raise InvalidRangeError("segment belongs to another engine")
+        self._engine._native.submit(self._handle, operation, target._handle, requests, notification)
+
+    def tasks(self):
+        return _tasks(self._engine._native.tasks(self._handle))
+
+    def progress(self):
+        return _tasks(self._engine._native.progress_batch(self._handle))
+
+    def wait(self, timeout):
+        """Wait for logical results and physical drain; seconds. Timeout keeps owners."""
+        return _tasks(self._engine._native.wait(self._handle, timeout))
+
+    def cancel(self, task):
+        self._engine._native.cancel(self._handle, task)
+
+    def close(self):
+        if not self._closed:
+            self._engine._native.free_batch(self._handle)
+            self._closed = True
+
+    def __del__(self):
+        if not getattr(self, "_closed", True):
+            try:
+                self._engine._native.abandon_batch(self._handle)
+            except Error:
+                pass
+            self._closed = True
+
+
+class TransferEngine(_Owner):
+    """Native engine. None loads ORBITE_CONF once; EngineConfig bypasses the environment."""
+    def __init__(self, config=None):
+        self._native = _native._Engine(None if config is None else config._native)
+
+    def endpoint(self):
+        return self._native.endpoint()
+
+    def source_epoch(self):
+        return self._native.source_epoch()
+
+    def stats(self):
+        return _MappingProxyType(_json.loads(self._native.stats()))
+
+    def local_topology(self):
+        return _json.loads(self._native.local_topology())
+
+    def allocate_memory(self, length, options=None):
+        return Memory(self, self._native.allocate(length, options or MemoryOptions()), length)
+
+    def register_memory(self, address, length, *, owner=None, options=None):
+        self._native.register([address], [length], options or MemoryOptions(), [owner])
+        return RegisteredMemory(self, address, length)
+
+    def register_memory_ranges(self, ranges, *, owners=None, options=None):
+        if len(ranges) > self._native.registration_limit():
+            raise ResourceExhaustedError("registration list exceeds engine capacity")
+        addresses, lengths = zip(*ranges) if ranges else ([], [])
+        self._native.register(addresses, lengths, options or MemoryOptions(), owners)
+        return [RegisteredMemory(self, a, n) for a, n in zip(addresses, lengths)]
+
+    def unregister_memory_ranges(self, registrations):
+        """Close related registrations together, including aliases of one CUDA allocation."""
+        if len(registrations) > self._native.registration_limit():
+            raise ResourceExhaustedError("registration list exceeds engine capacity")
+        if any(r._engine is not self or r._closed for r in registrations):
+            raise InvalidRangeError("registration is closed or belongs to another engine")
+        self._native.unregister([r.address for r in registrations], [r.length for r in registrations])
+        for registration in registrations:
+            registration._closed = True
+
+    def register_buffer(self, owner, options=None):
+        address, length = self._native.register_buffer(owner, options or MemoryOptions())
+        return RegisteredMemory(self, address, length)
+
+    def open_segment(self, endpoint, expected_epoch):
+        return RemoteSegment(self, self._native.open_segment(endpoint, expected_epoch), endpoint, expected_epoch)
+
+    def open_file_segment(self, path, permission=Permission.REMOTE_READ_WRITE):
+        return FileSegment(self, self._native.open_file_segment("file://" + str(path), permission), str(path), None)
+
+    def allocate_batch(self, capacity):
+        return Batch(self, self._native.allocate_batch(capacity))
+
+    def send_notification(self, target, notification):
+        if target is not None and target._engine is not self:
+            raise InvalidRangeError("segment belongs to another engine")
+        self._native.send_notification(None if target is None else target._handle, notification)
+
+    def receive_notifications(self):
+        return [Notification(*row) for row in self._native.receive_notifications()]
+
+    def close(self):
+        self._native.close()

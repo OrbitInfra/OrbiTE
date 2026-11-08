@@ -16,9 +16,7 @@ is preparing `0.1.0-beta.1`, which is not published by this change; see
 behind each CI and hardware result. Historical hardware acceptance below applies
 only to its recorded artifact; every current beta GPU/RDMA/GDS/MNNVL/EFA/CXL
 profile remains unqualified. The [v0.3.14 delta](tent-parity.md#v0314-delta)
-records the source alignment. The [S16 acceptance inventory](https://github.com/OrbitInfra/OrbiTE/tree/main/tests/reference/inventory)
-lists the six native direction flags and their provider conditions. Wire
-fixtures and CPU codec checks support the independent frozen oracle.
+records the source alignment. The [design-reference map](tent-parity.md) identifies the corresponding owners.
 
 ## Transports
 
@@ -72,7 +70,7 @@ fixtures and CPU codec checks support the independent frozen oracle.
 | Transport failover | Implemented | Bounded physical retries, epoch-pinned Describe and release evidence. Installed RNIC profile unqualified. See [transport attempts](async-batches.md#transport-attempts) |
 | RDMA rail cooldown and recovery | Implemented; installed gate unrun | [Rail health](rdma-cuda.md#rail-health) |
 | Offline version diagnostics | Implemented | Packaged CLI and Rust API. See [diagnostics](diagnostics.md). |
-| TENT metrics, request/attempt accounting and exporter health | Implemented (P6, opt-in) | [Metrics](metrics.md) |
+| OrbiTE metrics, request/attempt accounting and exporter health | Implemented (P6, opt-in) | [Metrics](metrics.md) |
 
 ## Failure handling
 
@@ -84,16 +82,16 @@ qualification; GPU/RDMA/GDS installed fault fixtures remain queued.
 | --- | --- | --- |
 | Native failure retention | Accepted (RoCE fault profiles) | QP errors, lost CQEs, QP/MR/MW faults and CQ/channel/PD cleanup failures keep their owners and charges. Device-close errors have CPU controls only. See [native cleanup](native-cleanup.md) |
 
-## APIs and compatibility
+## APIs and operations
 
 | Capability | Status | Limits |
 | --- | --- | --- |
 | Rust API | Beta.1 freeze decisions recorded | [Surface inventory and decisions](rust-api.md#freeze-decisions) |
-| TENT C ABI (S19) | Removed; out of scope | Frozen declarations retained as reference inventory only |
+| TENT C ABI (S19) | Removed; out of scope | No installed C interface |
 | TENT C++ and classic TE (S20) | Removed; out of scope | No source adapters or classic-TE shim |
 | Device plugin ABI (S22/F03) | Removed; out of scope | CPU and CUDA use built-in owners |
-| TENT Python API | Qualified on Linux CI (F21, CPU/TCP only) | [Exact CI evidence](qualification.md#python-wheels). [Installed wheels](python.md) for CPython 3.10–3.14, Linux x86_64/aarch64. Guarded TCP, GIL release and retained host/CAI/DLPack exporters; native GPU/RDMA Python profiles remain unqualified |
-| TENT configuration and P2P self-description | Qualified on Linux CI (F01 loading and F06 CPU handshake) | [Exact jobs and cases](qualification.md#linux-ci-release-profiles). File or inline `MC_TENT_CONF`, legacy aliases and explicit constructor precedence resolve into [one engine configuration](rust-api.md#loading-tent-configuration). Discovery, membership, KV indexes and external metadata stores belong to the consumer; non-P2P configuration is rejected. Rust `close_segment(endpoint, epoch, timeout)` fences and drains one peer; live descriptor/operation references bound the identity table, while failed native cleanup stays charged. CPU sockets/SHM are exercised on Linux; RNIC/CUDA retirement is shim-only, installed profile unqualified |
+| OrbiTE Python API | Qualified on Linux CI (CPU/TCP only) | [Exact CI evidence](qualification.md#python-wheels). [Installed wheels](python.md) for CPython 3.10–3.14, Linux x86_64/aarch64. Guarded TCP, GIL release and retained host/CAI/DLPack exporters; native GPU/RDMA Python profiles remain unqualified |
+| OrbiTE configuration and P2P self-description | Qualified on Linux CI (configuration and CPU handshake) | [Exact jobs and cases](qualification.md#linux-ci-release-profiles). Strict JSON, file or `ORBITE_CONF` capture [one engine configuration](rust-api.md#configuration-loading). Discovery, membership, KV indexes and external metadata stores belong to the consumer; non-P2P configuration is rejected. Rust `close_segment(endpoint, epoch, timeout)` fences and drains one peer; live descriptor/operation references bound the identity table, while failed native cleanup stays charged. CPU sockets/SHM are exercised on Linux; RNIC/CUDA retirement is shim-only, installed profile unqualified |
 | TENT wire interoperability | Out of scope by design (S23) | See the [wire and consumer boundary](tent-parity.md#wire-and-consumer-boundaries) |
 
 ## Provider selection

@@ -14,11 +14,6 @@ pub struct Request {
     pub transport_hint: c_int,
 }
 #[derive(Clone, Copy)]
-pub struct Status {
-    pub status: c_int,
-    pub transferred_bytes: u64,
-}
-#[derive(Clone, Copy)]
 pub struct Buffer {
     pub base: u64,
     pub length: u64,

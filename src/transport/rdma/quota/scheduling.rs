@@ -6,6 +6,8 @@ use crate::{Error, Result};
 /// coefficients weight the old estimate (zero learns entirely from the sample).
 #[derive(Clone, Debug)]
 #[non_exhaustive]
+#[derive(serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct SchedulingParams {
     pub smart_selection: bool,
     pub numa_tier_weights: [f64; 3],
@@ -17,7 +19,15 @@ pub struct SchedulingParams {
     pub max_bandwidth_gbps: f64,
     pub ewma_min_multiplier: f64,
     pub ewma_max_multiplier: f64,
+    #[serde(
+        rename = "transmit_meter_interval_us",
+        deserialize_with = "crate::config::json::duration"
+    )]
     pub transmit_meter_interval: Duration,
+    #[serde(
+        rename = "transmit_meter_max_interval_us",
+        deserialize_with = "crate::config::json::duration"
+    )]
     pub transmit_meter_max_interval: Duration,
 }
 

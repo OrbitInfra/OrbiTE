@@ -1,5 +1,5 @@
 pub(crate) mod admission_queue;
-mod config;
+pub(crate) mod config;
 pub(crate) mod control_plane;
 pub(crate) mod deadline_mlu;
 pub(crate) mod progress_worker;

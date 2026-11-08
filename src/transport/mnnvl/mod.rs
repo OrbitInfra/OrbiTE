@@ -5,6 +5,8 @@ use crate::{Error, MemoryType, Result, SourceEpoch};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
+#[derive(serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum MnnvlHandleType {
     #[default]
     Fabric,
@@ -15,14 +17,25 @@ pub enum MnnvlHandleType {
 /// settings and transports/mnnvl/egm. Selecting this profile replaces legacy IPC.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
+#[derive(serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct MnnvlConfig {
     pub handle_type: MnnvlHandleType,
     pub host_register: bool,
     pub egm: bool,
     /// Same fabric/IMEX domain on cooperating hosts. None restricts placement to this boot.
+    #[serde(deserialize_with = "domain")]
     pub fabric_domain: Option<SourceEpoch>,
     /// Frozen TENT configuration units (128 KiB). Both sides of the threshold use event completion.
     pub async_memcpy_threshold: usize,
+}
+fn domain<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> std::result::Result<Option<SourceEpoch>, D::Error> {
+    use serde::Deserialize;
+    Option::<String>::deserialize(d)?
+        .map(|s| s.parse().map_err(serde::de::Error::custom))
+        .transpose()
 }
 impl Default for MnnvlConfig {
     fn default() -> Self {

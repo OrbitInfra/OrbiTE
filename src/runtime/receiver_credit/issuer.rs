@@ -15,6 +15,8 @@ use super::protocol::{CreditReport, CreditSnapshot};
 /// tombstones until the receiver engine exits.
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
+#[derive(serde::Deserialize)]
+#[serde(default, deny_unknown_fields)]
 pub struct ReceiverCreditConfig {
     pub max_sessions: usize,
     pub max_bytes: u64,

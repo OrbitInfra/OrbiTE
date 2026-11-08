@@ -18,7 +18,9 @@ fn version_schema_renderers_and_exit_precedence() {
     assert!(!build.compiler.is_empty() && !build.commit.is_empty());
     assert_eq!(build.features["cuda"], cfg!(feature = "cuda"));
     assert_eq!(build.features["rdma"], cfg!(feature = "rdma"));
-    assert!(build.features["tent"]);
+    assert!(build.features["tcp"]);
+    assert!(!build.features.contains_key("tent"));
+    assert!(!build.features.contains_key("ascend"));
     let text = s.render_text();
     let doc: Value = serde_json::from_str(&s.render_json().unwrap()).unwrap();
     assert_eq!(doc["schema_version"], 1);

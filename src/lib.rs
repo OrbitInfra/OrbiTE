@@ -1,7 +1,7 @@
 //! Owned CPU/NVIDIA memory, fenced TCP/direct or staged RDMA transfers and notifications.
 //!
 //! Follows TENT's engine, segment/control-plane and transport ownership boundaries.
-//! Rust is the primary API; Python covers TENT's P2P subset. Peers use OrbiTE's
+//! Rust is the primary API; Python mirrors OrbiTE's retained owners. Peers use OrbiTE's
 //! native protocol and must run the same build. Hardware qualification is separate.
 //! See the repository's completion plan for qualification and integration gates.
 //!
@@ -77,7 +77,7 @@ pub use transport::io_uring::{IoUringConfig, IoUringStats};
 pub mod cuda;
 #[cfg(all(target_os = "linux", not(unsupported_native_target)))]
 pub use runtime::topology::{
-    DEVICE_PRIORITY_RANKS, MemEntry, MemType, NicEntry, NicType, Topology,
+    DEVICE_PRIORITY_RANKS, MemEntry, NicEntry, NicType, Topology, TopologyMemoryKind,
 };
 #[cfg(not(unsupported_native_target))]
 pub use transport::{
@@ -93,7 +93,7 @@ pub use {
 #[cfg(not(unsupported_native_target))]
 pub use {
     batch::{Batch, BatchId, BatchState, BatchStatus, SubmissionStatus, TaskState, TaskStatus},
-    config::{EngineConfig, RuntimeQueueConfig, TentSettings},
+    config::{EngineConfig, RuntimeQueueConfig},
     engine::{
         BatchReport, EngineStats, FileIoElement, Priority, RemoteEffect, TransferEngine,
         TransferFailure, TransferOp, TransferRequest, Transport,

@@ -147,9 +147,9 @@ fn real_submission_labels_mnnvl_bytes_attempts_and_registered_capacity() -> Resu
     );
     let text = dst.metrics().unwrap().prometheus();
     for line in [
-        r#"tent_write_bytes_total{transport="mnnvl"} 6"#,
-        r#"tent_transport_attempts_total{transport="mnnvl",operation="write"} 1"#,
-        r#"tent_registered_buffer_bytes{transport="mnnvl"} 12"#,
+        r#"orbite_write_bytes_total{transport="mnnvl"} 6"#,
+        r#"orbite_transport_attempts_total{transport="mnnvl",operation="write"} 1"#,
+        r#"orbite_registered_buffer_bytes{transport="mnnvl"} 12"#,
     ] {
         assert!(text.contains(line), "{line}");
     }

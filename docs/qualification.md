@@ -25,11 +25,10 @@ Source CI builds the public consumers for the default, `rdma`, `cuda` and combin
 features on Linux, and checks that native features are rejected on other
 targets; these compile checks exercise no device.
 
-The [S16 reference checks](https://github.com/OrbitInfra/OrbiTE/tree/main/tests/reference/inventory)
-compare the frozen C headers, configuration precedence, provider metadata and
-native request/reply bytes on Linux. TCP data fixtures also run against a real
-registered TENT source with guard bytes. A frozen client also exercises native
-OrbiTE prefix rejection, with no admission or payload movement.
+The CPU oracle compares real registered memory and TCP traces against the
+frozen reference. Three frozen RPC prefixes and a real frozen client exercise
+native OrbiTE rejection, with no admission or payload movement. Compatibility
+inventories and unused codec captures are removed.
 
 ## Linux CI release profiles
 
@@ -40,7 +39,9 @@ ordinary Python, `-O` and `PYTHONOPTIMIZE=2`; invalid metadata cannot bypass it.
 The [freeze decisions](rust-api.md#freeze-decisions) keep native qualification
 separate from this API review.
 
-The following are **Qualified on Linux CI**, limited to the cases below.
+The following records accepted historical CI evidence, limited to its artifact.
+The configuration and Python compatibility interfaces have since been replaced;
+their old evidence does not qualify the new API.
 Evidence is from accepted main `58caa0d79c316dcefeb7790351d08f21667c11dc`
 (S26), before the beta version change. The beta preparation reruns these
 workflows for its own artifact; its PR handoff records those runs. No label
@@ -61,18 +62,16 @@ The full-feature jobs' `P10 CPU fault matrix and real peer kills` step repeats
 the new real-process kill controls 50 times per toolchain. This is lifetime
 and byte evidence, not a physical-network latency or throughput claim.
 
-Configuration controls also include
-`invalid_roots_paths_files_types_and_credentials_are_bounded_diagnostics`,
-`public_tent_entry_points_reject_external_metadata`,
-`constructor_identity_and_legacy_corner_cases_reach_typed_fields` and
-`public_constructors_capture_the_file_and_do_not_reread_process_environment`.
-The last uses a child process to prove immutable capture without changing the
-test runner's environment. Native-feature parsing does not qualify the device.
+The independent OrbiTE APIs are **Qualified on Linux CI** at
+`6c94bf4999d334c3afd80f047b11381782f6df57`, in these bounded CPU profiles:
 
-P2P-only configuration controls reject external metadata types and server
-URIs through the Rust loaders, inline/file `MC_TENT_CONF`, legacy overrides
-and the installed Python constructor, with migration guidance. No external
-store or discovery service is
+| Profile | Exact workflow / jobs | Controls and limits |
+| --- | --- | --- |
+| OrbiTE configuration | `CI`: [stable default](https://github.com/OrbitInfra/OrbiTE/actions/runs/42402308030/job/128492534553), [1.85 default](https://github.com/OrbitInfra/OrbiTE/actions/runs/42402308030/job/128492534617), [stable all features](https://github.com/OrbitInfra/OrbiTE/actions/runs/42402308030/job/128492534493), [1.85 all features](https://github.com/OrbitInfra/OrbiTE/actions/runs/42402308030/job/128492534634); step `Test CPU TCP and ownership` | `config::json::tests`: all 49 engine fields bound; typed provider snapshots; wrong-type, unknown/duplicate key and root rejection; file/inline/env precedence; child-process immutability. No native device is qualified by parsing. |
+| OrbiTE Python CPU/TCP | `Python wheels`: [x86_64 stable 3.13](https://github.com/OrbitInfra/OrbiTE/actions/runs/42402308037/job/128492534377), [x86_64 1.85 3.13](https://github.com/OrbitInfra/OrbiTE/actions/runs/42402308037/job/128492534538), [aarch64 stable 3.13](https://github.com/OrbitInfra/OrbiTE/actions/runs/42402308037/job/128492534560), [aarch64 1.85 3.13](https://github.com/OrbitInfra/OrbiTE/actions/runs/42402308037/job/128492534466); all 20 matrix jobs passed | Installed CPU and combined wheels on CPython 3.10–3.14, both architectures/toolchains; sdist rebuild and the [wheel cases](#python-wheels). CPU/TCP only; CUDA tests are driver shims. |
+
+Only `ORBITE_CONF` is read;
+metadata-server keys are unknown. No external store or discovery service is
 part of this profile. Rust per-peer retirement is implemented with real TCP,
 HP-TCP and SHM controls on Linux, and CUDA/verbs table controls. The
 `peer_retirement_*` tests check held ownership, submit/close/reclaim races, retained
@@ -81,7 +80,7 @@ churn covers ten times the identity capacity; stale clones and failed native
 cleanup remain charged under pressure. Reopening a reclaimed identity requires
 an explicit authoritative open. RNIC,
 NVLink and MNNVL retirement remain **Implemented; installed profile unqualified**.
-Python same-epoch reopen preserves frozen segment-handle close; it is not
+Python same-epoch reopen preserves segment-handle close; it is not
 a drain receipt.
 
 (tent-tcp-interoperability)=
@@ -135,30 +134,30 @@ EFA DMA, fabric performance or physical multi-rail qualification.
 
 ## Python wheels
 
-**Qualified on Linux CI for the CPU/TCP wheel profile**, with exact jobs in
-the [release evidence](#linux-ci-release-profiles).
+**Qualified on Linux CI for the OrbiTE CPU/TCP API**, with the exact current
+and historical jobs in [release evidence](#linux-ci-release-profiles).
 
 The `Python wheels` workflow builds and installs CPU and combined-feature
 wheels for CPython 3.10–3.14 on Linux x86_64 and aarch64, with stable and Rust
-1.85. `tests/python/test_installed.py` checks all three S16 Python binding rows
-and 128 detailed surface rows. Its real loopback and two-process transfers
+1.85. `tests/python/test_installed.py` checks the OrbiTE surface. Its real loopback and two-process transfers
 check both directions, payload guards, notifications, policy/intent/deadline
 routing, exceptions and context exits. Held TCP replies prove GIL release,
 early-drop ownership, queued cancellation and timeout retention. Four timing
 controls repeat 50 times. The source-distribution job rebuilds and installs its
 wheel before repeating the same consumer controls.
 
-The specific installed tests are `test_inventory_rows`,
+The specific installed tests are
 `test_installed_distribution_and_surface`, `test_two_process_tcp_installed_wheel`,
 `test_real_tcp_read_write_guards_status_and_notifications`,
 `test_policy_intent_deadline_and_permissions_reach_owner`,
 `test_registration_options_lists_exceptions_and_limits`,
-`test_p2p_config_migration_file_and_environment`,
+`test_config_json_file_environment_snapshot_and_unknown_fields`,
 `test_gil_release_during_blocking_wait`,
 `test_timeout_cancel_and_early_drop_retain_exporter_until_drain`,
 `test_queued_cancel_status_and_destination_guards`,
 `test_memory_guard_early_drop_preserves_pending_destination` and
-`test_frozen_context_manager_exits_and_engine_keepalive`.
+`test_context_manager_exits_and_engine_keepalive`, plus
+`test_file_segments_and_unavailable_feature`.
 
 `test_cuda_exporters.py` adds CPU-wheel unavailable checks and seven installed
 CUDA-wheel controls through a CPU driver shim, including guarded TCP bytes,

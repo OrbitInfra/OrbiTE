@@ -11,9 +11,8 @@ and driver.
 ## Multi-node NVLink and EGM
 
 With `--features cuda`, select `config.mnnvl = Some(MnnvlConfig::default())`
-on both engines. The default is off. As in the frozen loader, the **presence**
-of `MC_ENABLE_MNNVL` opts the default configuration into MNNVL. An explicit
-`None` disables it. Legacy `nvlink` and MNNVL are mutually exclusive.
+on both engines. The default is off; JSON `mnnvl: {}` opts in and `null`
+disables it. Legacy `nvlink` and MNNVL are mutually exclusive.
 Use `Transport::Mnnvl` or the policy candidate `"mnnvl"`. Fabric symbols are resolved only when this profile is requested. A missing symbol leaves other transports available.
 
 | Setting | Default | Meaning |

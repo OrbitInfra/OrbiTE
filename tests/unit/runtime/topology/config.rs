@@ -18,9 +18,9 @@ fn inventory() -> Topology {
                 name: name.into(),
                 pci_bus_id: None,
                 kind: if name == "cuda:0" {
-                    MemType::Cuda
+                    TopologyMemoryKind::Cuda
                 } else {
-                    MemType::Host
+                    TopologyMemoryKind::Host
                 },
                 numa_node: if name == "*" {
                     None

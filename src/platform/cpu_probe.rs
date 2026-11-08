@@ -3,7 +3,7 @@
 use std::fs;
 use std::path::Path;
 
-use crate::runtime::topology::{MemEntry, MemType, NicEntry, NicType, Topology};
+use crate::runtime::topology::{MemEntry, NicEntry, NicType, Topology, TopologyMemoryKind};
 
 pub(crate) fn discover(sys: &Path, devices: &[String]) -> Topology {
     let nic_list = devices
@@ -46,7 +46,7 @@ pub(crate) fn discover(sys: &Path, devices: &[String]) -> Topology {
         .map(|node| MemEntry {
             name: format!("cpu:{node}"),
             pci_bus_id: None,
-            kind: MemType::Host,
+            kind: TopologyMemoryKind::Host,
             numa_node: Some(node),
             device_list: Default::default(),
         })
@@ -54,7 +54,7 @@ pub(crate) fn discover(sys: &Path, devices: &[String]) -> Topology {
     mem_list.push(MemEntry {
         name: "*".into(),
         pci_bus_id: None,
-        kind: MemType::Host,
+        kind: TopologyMemoryKind::Host,
         numa_node: None,
         device_list: Default::default(),
     });

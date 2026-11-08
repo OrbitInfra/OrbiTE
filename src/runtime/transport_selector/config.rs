@@ -43,7 +43,6 @@ fn intent<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Option<IntentT
     ];
     let value = Value::deserialize(d)?;
     let intent = match &value {
-        Value::String(s) if s.eq_ignore_ascii_case("intent_unspec") => Some(Unspec),
         Value::String(s) => names
             .iter()
             .find(|(name, _)| s.eq_ignore_ascii_case(name))
@@ -123,24 +122,26 @@ impl Default for SelectionPolicy {
 #[non_exhaustive]
 pub struct TransportSelectorConfig {
     pub force_tcp: bool,
-    pub use_legacy_transport_selection: bool,
     pub qp_mul_factor: Option<usize>,
     pub qp_pools: Vec<super::QpPool>,
     pub policy: Vec<SelectionPolicy>,
 }
 
 #[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 struct Endpoint {
     qp_mul_factor: Option<usize>,
     #[serde(default)]
     qp_pools: Vec<super::QpPool>,
 }
 #[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 struct Rdma {
     #[serde(default)]
     endpoint: Endpoint,
 }
 #[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
 struct Transports {
     #[serde(default)]
     force_tcp: bool,
@@ -148,13 +149,12 @@ struct Transports {
     rdma: Rdma,
 }
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Root {
     #[serde(default)]
     policy: Vec<Object<SelectionPolicy>>,
     #[serde(default)]
     transports: Transports,
-    #[serde(default)]
-    use_legacy_transport_selection: bool,
 }
 
 impl From<Root> for TransportSelectorConfig {
@@ -162,7 +162,6 @@ impl From<Root> for TransportSelectorConfig {
         let endpoint = root.transports.rdma.endpoint;
         Self {
             force_tcp: root.transports.force_tcp,
-            use_legacy_transport_selection: root.use_legacy_transport_selection,
             qp_mul_factor: endpoint.qp_mul_factor,
             qp_pools: endpoint.qp_pools,
             policy: root.policy.into_iter().map(|Object(p)| p).collect(),

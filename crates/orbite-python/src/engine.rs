@@ -76,7 +76,9 @@ pub(crate) fn create_using(config: impl FnOnce() -> Result<EngineConfig>) -> Res
         return Err(INTERNAL);
     };
     if let Err(code) = &result {
-        guard((), || log::warn!("Python engine unavailable ({})", code.0));
+        guard((), || {
+            log::warn!("Python engine unavailable ({})", code.error())
+        });
     }
     slot.engine.set(result).map_err(|_| INTERNAL)?;
     Ok(key)
@@ -87,7 +89,12 @@ pub(crate) fn with<T>(handle: Handle, f: impl FnOnce(&Engine) -> Result<T>) -> R
     if !*live {
         return Err(INVALID);
     }
-    f(slot.engine.get().ok_or(INVALID)?.as_ref().map_err(|c| *c)?)
+    f(slot
+        .engine
+        .get()
+        .ok_or(INVALID)?
+        .as_ref()
+        .map_err(Clone::clone)?)
 }
 pub(crate) fn destroy(h: Handle) -> Result<()> {
     if h == 0 {

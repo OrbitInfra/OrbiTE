@@ -1,6 +1,6 @@
 //! Two NUMA-local rails for owner-based CUDA dispatch controls.
 use super::*;
-use crate::{MemEntry, MemType, MemoryLocation, NicEntry, NicType, Topology};
+use crate::{MemEntry, MemoryLocation, NicEntry, NicType, Topology, TopologyMemoryKind};
 
 fn discover(config: &RdmaConfig) -> Result<(Topology, Vec<discovery::RdmaAddress>)> {
     let (_, base) = super::discover(config)?;
@@ -18,14 +18,14 @@ fn discover(config: &RdmaConfig) -> Result<(Topology, Vec<discovery::RdmaAddress
         topology.mem_list.push(MemEntry {
             name: format!("cpu:{id}"),
             pci_bus_id: None,
-            kind: MemType::Host,
+            kind: TopologyMemoryKind::Host,
             numa_node: Some(id),
             device_list: Default::default(),
         });
         topology.mem_list.push(MemEntry {
             name: format!("cuda:{id}"),
             pci_bus_id: None,
-            kind: MemType::Cuda,
+            kind: TopologyMemoryKind::Cuda,
             numa_node: Some(id),
             device_list: [vec![id as usize], vec![], vec![1 - id as usize]],
         });

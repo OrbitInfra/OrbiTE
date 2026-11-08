@@ -585,7 +585,10 @@ fn runtime_loading_attributes_and_configuration_are_explicit() {
     assert!(f.peer.nics.iter().all(|n| n.name == "lo"));
     assert_eq!(std::env::var_os("FI_HMEM"), env);
     f.close().unwrap();
-    let c=EngineConfig::from_tent_json(r#"{"transports":{"fabric":{"enable":true,"provider":"tcp","devices":["lo"],"slice_size":1024}}}"#).unwrap();
+    let c = EngineConfig::from_json(
+        r#"{"transports":{"fabric":{"provider":"tcp","devices":["lo"],"slice_size":1024}}}"#,
+    )
+    .unwrap();
     assert_eq!(c.fabric.unwrap().slice_size, 1024);
     let mut c = cfg();
     c.fabric.as_mut().unwrap().max_pending_ops = 0;

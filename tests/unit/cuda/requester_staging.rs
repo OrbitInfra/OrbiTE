@@ -116,13 +116,16 @@ fn requester_reuses_bounded_slots_at_negotiated_chunk_size_including_tails() {
                 #[cfg(feature = "metrics")]
                 {
                     let metrics = requester.metrics().unwrap().json();
-                    assert_eq!(metrics["tent_logical_requests_started_total"], 2);
-                    assert_eq!(metrics["tent_logical_request_outcomes_total"], 2);
-                    assert_eq!(metrics["tent_transport_attempts_total"], 2 * chunks);
-                    assert_eq!(metrics["tent_transport_attempt_outcomes_total"], 2 * chunks);
-                    assert_eq!(metrics["tent_inflight_attempts"], 0);
-                    assert_eq!(metrics["tent_stage_dispatch_us"]["count"], 2);
-                    assert_eq!(metrics["tent_stage_transport_us"]["count"], 2);
+                    assert_eq!(metrics["orbite_logical_requests_started_total"], 2);
+                    assert_eq!(metrics["orbite_logical_request_outcomes_total"], 2);
+                    assert_eq!(metrics["orbite_transport_attempts_total"], 2 * chunks);
+                    assert_eq!(
+                        metrics["orbite_transport_attempt_outcomes_total"],
+                        2 * chunks
+                    );
+                    assert_eq!(metrics["orbite_inflight_attempts"], 0);
+                    assert_eq!(metrics["orbite_stage_dispatch_us"]["count"], 2);
+                    assert_eq!(metrics["orbite_stage_transport_us"]["count"], 2);
                 }
                 let source_width = 3.min(chunks);
                 let local_width = 3.min(length.div_ceil(local_chunk));
@@ -401,11 +404,11 @@ fn r1c_failed_merged_staging_write_does_not_resubmit_an_alias() -> Result<()> {
     #[cfg(feature = "metrics")]
     {
         let m = requester.metrics().unwrap();
-        assert_eq!(m.json()["tent_transport_attempts_total"], 1);
-        assert_eq!(m.json()["tent_task_failures_total"], 1);
+        assert_eq!(m.json()["orbite_transport_attempts_total"], 1);
+        assert_eq!(m.json()["orbite_task_failures_total"], 1);
         assert!(
             m.prometheus()
-                .contains(r#"tent_task_failures_total{transport="tcp",reason="poll"} 1"#)
+                .contains(r#"orbite_task_failures_total{transport="tcp",reason="poll"} 1"#)
         );
     }
     dev.copy_error.store(0, Ordering::Release);

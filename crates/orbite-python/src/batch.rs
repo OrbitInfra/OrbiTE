@@ -1,5 +1,5 @@
 use super::{boundary::*, engine::Engine, memory::transport, records, segments::Target};
-use orbite::{Error, Notification, Priority, TaskState, TaskStatus, TransferOp, TransferRequest};
+use orbite::{Notification, Priority, TransferOp, TransferRequest};
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 
@@ -93,82 +93,5 @@ impl Engine {
         }
         batch.submit_groups(&groups, notify.as_ref(), self.timeout())?;
         Ok(())
-    }
-}
-pub(crate) fn terminal(tasks: &[TaskStatus]) -> Result<(i32, i32)> {
-    let mut first = Code(0);
-    let mut known = true;
-    for task in tasks {
-        let (code, certain) = match (task.state, task.failure.as_deref()) {
-            (TaskState::Waiting | TaskState::Running, _) => return Err(FULL),
-            (TaskState::Completed, _) => (Code(0), true),
-            (TaskState::Failed, Some(f))
-                if !matches!(
-                    f.error,
-                    Error::Timeout | Error::Cancelled | Error::DeadlineInfeasible
-                ) =>
-            {
-                let certain = f.remote_effect == orbite::RemoteEffect::None;
-                let code = match &f.error {
-                    Error::Io(_) | Error::Protocol(_) if !certain => UNKNOWN,
-                    Error::Io(io)
-                        if matches!(
-                            io.kind(),
-                            std::io::ErrorKind::ConnectionRefused
-                                | std::io::ErrorKind::NetworkUnreachable
-                                | std::io::ErrorKind::HostUnreachable
-                                | std::io::ErrorKind::AddrNotAvailable
-                        ) =>
-                    {
-                        UNSENT
-                    }
-                    e => Code::from(e),
-                };
-                (code, certain && code != UNKNOWN)
-            }
-            _ => (UNKNOWN, false),
-        };
-        if first.0 == 0 || code == UNKNOWN {
-            first = code;
-        }
-        known &= certain;
-    }
-    Ok((first.0, i32::from(known)))
-}
-
-pub(crate) fn status(t: &TaskStatus) -> records::Status {
-    let state = match t.state {
-        TaskState::Waiting => 0,
-        TaskState::Running => 1,
-        TaskState::Cancelled => 3,
-        TaskState::Completed => 4,
-        TaskState::Failed | TaskState::Skipped => match t.failure.as_ref().map(|f| &f.error) {
-            Some(Error::Timeout | Error::DeadlineInfeasible) => 5,
-            Some(Error::Cancelled) => 3,
-            _ => 6,
-        },
-        // The binding is release-pinned; an unknown future state is not success.
-        _ => 6,
-    };
-    records::Status {
-        status: state,
-        transferred_bytes: t.transferred_bytes as u64,
-    }
-}
-pub(crate) fn overall(tasks: &[TaskStatus]) -> records::Status {
-    let mut bytes = 0;
-    let mut pending = false;
-    let mut failure = None;
-    for t in tasks {
-        let s = status(t);
-        match s.status {
-            0 | 1 => pending = true,
-            4 => bytes += s.transferred_bytes,
-            n => failure = Some(failure.map_or(n, |old: i32| old.max(n))),
-        }
-    }
-    records::Status {
-        status: if pending { 1 } else { failure.unwrap_or(4) },
-        transferred_bytes: bytes,
     }
 }

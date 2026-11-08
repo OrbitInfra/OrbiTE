@@ -8,8 +8,19 @@ use std::{
 };
 
 pub(crate) fn transport(n: i32) -> Result<Transport> {
-    let n = u8::try_from(n).map_err(|_| INVALID)?;
-    Transport::from_tent_id(n).ok_or(if n <= 18 { UNSUPPORTED } else { INVALID })
+    Ok(match n {
+        0 => Transport::Unspec,
+        1 => Transport::Tcp,
+        2 => Transport::HpTcp,
+        3 => Transport::Shm,
+        4 => Transport::Rdma,
+        5 => Transport::Fabric,
+        6 => Transport::Nvlink,
+        7 => Transport::Mnnvl,
+        8 => Transport::IoUring,
+        9 => Transport::Gds,
+        _ => return Err(INVALID),
+    })
 }
 pub(crate) fn permission(n: i32) -> Result<Permission> {
     match n {
@@ -40,7 +51,6 @@ impl Location {
                         i32::try_from(id.parse::<u32>().map_err(|_| INVALID)?)
                             .map_err(|_| INVALID)?,
                     )),
-                    "mlu" | "xpu" | "ascend" | "rocm" | "hip" | "npu" | "tpu" => Err(UNSUPPORTED),
                     _ => Err(INVALID),
                 }
             }
@@ -360,7 +370,7 @@ impl Memory {
     pub(crate) fn defer_free(&mut self, e: &TransferEngine, addr: usize) -> Result<()> {
         match self.free(e, addr as *mut c_void) {
             Ok(()) => Ok(()),
-            Err(c) if c == FULL => {
+            Err(c) if matches!(c.error(), orbite::Error::ResourceExhausted) => {
                 self.deferred.insert(addr); // bounded by the allocation table
                 Ok(())
             }
@@ -370,7 +380,10 @@ impl Memory {
     pub(crate) fn reap_deferred(&mut self, e: &TransferEngine) {
         let addresses: Vec<_> = self.deferred.iter().copied().collect();
         for addr in addresses {
-            if self.free(e, addr as *mut c_void) != Err(FULL) {
+            if !self
+                .free(e, addr as *mut c_void)
+                .is_err_and(|e| matches!(e.error(), orbite::Error::ResourceExhausted))
+            {
                 self.deferred.remove(&addr);
             }
         }
@@ -519,7 +532,7 @@ impl Memory {
     pub fn free(&mut self, e: &TransferEngine, p: *mut c_void) -> Result<()> {
         let addr = p as usize;
         let a = self.alloc.get_mut(&addr).ok_or(INVALID)?;
-        if let Some(error) = a.error {
+        if let Some(error) = a.error.clone() {
             return Err(error);
         }
         let mut all = lock(spans())?;
@@ -560,7 +573,7 @@ impl Memory {
                 s.fenced = true;
             }
             let code = Code::from(error);
-            a.error = Some(code);
+            a.error = Some(code.clone());
             return Err(code);
         }
         all.remove(&addr);
@@ -615,7 +628,7 @@ impl Memory {
             let (memory, offset, receipt) = match resolved {
                 Ok(v) => v,
                 Err(error) => {
-                    if error == UNKNOWN {
+                    if error.unquiesced() {
                         self.quarantine_owners
                             .extend(owners.iter().flatten().map(|o| o.keep.clone()));
                     }
@@ -785,18 +798,18 @@ impl Memory {
         for (key, &n) in uses {
             let r = self.regs.get_mut(key).ok_or(ADDRESS)?;
             let result = (|| {
-                if let Some(code) = r.error {
+                if let Some(code) = r.error.clone() {
                     return Err(code);
                 }
                 while r.removed < n {
                     if let Err(err) = e.unregister_memory(r.memory.as_ref().ok_or(INTERNAL)?) {
                         let c = Code::from(err);
-                        if c == UNKNOWN {
+                        if c.unquiesced() {
                             if let Some(span) = lock(spans())?.get_mut(&r.backing_base) {
                                 span.fenced = true;
                             }
                         }
-                        r.error = Some(c);
+                        r.error = Some(c.clone());
                         return Err(c);
                     }
                     r.removed += 1;
@@ -820,8 +833,8 @@ impl Memory {
                                 .and_then(|()| e.trim_idle_staging_buffers());
                             if let Err(error) = closed {
                                 let code = Code::from(error);
-                                if code == UNKNOWN {
-                                    r.error = Some(code);
+                                if code.unquiesced() {
+                                    r.error = Some(code.clone());
                                     if let Some(span) = lock(spans())?.get_mut(&r.backing_base) {
                                         span.fenced = true;
                                     }

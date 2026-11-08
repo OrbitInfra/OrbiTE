@@ -69,17 +69,17 @@ impl Pipeline {
         }
         [
             (
-                "tent_metrics_serialization_attempts_total",
+                "orbite_metrics_serialization_attempts_total",
                 "counter",
                 self.attempts.each_ref().map(|n| n.load(Relaxed)),
             ),
             (
-                "tent_metrics_serialization_failures_total",
+                "orbite_metrics_serialization_failures_total",
                 "counter",
                 self.failures.each_ref().map(|n| n.load(Relaxed)),
             ),
             (
-                "tent_metrics_last_success_timestamp_seconds",
+                "orbite_metrics_last_success_timestamp_seconds",
                 "gauge",
                 success,
             ),
@@ -88,17 +88,21 @@ impl Pipeline {
     pub(super) fn write_prometheus(&self, out: &mut String, enabled: bool, now: u64) {
         let _ = writeln!(
             out,
-            "# TYPE tent_metrics_build_info gauge\ntent_metrics_build_info{{version=\"{BUILD_VERSION}\",commit=\"{BUILD_COMMIT}\"}} 1"
+            "# TYPE orbite_metrics_build_info gauge\norbite_metrics_build_info{{version=\"{BUILD_VERSION}\",commit=\"{BUILD_COMMIT}\"}} 1"
         );
         for (name, kind, value) in [
             (
-                "tent_metrics_http_server_up",
+                "orbite_metrics_http_server_up",
                 "gauge",
                 u64::from(self.http_up.load(Relaxed)),
             ),
-            ("tent_metrics_runtime_enabled", "gauge", u64::from(enabled)),
             (
-                "tent_metrics_http_start_failures_total",
+                "orbite_metrics_runtime_enabled",
+                "gauge",
+                u64::from(enabled),
+            ),
+            (
+                "orbite_metrics_http_start_failures_total",
                 "counter",
                 self.start_failures.load(Relaxed),
             ),
@@ -115,19 +119,19 @@ impl Pipeline {
     pub(super) fn json(&self, enabled: bool, now: Option<u64>) -> serde_json::Map<String, Value> {
         let mut fields = serde_json::Map::from_iter([
             (
-                "tent_metrics_build_info".into(),
+                "orbite_metrics_build_info".into(),
                 json!({"version":BUILD_VERSION,"commit":BUILD_COMMIT}),
             ),
             (
-                "tent_metrics_http_server_up".into(),
+                "orbite_metrics_http_server_up".into(),
                 u64::from(self.http_up.load(Relaxed)).into(),
             ),
             (
-                "tent_metrics_runtime_enabled".into(),
+                "orbite_metrics_runtime_enabled".into(),
                 u64::from(enabled).into(),
             ),
             (
-                "tent_metrics_http_start_failures_total".into(),
+                "orbite_metrics_http_start_failures_total".into(),
                 self.start_failures.load(Relaxed).into(),
             ),
         ]);

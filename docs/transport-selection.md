@@ -68,18 +68,17 @@ When no custom rules exist the default names are `memory_default` and `file_stor
 | `same_machine` | Boolean. A memory peer is local only when both descriptors identify the same host boot. An absent identity gives no locality |
 | `min_size`, `max_size` | Inclusive byte bounds |
 | `priority` | Exact effective QoS or request priority. Accepts high/medium/low or 0/1/2 |
-| `intent_type` | Case-insensitive `unspec` (also `intent_unspec`), `foreground_get`, `background_prefetch`, `migration`, `checkpoint`, `weight_loading`, `staging_internal`, or the corresponding integer 0–6. Omission matches any intent |
+| `intent_type` | Case-insensitive `unspec`, `foreground_get`, `background_prefetch`, `migration`, `checkpoint`, `weight_loading`, `staging_internal`, or the corresponding integer 0–6. Omission matches any intent |
 | `transports` | Ordered unique candidates. Memory accepts `tcp`, `hp_tcp`, `shm`, `rdma`, `nvlink`, `mnnvl` and `fabric`. Local files accept `gds` and `io_uring` |
 | `devices` | RDMA NIC names compiled to a 64-bit mask using stable discovered IDs and the custom topology's verified mapping |
 | `qp_pool` | Selects a contiguous endpoint QP range. An omitted, empty or unknown name permits every index |
 | `service_level`, `traffic_class` | Policy values are diagnostic. Only the endpoint pool changes native SL/TC |
 
 `transports.force_tcp` restricts memory requests to TCP. File selection keeps
-its own rules. `use_legacy_transport_selection` enables the default owner order
-for unnamed requests. Explicit name binding stays strict, and memory force-TCP
-takes precedence. JSON input is bounded to 1 MiB and 256 policies. Unknown
-policy fields and invalid intent reject the configuration. Frozen TENT skips a
-rule with an invalid intent.
+its own rules. Automatic selection uses the compiled rules when present, otherwise the default owner order.
+Explicit name binding remains strict. JSON input is bounded to 1 MiB and 256
+policies. Unknown fields and invalid intent reject the configuration; frozen
+TENT skips a rule with an invalid intent.
 
 The optional `fabric` candidate requires installed host capabilities on both peers.
 Its domain whitelist is configured through `FabricConfig`; per-request RDMA
