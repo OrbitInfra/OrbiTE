@@ -8,6 +8,33 @@ import statistics
 from run import summarize
 
 
+def match_cpu(before, after):
+    # This lscpu field samples the current clock, not the CPU configuration.
+    # Keep the raw observations and report them; never normalize measured times.
+    def split(text):
+        observed = [line for line in text.splitlines() if line.startswith("CPU(s) scaling MHz:")]
+        fixed = [line for line in text.splitlines() if line not in observed]
+        return fixed, observed
+    a, af = split(before)
+    b, bf = split(after)
+    if a != b:
+        raise ValueError("unmatched cpu configuration")
+    return (af, bf) if af != bf else None
+
+
+def controls():
+    cpu = "Model name: example\nCPU(s): 4\nCPU max MHz: 2600\nCPU(s) scaling MHz: 116%\n"
+    changed = cpu.replace("116%", "154%")
+    if match_cpu(cpu, cpu) is not None or match_cpu(cpu, changed) is None:
+        raise ValueError("CPU clock observation control failed")
+    for old, new in [("example", "other"), ("CPU(s): 4", "CPU(s): 8"), ("2600", "3000")]:
+        try:
+            match_cpu(cpu, changed.replace(old, new))
+        except ValueError:
+            continue
+        raise ValueError("CPU configuration mismatch was accepted")
+
+
 def load(path):
     manifest = json.loads((path / "manifest.json").read_text())
     if manifest["status"] != "passed":
@@ -31,6 +58,7 @@ def load(path):
 
 
 def main():
+    controls()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("before", type=Path)
     parser.add_argument("after", type=Path)
@@ -41,7 +69,8 @@ def main():
     after, after_ids, new = load(args.after)
     if before_ids != after_ids:
         raise ValueError("different workload rows")
-    for key in ("host", "kernel", "cpu", "affinity", "rustc", "cxx", "tent_revision", "caller_threads", "workers_per_engine", "tent_rpc_pools", "merge", "engine_max_failover_attempts", "tent_tcp_local_retry", "poll", "metrics", "timing", "checks", "file_state", "builds"):
+    clock_observation = match_cpu(before["cpu"], after["cpu"])
+    for key in ("host", "kernel", "affinity", "rustc", "cxx", "tent_revision", "caller_threads", "workers_per_engine", "tent_rpc_pools", "merge", "engine_max_failover_attempts", "tent_tcp_local_retry", "poll", "metrics", "timing", "checks", "file_state", "builds"):
         if before[key] != after[key]:
             raise ValueError(f"unmatched {key}")
     for key in ("samples", "warmup", "workers", "trials", "sizes", "batches", "ext4", "tmpfs"):
@@ -52,6 +81,9 @@ def main():
             raise ValueError(f"changed workload {key}")
     print(f"Before `{before['orbite_revision'][:8]}`; after `{after['orbite_revision'][:8]}`; "
           f"host `{after['host']}`; {len(after_ids)} verified rows on each side.")
+    if clock_observation:
+        print(f"\nInstantaneous CPU clock observation changed: {clock_observation[0]} → {clock_observation[1]}. "
+              "All other lscpu fields match. Frequency was not locked; timings are not frequency-normalized.")
     print("\nCells are before → after, median of the three trial statistics. All cases are included. "
           "R marks any numerical regression (p50/p99/CPU up or throughput down), not statistical significance; "
           "O means all four trial-statistic ranges overlap. U means the payload implementation is unchanged "

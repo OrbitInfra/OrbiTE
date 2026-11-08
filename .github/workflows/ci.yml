@@ -343,6 +343,7 @@ jobs:
         run: |
           python3 tests/reference/run.py --rust-only --output "$RUNNER_TEMP/orbite-cpu-trace-${{ matrix.toolchain }}"
           python3 -c 'import sys; sys.path.insert(0, "benches"); from analyze_io_tail import controls; controls()'
+          python3 -c 'import sys; sys.path.insert(0, "benches"); from compare import controls; controls()'
       - name: Native peer supervision ownership control
         if: matrix.toolchain == 'stable' && matrix.features == ''
         run: python3 -B -m unittest discover -s tests/hardware -p 'test_*.py'

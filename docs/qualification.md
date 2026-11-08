@@ -378,6 +378,13 @@ does not sleep with backoff. No production change or tail improvement is
 claimed. The virtual-device/coherence cause and remaining tmpfs WRITE handoff
 need separate evidence. No physical-SSD claim follows.
 
+The [unchanged-code paired control](benchmarks.md#unchanged-code-paired-control)
+also passes all 480 rows before and after on each toolchain. Stable gapped
+64-block READ/WRITE p99 changes 5.42→6.54 / 2.52→4.49 ms while unchanged TENT
+changes 4.34→5.42 / 1.76→2.85 ms. All rows and regressions are reported;
+different runner CPUs and unlocked frequencies prevent pooling these values
+with the earlier runs or interpreting this as a production improvement.
+
 The [real-ring owner controls](https://github.com/OrbitInfra/OrbiTE/actions/runs/42499911722)
 cover caller completion, held receipts through cancel/timeout/close, failed
 worker handoff, whole preflight, partial submission and exact short prefixes,

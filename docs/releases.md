@@ -112,8 +112,12 @@ Rust 1.85's 64 KiB ext4 READ/WRITE p50 regresses 15%/17% while CPU falls
 16%/20%; the contribution of changed wake timing versus file/VM variation is
 not isolated. Larger file groups keep their worker path. Per-sample traces
 rule out extra rings, bounce allocation and drain-loop sleeps for the aligned
-gapped case; they do not justify a production tail fix. Small tmpfs WRITE
-still usually creates a worker after the caller sees a pending CQE.
+gapped case; they do not justify a production tail fix. The subsequent
+[unchanged-code control](benchmarks.md#unchanged-code-paired-control) passes
+every row but still varies substantially: stable gapped READ/WRITE p99 is
+5.42→6.54 / 2.52→4.49 ms, with TENT also moving. Small tmpfs WRITE still
+usually creates a worker after the caller sees a pending CQE; its control-pair
+p50 is 199→191 µs versus TENT's 84 µs. These are unresolved limits, not fixes.
 There is one exclusive direct-TCP lane per peer, without a concurrent-caller performance
 claim. The separate Rust 1.85 pair used a newer EPYC 9V45: scattered TCP
 improved, but 64 MiB READ p50/p99 regressed 2.8%/10.7% while CPU fell 4.2%.

@@ -453,16 +453,48 @@ owner to the worker if still pending. Expiry would remain a handoff trigger,
 never a release receipt. This needs a separate submission-latency/lifetime
 review and measurement; no wait, pool or new worker is introduced here.
 
+### Unchanged-code paired control
+
 The [paired control run](https://github.com/OrbitInfra/OrbiTE/actions/runs/42522826931)
 uses `7e40c7b` → `23f6911` on each toolchain: identical production sources and
 workload hashes, with the ordinary S26 three trials, 100 samples and byte checks.
-All 480 rows per side, including every slower row, go in the
-[PR's complete tables](https://github.com/OrbitInfra/OrbiTE/pull/184).
+All **480 rows per side passed**. The complete
+[stable](https://github.com/OrbitInfra/OrbiTE/pull/184#issuecomment-6728129888) and
+[1.85](https://github.com/OrbitInfra/OrbiTE/pull/184#issuecomment-6728131269)
+tables include every slower row. Stable uses four EPYC 7763 logical CPUs;
+1.85 uses four Xeon 6973P-C logical CPUs. Each pair shares one VM with Ubuntu
+24.04 / Linux 7.0.0-1017-azure. In the 1.85 pair, only the instantaneous
+`lscpu` scaling reading differs (116% → 154%); model, topology, flags and
+frequency limits match. Frequency was not locked or used to normalize times.
 Reproduce them with `benches/compare.py BEFORE AFTER --changed-profile none`.
-All payloads are marked unchanged. Differences in this control pair are
-run/build-placement variation, not an optimization result; comparison with
-unchanged TENT bounds the interpretation without claiming statistical
-equivalence or dismissing a large regression. Raw results remain outside Git.
+
+Stable medians of the three trial statistics; all ext4 rows below use 4 KiB blocks:
+
+| Workload | OrbiTE p50 µs before → after | OrbiTE p99 µs before → after | TENT p99 µs before → after |
+|---|---:|---:|---:|
+| ext4, 64 gapped READ | 2,220.5 → 1,652.3 | 5,424.5 → 6,536.6 | 4,335.6 → 5,419.0 |
+| ext4, 64 gapped WRITE | 853.6 → 842.5 | 2,517.7 → 4,486.7 | 1,762.1 → 2,851.6 |
+| ext4, 8 gapped READ | — | 1,582.4 → 777.8 | 1,077.4 → 919.8 |
+| ext4, 8 gapped WRITE | — | 643.4 → 681.9 | 891.2 → 1,443.6 |
+| ext4, 8 contiguous READ | — | 833.8 → 803.1 | 986.0 → 819.1 |
+| ext4, 8 contiguous WRITE | — | 757.7 → 673.7 | 593.9 → 755.4 |
+
+Rust 1.85's gapped 64-block READ/WRITE p99 changes 16.36→15.28 / 4.54→4.41 ms;
+TENT changes 1.35→3.40 / 2.15→2.28 ms. Stable tmpfs READ/WRITE p50 changes
+52.5→48.2 / 198.9→190.8 µs, versus TENT after 83.9/83.5 µs: the WRITE
+handoff gap remains. HP-TCP 1 MiB READ p50 changes 543.6→541.0 µs on stable
+and 610.3→583.8 µs on 1.85; this does not establish a fix to its watch item.
+
+All payloads are unchanged. Stable has 141/160 cases with at least one worse
+statistic, 105 with overlapping ranges for all four statistics; 1.85 has
+104/160 and 84. Not all changes track TENT: stable single-block ext4 READ p99
+rises 157% while TENT falls 5%, with nonoverlapping OrbiTE trial ranges.
+Conversely, contiguous 64-block READ p50 rises 45% while TENT rises 57%.
+The unchanged 1.85 SHM contiguous 64-block WRITE p50 rises 56%, despite no file
+I/O. These are run/build-placement variations, not optimization results;
+their clock, cache and VM contributions are not isolated. Every regression
+remains flagged in the tables. Range overlap is descriptive, not a significance
+test. Raw results remain outside Git; no physical-SSD claim follows.
 
 ## CPU fault matrix
 
