@@ -120,6 +120,27 @@ if [[ ${2:-} == metrics-port ]]; then
     metrics::tests::recording::http_keeps_zero_histograms_for_tcp_and_unspec_in_both_formats
   )
 fi
+if [[ ${2:-} == rdma-priority ]]; then
+  iterations=1000
+  controls=(
+    transport::rdma::workers::tests::priority::shared_worker_dispatches_priority_then_optional_deadline_across_contexts
+    transport::rdma::workers::tests::priority::pausing_one_lane_cannot_include_a_registration_after_another_lanes_snapshot
+  )
+  # Exercise the snapshot boundary under CPU contention, with bounded load.
+  load_count=$(nproc)
+  if ((load_count > 8)); then load_count=8; fi
+  load_pids=()
+  stop_load() {
+    for pid in "${load_pids[@]}"; do kill "$pid" 2>/dev/null || true; done
+    wait || true
+  }
+  trap stop_load EXIT
+  for ((i=0; i<load_count; i++)); do
+    yes > /dev/null &
+    load_pids+=("$!")
+  done
+  echo "RDMA priority controls: $load_count CPU-load processes on $(nproc) CPUs"
+fi
 for ((iteration=1; iteration<=iterations; iteration++)); do
   echo "Iteration $iteration/$iterations with RUST_TEST_THREADS=$RUST_TEST_THREADS"
   output=$("$binary" --exact "${controls[@]}") || { echo "$output"; exit 1; }

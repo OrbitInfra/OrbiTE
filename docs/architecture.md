@@ -479,6 +479,12 @@ retains a live or uncertain entry under pressure.
 | `DeviceSelector`, `DeviceInfo`, `SchedulingParams` | Compiled NIC eligibility, grant byte charges, bandwidth-weighted selection and estimates | TENT's classes of the same names |
 | `CqQuota`, `GrantCredits`, `ReceiveCredits` | Aggregate SQ/RQ wakes and whole-parent grant/receive admission | Bounded slice admission; receive credits are OrbiTE's |
 
+`PostQueue` orders the ready records collected in a worker pass. A registration
+attached after its context snapshot enters a later pass; an earlier post cannot
+be preempted. The priority fixture pauses before every context snapshot, so all
+five requests contend together. Its late-registration negative control pauses
+between contexts and proves why a single-lane pause cannot establish that boundary.
+
 Each context slot owns its PD, CQ lanes and peer endpoint registry. Several
 grant records can share one QP, which keeps its send and receive queues across
 grants; peer arrays hold weak lane references to avoid ownership cycles. Native

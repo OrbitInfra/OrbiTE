@@ -328,7 +328,8 @@ Source-level exit complete. The following contracts have CPU controls.
   alias, and unquiesced native work stays charged.
 - **Priority and arbitration.** RDMA High/Medium/Low dispatch across contexts,
   TENT's urgency ordering, head-only or per-entry aging and shared priority
-  slots; TCP and NVLink accept every priority as advisory.
+  slots; TCP and NVLink accept every priority as advisory. CPU ordering controls
+  synchronize at the whole-worker snapshot boundary and cover late registration.
 - **QoS contracts.** Typed and OrbiTE JSON global/tenant/intent policies
   with per-contract byte/request caps and delay/reject admission.
 - **Quotas and credits (S11, F15).** Each NIC accounts its own slices. Host

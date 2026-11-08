@@ -186,7 +186,7 @@ fn notification_routes_try_only_unposted_unavailable_channels() {
     assert!(matches!(rejected.outcome.error, Error::Unavailable("last")));
     assert_eq!(rejected.outcome.effect, NotificationEffect::None);
     assert!(!rejected.retryable);
-    // RPC-only unreachable peers preserve the original socket error.
+    // RPC-only unreachable peers preserve the connect error's typed mapping.
     drop(remote);
     routes.channels.clear();
     // Keep the port bound but non-listening. A freed ephemeral port could be
@@ -197,14 +197,17 @@ fn notification_routes_try_only_unposted_unavailable_channels() {
         endpoint: refused.local_addr().unwrap(),
         ..destination
     };
-    assert!(matches!(
-        routes
-            .send(destination, &note, until())
-            .unwrap_err()
-            .outcome
-            .error,
-        Error::Io(_)
-    ));
+    let failure = routes.send(destination, &note, until()).unwrap_err();
+    // Linux refuses the connection. macOS leaves a bound, non-listening socket
+    // unanswered until its connect times out; neither has sent a request body.
+    #[cfg(target_os = "macos")]
+    assert!(
+        matches!(failure.outcome.error, Error::Timeout),
+        "{failure:?}"
+    );
+    #[cfg(not(target_os = "macos"))]
+    assert!(matches!(failure.outcome.error, Error::Io(_)), "{failure:?}");
+    assert_eq!(failure.outcome.effect, NotificationEffect::None);
 }
 
 #[test]

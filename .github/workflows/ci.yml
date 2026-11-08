@@ -291,6 +291,12 @@ jobs:
           .github/scripts/repeat-runtime-controls.sh "$binary"
           .github/scripts/repeat-runtime-controls.sh "$binary" batch-release
           .github/scripts/repeat-runtime-controls.sh "$binary" rail-recovery
+      - name: Repeat RDMA priority snapshot controls 1000 times under CPU load
+        if: matrix.features == 'rdma,cuda'
+        run: |
+          binary=$(cargo test --locked --features "$ORBITE_FEATURES" --lib --no-run --message-format=json |
+            jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
+          .github/scripts/repeat-runtime-controls.sh "$binary" rdma-priority
       - name: Repeat GDS reservation release at suite parallelism
         if: matrix.features == 'rdma,cuda,io-uring,gds'
         run: |

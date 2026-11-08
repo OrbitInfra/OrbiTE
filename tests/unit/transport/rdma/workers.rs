@@ -137,6 +137,10 @@ fn invalid_worker_counts_fail_before_provider_discovery() {
 
 static PANIC_GATE: OnceLock<(Mutex<(bool, bool)>, Condvar)> = OnceLock::new();
 
+pub(super) fn before_pass(lanes: &[Lane]) {
+    priority::before_pass(lanes);
+}
+
 pub(super) fn before_tick(state: &ProgressState) {
     priority::before_tick(state);
     if state.config.device.as_deref() != Some("panic_worker") {
