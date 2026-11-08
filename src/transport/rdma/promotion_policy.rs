@@ -1,4 +1,4 @@
-//! Frozen TENT head-only and per-entry aging decisions, without temporary vectors.
+//! Head-only and per-entry priority aging, without temporary vectors.
 
 use std::time::{Duration, Instant};
 

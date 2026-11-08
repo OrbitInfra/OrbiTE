@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use crate::{Error, Result};
 
-/// An application-defined name and message, matching TENT's notification fields.
+/// An application-defined notification name and message.
 /// Strings may be empty; their UTF-8 byte lengths count against engine budgets.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]

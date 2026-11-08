@@ -1,7 +1,7 @@
 # Transport selection
 
 `Transport::Unspec` selects an eligible payload transport before admission.
-`EngineConfig::selector` optionally applies ordered TENT-style policies to every
+`EngineConfig::selector` optionally applies ordered first-match policies to every
 request, including explicit memory and file transport hints. Sync and async submissions use
 the same selection in `TransferEngine::prepare`; the selected transport stays
 fixed through queueing, execution and drain.

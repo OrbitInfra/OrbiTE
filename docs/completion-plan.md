@@ -93,7 +93,9 @@ copies and a mapped-host kernel. The [installed comparison](qualification.md#cal
 and the P5 hardware verification queue remain open.
 S16 reference fixtures remain only where the oracle or native wire controls use them.
 S17 TENT configuration compatibility is superseded by OrbiTE JSON/file/ORBITE_CONF
-snapshots. S21 compatibility is superseded by the Rust-shaped Python API.
+snapshots. Public settings document OrbiTE defaults, units and ownership effects;
+provenance stays in the [design-reference map](tent-parity.md#owner-correspondence).
+S21 compatibility is superseded by the Rust-shaped Python API.
 S19 (C ABI) and S20 (C++/classic TE) are removed and out of scope.
 The P2P-only discovery boundary precedes S21. External etcd/Redis/HTTP stores,
 cluster membership and KV indexes belong to the consumer; S18 is out of scope
@@ -198,7 +200,7 @@ Done (each Implemented):
   READ/WRITE batches with exact prefix accounting, source validation, final
   WRITE ACK, absolute deadlines and bounded handlers; real loopback and
   independent-process tests.
-- **P2.2 — bounded notifications.** TENT-style local/remote messages, atomic
+- **P2.2 — bounded notifications.** Bounded local/remote messages, atomic
   drain, one attached message per successful batch and data results that
   survive notification failure.
 - **P2.3 — OrbitKV TCP peer integration (consumer candidate).**
@@ -230,7 +232,7 @@ Requirements: B02/B03 with associated F04/F07–F11/F18.
   accounting, IPv4 rail validation, per-peer lane rotation, large-READ
   partitioning and static rail pairing, as in TENT.
 - [x] [SHM](shm.md) implements shared mappings and offsets, registration permissions,
-  alias handling, process lifetime and cleanup, with TENT’s opt-in default.
+  alias handling, process lifetime and cleanup, disabled by default.
 
 P3 is complete at source level. Linux CI qualifies loopback HP-TCP and same-host
 DRAM SHM on `/dev/shm`, including fragmented frames, restart fencing and

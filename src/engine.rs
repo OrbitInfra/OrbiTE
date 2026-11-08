@@ -55,7 +55,7 @@ pub enum TransferOp {
 #[non_exhaustive]
 pub enum Transport {
     Tcp,
-    /// Persistent CPU socket lanes using TENT HP-TCP framing.
+    /// Persistent CPU socket lanes with request IDs and framed READ/WRITE replies.
     HpTcp,
     /// Same-host CPU copies through source-granted shared mappings.
     Shm,
@@ -106,7 +106,8 @@ impl Transport {
     }
 }
 
-/// TENT request priority; smaller discriminants are served first by RDMA workers.
+/// Request priority; smaller discriminants are served first by RDMA workers.
+/// High is the default. TCP and NVLink accept every priority as advisory.
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
 #[repr(u8)]
 #[non_exhaustive]
@@ -1017,7 +1018,7 @@ impl TransferEngine {
     }
 
     /// Registers an existing host allocation range. Exact duplicate ranges share
-    /// a registration reference and retain the first permission, as in TENT.
+    /// a registration reference and retain the first permission.
     /// Overlapping ranges must share the same HostMemory access lock. Configured
     /// host Direct RDMA prepares usable contexts, including paused ports, before publication.
     pub fn register_host_memory(
@@ -1235,7 +1236,7 @@ impl TransferEngine {
     }
 
     /// Resolves an absolute local address to an owned registered range and offset.
-    /// Matches TENT's address order, preferring the longer range at equal bases.
+    /// Searches by ascending base address, preferring the longer range at equal bases.
     pub fn resolve_local_address(
         &self,
         address: u64,
@@ -2255,7 +2256,7 @@ impl TransferEngine {
 
     /// A successful receipt means enqueued, not application-consumed. An unknown
     /// outcome must not be automatically retried; deliberate repeated messages
-    /// are distinct deliveries, as in TENT.
+    /// are distinct deliveries.
     pub fn send_notification(
         &self,
         peer: &RemoteSegment,

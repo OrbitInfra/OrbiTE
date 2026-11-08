@@ -1,4 +1,4 @@
-//! Per-engine TENT metrics and HTTP exposition.
+//! Per-engine OrbiTE metrics and HTTP exposition.
 mod config;
 mod expose;
 mod http;

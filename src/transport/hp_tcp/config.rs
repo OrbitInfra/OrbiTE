@@ -3,23 +3,39 @@ use std::net::{Ipv4Addr, SocketAddr, TcpListener, ToSocketAddrs};
 
 pub(crate) const MAX_RAILS: usize = 16;
 
-/// Typed TENT transports/hp_tcp settings. The engine always retains its control listener.
+/// Persistent IPv4 payload lanes and their resource limits. Disabled by default;
+/// enabling HP-TCP requires disabling ordinary TCP payloads. The engine retains
+/// its separate control listener. Tasks and byte charges survive until lane drain.
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 #[non_exhaustive]
 pub struct HpTcpConfig {
+    /// Enable HP-TCP payloads; false by default.
     pub enable: bool,
+    /// Listener IPv4 address; empty (the default) binds all IPv4 interfaces.
     pub bind_address: String,
+    /// Advertised host/address; empty (the default) uses the control endpoint's IPv4.
     pub advertise_address: String,
+    /// Unique non-wildcard IPv4 rails; at most 16 and no more than connections_per_peer.
+    /// Empty by default, deriving one rail from advertise_address or the control endpoint.
     pub rail_addresses: Vec<Ipv4Addr>,
+    /// Listener port; zero (the default) asks the OS to allocate one.
     pub port: u16,
+    /// Payload workers; defaults to 16, range 1..=256.
     pub worker_count: usize,
+    /// Persistent lanes per peer; defaults to 4, range 1..=4096.
     pub connections_per_peer: usize,
+    /// Positive task capacity; defaults to 4096. Completion or drain returns a slot.
     pub max_outstanding_tasks: u64,
+    /// Positive in-flight byte capacity; defaults to 4 GiB. Timeout alone releases none.
     pub max_outstanding_bytes: u64,
+    /// Positive per-frame payload limit in bytes; defaults to 1 GiB.
     pub max_transfer_bytes: u64,
+    /// Connection establishment timeout in milliseconds; positive, default 2000.
     pub connect_timeout_ms: u64,
+    /// Lane progress timeout in milliseconds; positive, default 30000.
     pub progress_timeout_ms: u64,
+    /// Idle lane expiry in milliseconds; positive, default 60000. Active work still drains.
     pub idle_connection_timeout_ms: u64,
 }
 

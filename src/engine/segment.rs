@@ -30,9 +30,6 @@ impl TransferEngine {
     /// while admitted work drains. Once native cleanup has started, its result
     /// is final: uncertain destroys are never retried. The timeout bounds waits,
     /// not native provider calls that cannot be preempted.
-    ///
-    /// This membership operation is stronger than TENT's C/C++ `closeSegment`,
-    /// which only invalidates a handle and permits reopening the same epoch.
     pub fn close_segment(
         &self,
         endpoint: SocketAddr,

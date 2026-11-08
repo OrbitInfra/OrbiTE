@@ -32,7 +32,8 @@ pub(super) struct RdmaSlice {
     pub(super) offset: usize,
 }
 
-/// Frozen TENT planRdmaSlices geometry, shared by task routing and WR windows.
+// Geometry follows TENT planRdmaSlices.
+/// Bounded slice geometry shared by task routing and work-request windows.
 pub(super) fn plan_rdma_slices(length: usize, base: usize, cap: usize) -> Result<(usize, usize)> {
     if length == 0
         || length > u32::MAX as usize

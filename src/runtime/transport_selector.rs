@@ -1,4 +1,4 @@
-//! TENT first-match policy selection, resolved once before submission admission.
+//! First-match policy selection, resolved once before submission admission.
 mod config;
 pub(crate) mod qp_pools;
 

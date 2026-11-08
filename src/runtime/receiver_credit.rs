@@ -17,7 +17,7 @@ use crate::{Error, RemoteSegment, Result, SourceEpoch};
 
 use super::admission_queue::LocalTransferAdmissionQueue;
 
-/// Resource tags in TENT's receiver credit schema.
+/// Receiver ledger resources, measured in data bytes or named slot counts.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u16)]
 #[non_exhaustive]
@@ -66,8 +66,7 @@ impl CreditAmount {
 }
 
 /// A cooperative receiver's application-delivered cumulative update.
-/// Automatic bindings synchronize equivalent totals over OrbiTE's control wire;
-/// neither API nor encoding is TENT wire-compatible.
+/// Automatic bindings synchronize equivalent totals over OrbiTE's control wire.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct ReceiverCreditUpdateV1 {

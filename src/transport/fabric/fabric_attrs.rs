@@ -1,4 +1,4 @@
-//! TENT's provider/chunk attributes with checked arithmetic and bounded decoding.
+//! Provider and chunk attributes with checked arithmetic and bounded decoding.
 use crate::{Error, Result};
 use serde::{Deserialize, Serialize};
 
@@ -17,7 +17,7 @@ fn unknown_numa() -> i32 {
     -1
 }
 
-/// TENT prefers the buffer's socket without losing registered fallback rails.
+/// Prefer the buffer's NUMA socket without losing registered fallback rails.
 pub(super) fn numa_local_nics(
     nics: &[usize],
     node: Option<u32>,

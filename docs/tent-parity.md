@@ -110,6 +110,22 @@ the behavior. Hardware qualification stays with the artifact that ran.
 | metrics | metrics | OrbiTE names with the reference's types, labels and buckets |
 | common/config, python/pybind | config/json, orbite-python | Own strict JSON and Rust-shaped Python API; no compatibility layer |
 
+Settings describe OrbiTE's units, defaults, limits and retained owners. Their
+design provenance belongs here, not in a public configuration contract:
+
+| Setting or operation | Frozen design reference | OrbiTE meaning |
+| --- | --- | --- |
+| NIC preference tiers and custom topology | `runtime/topology*`, `platform/cpu_probe.cpp` | Ranked discovered NIC identities; custom ranks cannot replace physical metadata |
+| RDMA lanes, slices, aging and bandwidth ordering | `transport/rdma/workers*`, `quota*`, `bw_arbitration*` | Bounded work queues, slice geometry and byte charges; priority does not release an owner |
+| Rail health and recovery | `transport/rdma/rail_monitor*` | Per-pair errors, cooldown and probes; uncertain QPs remain retired |
+| Selector, QoS, receiver credits and progress | `runtime/transport_selector*`, `qos_contract*`, `receiver_credit*`, `progress_worker*`, `deadline_mlu.h` | Compiled first-match policies, cumulative ledgers and bounded progress; timeout is not a receipt |
+| HP-TCP settings and framing | `runtime/hp_tcp_transport_config.cpp`, `transport/hp_tcp/*` | Persistent IPv4 payload lanes with separate control service and explicit task/byte budgets |
+| NVLink and MNNVL mappings | `transport/nvlink/*`, `transport/mnnvl/*`, caller-sync event handling | Retained imports and producer events; MNNVL's threshold is recorded but does not change asynchronous dispatch |
+| Registration lookup, file segments and notifications | `runtime/transfer_engine_impl.cpp`, `segment_manager*`, `segment_tracker*` | Ordered containing-range lookup, file-relative offsets and separate deliberate notification deliveries |
+| Peer retirement | `closeSegment` and segment invalidation | Stronger membership fence and physical drain, rather than reversible handle invalidation |
+| io_uring and libfabric settings | `transport/io_uring/*`, `transport/fabric/*` | Single-issuer file rings and bounded per-domain RMA owners; no silent provider fallback |
+| Metrics | `metrics/tent_metrics.cpp` | Reference types, labels and bucket boundaries; names, HELP text and reporter logs identify OrbiTE |
+
 Module layout, transfer behavior and documentation style follow the reference.
 There is no C++ runtime dependency. Safety defects are recorded with negative
 controls rather than copied. Timeout and cancellation never establish physical

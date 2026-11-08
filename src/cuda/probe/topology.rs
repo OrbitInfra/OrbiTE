@@ -1,4 +1,4 @@
-//! Device inventory and TENT's three GPU-to-RNIC priority tiers.
+//! Device inventory and three GPU-to-RNIC locality preference tiers.
 
 use std::path::Path;
 

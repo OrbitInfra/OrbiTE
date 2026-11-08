@@ -1,4 +1,4 @@
-//! Optional host RMA through libfabric, following TENT's domain workers.
+//! Optional host RMA through libfabric with per-domain progress workers.
 #[cfg(feature = "fabric")]
 mod config;
 #[cfg(any(feature = "fabric", test))]

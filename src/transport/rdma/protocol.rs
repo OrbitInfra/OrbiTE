@@ -1,5 +1,5 @@
 //! OrbiTE rendezvous and exact-grant receipts carried by the control service.
-//! These messages are distinct from TENT's native metadata and wire formats.
+//! Peer authority and physical completion remain separate from logical outcomes.
 
 use super::DESCRIPTOR_SIZE;
 use super::grant::RdmaGrant;

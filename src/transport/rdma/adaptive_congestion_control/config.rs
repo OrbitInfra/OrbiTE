@@ -1,4 +1,4 @@
-//! Startup configuration for the optional TENT shared RDMA congestion core.
+//! Startup configuration for the optional, standalone RDMA congestion core.
 use crate::{Error, Result};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]

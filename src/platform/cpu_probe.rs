@@ -1,4 +1,4 @@
-//! Linux CPU/RNIC topology discovery, matching TENT `platform/cpu_probe.cpp`.
+//! Linux CPU/RNIC topology discovery from physical device metadata.
 
 use std::fs;
 use std::path::Path;

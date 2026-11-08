@@ -32,12 +32,12 @@ boundaries, implemented in Rust with no Mooncake C++ dependency.
 - **Nov 3, 2026**: Local file segments support DRAM transfers through io_uring,
   CUDA staging through pinned DRAM, and GDS through cuFile. The DRAM path is
   qualified on ext4 and tmpfs in CI. [Local storage](storage.md)
-- **Nov 3, 2026**: TENT-style transport selection picks NVLink, RDMA or TCP
+- **Nov 3, 2026**: Ordered transport policies pick NVLink, RDMA or TCP
   per request.
 - **Nov 2, 2026**: FIFO/EDF admission windows, compiled QoS contracts and
   receiver credit windows.
 - **Nov 1, 2026**: Bandwidth-aware multirail selection from CUDA/NUMA topology
-  and TENT priority matrices; CUDA 13 native batch copies for NVLink groups.
+  and configured NIC preference tiers; CUDA 13 native batch copies for NVLink groups.
 - **Oct 28, 2026**: Bounded GPUDirect RDMA, CUDA IPC and remote CUDA staging
   profiles pass installed H20/RoCE tests.
 - **Oct 27, 2026**: The bounded host RDMA RoCE profile is independently accepted.

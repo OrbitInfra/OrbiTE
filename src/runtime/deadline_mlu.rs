@@ -1,4 +1,4 @@
-//! Frozen TENT's shared prediction. Queue admission and RDMA posting see
+//! Deadline-feasibility prediction. Queue admission and RDMA posting see
 //! different bytes ahead, but use the same wire rate and deadline formula.
 use std::time::Instant;
 

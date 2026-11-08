@@ -58,7 +58,8 @@ fn intent<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Option<IntentT
         .ok_or_else(|| serde::de::Error::custom("invalid intent_type"))
 }
 
-/// Ordered TENT memory-selection rule. None matches any value; sizes are inclusive.
+/// Ordered memory or file selection rule. None matches any value; size bounds
+/// are inclusive byte counts. The first matching policy supplies the candidates.
 /// Unknown or unconsumed JSON fields fail configuration instead of broadening it.
 #[derive(Clone, Debug, Deserialize)]
 #[serde(deny_unknown_fields)]

@@ -1,4 +1,4 @@
-//! TENT endpoint QP indices partitioned into contiguous, named segments.
+//! Endpoint QP indices partitioned into contiguous, named pools.
 use serde::{Deserialize, Deserializer};
 
 use crate::{Error, Result};

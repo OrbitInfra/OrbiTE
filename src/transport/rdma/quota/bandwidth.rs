@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use super::SchedulingParams;
 
-/// TENT NIC load snapshot. Unavailable NICs are omitted by the selector.
+/// NIC load snapshot. Unavailable NICs are omitted by the selector.
 /// These estimates describe local initiated payloads, not remote or wire proofs.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
