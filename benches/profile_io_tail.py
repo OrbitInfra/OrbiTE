@@ -29,6 +29,8 @@ def record(out, executables, args, env, tent_env):
               "syscalls:sys_enter_io_uring_setup", "syscalls:sys_exit_io_uring_setup",
               "syscalls:sys_enter_io_uring_enter", "syscalls:sys_exit_io_uring_enter",
               "syscalls:sys_enter_clock_nanosleep", "syscalls:sys_exit_clock_nanosleep",
+              "syscalls:sys_enter_close", "syscalls:sys_exit_close",
+              "syscalls:sys_enter_munmap", "syscalls:sys_exit_munmap",
               "syscalls:sys_enter_futex", "syscalls:sys_exit_futex"]
     shapes = [("ext4", 64, "gapped"), ("ext4", 8, "gapped"),
               ("ext4", 8, "contiguous"), ("ext4", 1, "contiguous"),
@@ -67,6 +69,7 @@ def record(out, executables, args, env, tent_env):
                     (root / (name + ".windows.json")).write_text(json.dumps(windows) + "\n")
                     if data.stat().st_size > 512 << 20:
                         raise ValueError("unexpectedly large diagnostic recording")
+                    subprocess.run(["sudo", "chmod", "a+r", data], check=True)
                     run(name + "-events", ["sudo", perf, "script", "--ns", "-i", data,
                                              "-F", "comm,pid,tid,cpu,time,event,trace"])
                     if "lost" in (root / (name + "-events.stderr")).read_text().lower():
