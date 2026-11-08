@@ -1,8 +1,10 @@
 """Bounded, diagnostic-only sample windows and kernel completion/scheduler traces."""
 import json
+import os
 from pathlib import Path
 import shutil
 import subprocess
+import tempfile
 
 
 def record(out, executables, args, env, tent_env):
@@ -14,11 +16,11 @@ def record(out, executables, args, env, tent_env):
     root.mkdir()
     commands, records = [], []
 
-    def run(name, command):
+    def run(name, command, destination=root):
         command = list(map(str, command))
         commands.append({"name": name, "command": command})
         (root / "commands.json").write_text(json.dumps(commands, indent=2) + "\n")
-        with (root / (name + ".stdout")).open("w") as stdout, (root / (name + ".stderr")).open("w") as stderr:
+        with (destination / (name + ".stdout")).open("w") as stdout, (destination / (name + ".stderr")).open("w") as stderr:
             subprocess.run(command, env=env, stdout=stdout, stderr=stderr, check=True, timeout=600)
 
     # Keep the kernel's field definitions with the evidence: names/layouts vary
@@ -31,7 +33,8 @@ def record(out, executables, args, env, tent_env):
               "syscalls:sys_enter_clock_nanosleep", "syscalls:sys_exit_clock_nanosleep",
               "syscalls:sys_enter_close", "syscalls:sys_exit_close",
               "syscalls:sys_enter_munmap", "syscalls:sys_exit_munmap",
-              "syscalls:sys_enter_futex", "syscalls:sys_exit_futex"]
+              "syscalls:sys_enter_futex", "syscalls:sys_exit_futex",
+              "block:block_rq_issue", "block:block_rq_complete"]
     shapes = [("ext4", 64, "gapped"), ("ext4", 8, "gapped"),
               ("ext4", 8, "contiguous"), ("ext4", 1, "contiguous"),
               ("tmpfs", 1, "contiguous")]
@@ -44,7 +47,14 @@ def record(out, executables, args, env, tent_env):
                 path = directory.resolve() / ("orbite-tail-" + name)
                 if path.exists():
                     raise FileExistsError(path)
-                data = root / (name + ".perf")
+                # The collector must not compete with the measured file for
+                # ext4 I/O. Stage trace and sample-window output on tmpfs, then
+                # copy them only after the benchmark has exited.
+                if shutil.disk_usage(args.tmpfs).free < 512 << 20:
+                    raise RuntimeError("tail recording needs 512 MiB of free tmpfs")
+                scratch = tempfile.TemporaryDirectory(prefix="orbite-tail-", dir=args.tmpfs)
+                temporary = Path(scratch.name)
+                data = temporary / (name + ".perf")
                 overrides = {**(tent_env if implementation == "tent" else {}), "ORBITE_BENCH_TAIL_TRACE": "1"}
                 command = ["sudo", perf, "record", "-q", "-a", "--clockid", "mono", "-m", "256", "-o", data]
                 for event in events:
@@ -52,7 +62,10 @@ def record(out, executables, args, env, tent_env):
                 command += ["--", "env", *[f"{k}={v}" for k, v in overrides.items()], exe,
                             "io_uring", op, 4096, batch, layout, args.warmup, samples, args.workers, path]
                 try:
-                    run(name, command)
+                    os.sync()  # Finish earlier evidence writes outside sample windows.
+                    run(name, command, temporary)
+                    for suffix in (".stdout", ".stderr"):
+                        shutil.copyfile(temporary / (name + suffix), root / (name + suffix))
                     result = json.loads((root / (name + ".stdout")).read_text())
                     if result.get("verified") is not True or len(result["samples_ns"]) != samples:
                         raise ValueError("tail profile did not complete all byte checks")
@@ -72,6 +85,7 @@ def record(out, executables, args, env, tent_env):
                     subprocess.run(["sudo", "chmod", "a+r", data], check=True)
                     run(name + "-events", ["sudo", perf, "script", "--ns", "-i", data,
                                              "-F", "comm,pid,tid,cpu,time,event,trace"])
+                    shutil.copyfile(data, root / (name + ".perf"))
                     if "lost" in (root / (name + "-events.stderr")).read_text().lower():
                         raise ValueError("lost trace events; timeline is incomplete")
                     records.append(dict(name=name, samples=samples, warmup=args.warmup,
@@ -80,4 +94,5 @@ def record(out, executables, args, env, tent_env):
                     print(json.dumps(records[-1]), flush=True)
                 finally:
                     subprocess.run(["sudo", "rm", "-f", path], check=True)
+                    scratch.cleanup()
     return len(records)
