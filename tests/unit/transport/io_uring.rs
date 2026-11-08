@@ -221,6 +221,90 @@ fn real_files_move_full_bytes_on_ext4_and_tmpfs() -> Result<()> {
     Ok(())
 }
 
+#[test]
+fn aligned_file_batches_use_one_ring_without_bounce_for_gaps_or_contiguous_ranges() -> Result<()> {
+    if !kernel() {
+        return Ok(());
+    }
+    let dirs = [
+        std::env::var_os("ORBITE_EXT4_DIR")
+            .map(PathBuf::from)
+            .unwrap_or_else(std::env::temp_dir),
+        PathBuf::from("/dev/shm"),
+    ];
+    for dir in dirs {
+        for count in [8, 64] {
+            for stride in [4096, 8192] {
+                for op in [TransferOp::Read, TransferOp::Write] {
+                    let extent = count * stride + 8192;
+                    let mut f = Fixture::new(
+                        &dir,
+                        &vec![0x9a; extent],
+                        TransferEngine::new(Default::default())?,
+                    )?;
+                    f.engine.unregister_memory(&f.memory)?;
+                    f.memory = f.engine.register_memory(
+                        vec![0x9a; extent + 4096].into_boxed_slice(),
+                        Permission::LocalOnly,
+                    )?;
+                    let widths = Arc::new(Mutex::new(Vec::new()));
+                    let observed = widths.clone();
+                    let io = Arc::get_mut(&mut f.engine)
+                        .unwrap()
+                        .io_uring
+                        .as_mut()
+                        .unwrap();
+                    io.available = Arc::new(true.into());
+                    io.allocate = |_, _| Err(Error::ResourceExhausted);
+                    io.create = Arc::new(move |width| {
+                        observed.lock().unwrap().push(width);
+                        ring::create(width)
+                    });
+                    let base = f.memory.base_address();
+                    let aligned = (base.next_multiple_of(4096) - base) as usize + 4096;
+                    let mut file = vec![0x9a; extent];
+                    let mut memory = vec![0x9a; f.memory.len()];
+                    let mut requests = Vec::new();
+                    for i in 0..count {
+                        let bytes: Vec<_> = (0..4096).map(|j| ((j * 17 + i) % 251) as u8).collect();
+                        let offset = 4096 + i * stride;
+                        file[offset..offset + 4096].copy_from_slice(&bytes);
+                        memory[aligned + i * stride..aligned + i * stride + 4096]
+                            .copy_from_slice(&bytes);
+                        requests.push(f.request(aligned + i * stride, offset as u64, 4096));
+                    }
+                    if op == TransferOp::Read {
+                        fs::write(&f.path, &file)?;
+                    } else {
+                        f.memory.write(0, &memory)?;
+                    }
+                    let mut batch = f.engine.submit_async(
+                        op,
+                        &f.segment,
+                        &requests,
+                        None,
+                        EVENTUAL_PROGRESS,
+                    )?;
+                    let status = batch.wait(EVENTUAL_PROGRESS)?;
+                    assert!(status.locally_drained);
+                    assert_eq!(
+                        (status.completed_tasks, status.transferred_bytes),
+                        (count, count * 4096)
+                    );
+                    assert_eq!(*widths.lock().unwrap(), [count as u32]);
+                    assert_eq!(fs::read(&f.path)?, file);
+                    let mut got = vec![0; f.memory.len()];
+                    f.memory.read(0, &mut got)?;
+                    assert_eq!(got, memory);
+                    batch.free()?;
+                    assert_eq!(f.engine.stats()?.inflight_bytes, 0);
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
 fn truncate_on_ring_creation(depth: u32) -> Result<Fixture> {
     let dir = std::env::temp_dir();
     let mut f = Fixture::new(

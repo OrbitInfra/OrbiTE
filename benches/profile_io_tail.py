@@ -95,4 +95,7 @@ def record(out, executables, args, env, tent_env):
                 finally:
                     subprocess.run(["sudo", "rm", "-f", path], check=True)
                     scratch.cleanup()
+    from analyze_io_tail import analyze, controls
+    controls()
+    analyze(root)
     return len(records)
