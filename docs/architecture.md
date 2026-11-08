@@ -218,7 +218,20 @@ charged until close is retried. See [file segments](storage.md).
 An idle engine retains no storage thread or ring after the setup probe.
 For DRAM/file payloads the caller or existing batch worker owns the io_uring,
 iovecs, host range loans and bounce storage through CQE drain. File and peer
-targets share admission and batch progress. CUDA/file submissions use the same
+targets share admission and batch progress. One small contiguous host-file
+request can submit and observe one ready CQE on an idle batch's caller. Unlike
+TENT's caller-driven polling, a pending receipt transfers the existing ring to
+the batch worker. Queued, background-progress, fallback and CUDA paths keep
+their original worker. `pending_small_file_handoff_keeps_loans_through_cancel_timeout_and_close`
+holds a real CQE across cancellation, timeout, unregister and close;
+`failed_worker_handoff_quarantines_the_accepted_sqe_without_replay` proves that
+a failed handoff retains the ring and admission instead of replaying a WRITE.
+The plain ring keeps [default completion interrupts](https://man7.org/linux/man-pages/man2/io_uring_setup.2.html);
+it does not defer completion work to the submitting thread's next ring call.
+`pending_native_io_completes_on_worker_while_caller_only_computes` forces
+asynchronous kernel I/O and checks reaping on the worker without caller polling.
+The same preflight, partial-submit drain and prefix aggregation serve both paths.
+CUDA/file submissions use the same
 worker and ring for successive rounds. The optional file pool lends one
 aligned slot per eligible request. A miss uses the charged pageable or proxy
 fallback. Unlike TENT’s eager allocation, the slab is created on first use.

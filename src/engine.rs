@@ -1947,20 +1947,7 @@ impl TransferEngine {
                         #[cfg(feature = "metrics")]
                         &submission.owners[first..first + count],
                     );
-                    #[cfg(feature = "gds")]
-                    let result = submission.finish_gds_range(result, group, progress);
-                    #[cfg(feature = "metrics")]
-                    for (i, o) in submission.owners[first..first + count].iter().enumerate() {
-                        if let Some(m) = &o.metrics {
-                            let failure = result.failure.as_ref().filter(|f| i == f.request_index);
-                            m.file_terminal(failure.map(|f| &f.error));
-                        }
-                    }
-                    if result.locally_drained {
-                        submission.retire_owners(first, count, result.completed_requests);
-                    } else {
-                        submission.retain_window(first..first + count);
-                    }
+                    let result = self.finish_file_group(submission, first, count, progress, result);
                     report.completed_requests += result.completed_requests;
                     report.transferred_bytes += result.transferred_bytes;
                     report.locally_drained = result.locally_drained;

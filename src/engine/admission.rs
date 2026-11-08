@@ -1,4 +1,4 @@
-//! Physical permits for a prepared submission. The executing batch worker
+//! Physical permits for a prepared submission. The executing caller or batch worker
 //! alone commits credit and returns each dispatch slot after physical drain.
 use super::{PreparedSubmission, PreparedTarget, SelectionResult, TransferEngine, remaining};
 use crate::runtime::admission_queue::{QueueInput, QueueOwnerKind, QueuePermit, QueueTicket};

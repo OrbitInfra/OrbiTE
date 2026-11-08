@@ -291,6 +291,15 @@ impl Batch {
             timeout,
             Some(self.id()?),
         )?;
+        #[cfg(feature = "io-uring")]
+        if self.worker.is_none() && hook.is_none() && engine.can_start_file_inline(&prepared) {
+            let state = progress.lock();
+            let idle = state.pending == 0 && !state.active;
+            drop(state);
+            if idle {
+                return self.submit_file_inline(&progress, &engine, prepared);
+            }
+        }
         if let Err(error) = self.start_worker(&progress, &engine) {
             return Err(prepared.abort_error(error));
         }
@@ -394,12 +403,75 @@ impl Batch {
         Ok(range)
     }
 
+    #[cfg(feature = "io-uring")]
+    fn submit_file_inline(
+        &mut self,
+        progress: &Arc<BatchProgress>,
+        engine: &Arc<TransferEngine>,
+        prepared: PreparedSubmission,
+    ) -> Result<Range<usize>> {
+        let mut state = progress.lock();
+        let range = Self::publish(&mut state, std::iter::once(prepared), None);
+        let mut job = state
+            .queue
+            .pop_front()
+            .ok_or(Error::Internal("inline file job missing"))?;
+        state.active = true;
+        drop(state);
+        match engine.start_file_inline(&job.prepared, (progress, job.first_task)) {
+            Ok(report) => progress.finish_group(engine, job, report),
+            Err(pending) => {
+                job.pending_file = Some(pending);
+                // No CQE: move the live ring to the existing worker, never
+                // prepare or submit again. A spawn failure keeps all owners.
+                if let Err(error) = self.start_worker(progress, engine) {
+                    let code = match &error {
+                        Error::Io(e) => -e.raw_os_error().unwrap_or(libc::EAGAIN),
+                        _ => -libc::EAGAIN,
+                    };
+                    log::warn!("io_uring worker could not start; retaining submitted I/O: {error}");
+                    let report = engine.finish_inline_file(
+                        &job.prepared,
+                        (progress, job.first_task),
+                        BatchReport {
+                            completed_requests: 0,
+                            transferred_bytes: 0,
+                            failure: Some(TransferFailure {
+                                request_index: 0,
+                                affected_requests: 1,
+                                error: Error::Unquiesced {
+                                    operation: "io_uring worker start",
+                                    code,
+                                },
+                                remote_effect: if job.prepared.operation == TransferOp::Write {
+                                    RemoteEffect::Unknown
+                                } else {
+                                    RemoteEffect::None
+                                },
+                            }),
+                            locally_drained: false,
+                            notification: NotificationStatus::NotRequested,
+                        },
+                    );
+                    progress.finish_group(engine, job, report);
+                } else {
+                    progress.lock().ready = Some(job);
+                    progress.changed.notify_all();
+                }
+            }
+        }
+        progress.kick();
+        Ok(range)
+    }
+
     fn start_worker(
         &mut self,
         progress: &Arc<BatchProgress>,
         engine: &Arc<TransferEngine>,
     ) -> Result<()> {
         if self.worker.is_none() {
+            #[cfg(all(test, feature = "io-uring"))]
+            crate::transport::io_uring::tests::check_worker_start()?;
             let engine = Arc::clone(engine);
             let state = Arc::clone(progress);
             let token = progress.reservation.budget.worker()?;
@@ -485,6 +557,8 @@ impl Batch {
             #[cfg(feature = "metrics")]
             prepared.accept_metrics();
             state.queue.push_back(QueuedSubmission {
+                #[cfg(feature = "io-uring")]
+                pending_file: None,
                 hook,
                 first_task: first_physical,
                 submission,
@@ -713,6 +787,8 @@ struct Receipt {
 }
 
 struct QueuedSubmission {
+    #[cfg(feature = "io-uring")]
+    pending_file: Option<crate::transport::io_uring::Submitted>,
     hook: Option<Retry>,
     first_task: usize,
     submission: usize,
@@ -1020,14 +1096,34 @@ impl BatchProgress {
         }
     }
 
-    fn execute_group(self: &Arc<Self>, engine: &TransferEngine, job: QueuedSubmission) {
+    #[allow(unused_mut)] // Only io_uring can carry a native submission from the caller.
+    fn execute_group(self: &Arc<Self>, engine: &TransferEngine, mut job: QueuedSubmission) {
+        #[cfg(feature = "io-uring")]
+        let pending = job.pending_file.take();
+        #[cfg(feature = "io-uring")]
+        let report = if let Some(pending) = pending {
+            engine.drain_file_inline(&job.prepared, (self, job.first_task), pending)
+        } else {
+            engine.execute_physical(&job.prepared, Some((self, job.first_task)))
+        };
+        #[cfg(not(feature = "io-uring"))]
+        let report = engine.execute_physical(&job.prepared, Some((self, job.first_task)));
+        self.finish_group(engine, job, report);
+    }
+
+    fn finish_group(
+        self: &Arc<Self>,
+        engine: &TransferEngine,
+        job: QueuedSubmission,
+        mut report: BatchReport,
+    ) {
         let QueuedSubmission {
             first_task,
             submission,
             mut prepared,
             hook,
+            ..
         } = job;
-        let mut report = engine.execute_physical(&prepared, Some((self, first_task)));
         let mut retry = None;
         let mut notification = None;
         if let Some(mut hook) = hook {
@@ -1170,7 +1266,7 @@ impl BatchProgress {
         task.state = TaskState::Running;
         true
     }
-    /// Commit a file group on the batch worker. A queued cancellation cuts off
+    /// Commit a file group on its submitting owner. A queued cancellation cuts off
     /// that request and its suffix before any SQE is published.
     #[cfg(any(feature = "io-uring", feature = "gds"))]
     pub(crate) fn begin_file_group(&self, first: usize, count: usize) -> usize {

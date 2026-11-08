@@ -339,8 +339,8 @@ confirmed connection churn and hot reply polling; this TCP change removes
 those costs while retaining the batch worker and all ownership checks. Ext4's gapped
 64-block READ/WRITE tails also inflate (p99 15.7/8.8 ms versus 1.8/1.7 ms),
 reducing throughput despite similar medians. That tail cause is unresolved in
-this warmed, page-cache/coherence-sensitive workload. The storage payload paths
-are unchanged by the TCP fix and remain separate P11 work.
+this warmed, page-cache/coherence-sensitive workload. The TCP fix left storage
+unchanged; the small-file pass below addresses ready completions, not that tail.
 
 The [paired TCP pass](benchmarks.md#paired-results-and-regressions),
 [run 42441063520](https://github.com/OrbitInfra/OrbiTE/actions/runs/42441063520),
@@ -354,6 +354,24 @@ The [CPU owner controls](https://github.com/OrbitInfra/OrbiTE/actions/runs/42441
 repeat 16 default / 17 combined-feature controls 50 times on each toolchain,
 including dirty-stream retirement, retained backing/charges, peer epochs and
 ordered byte/guard checks. This changes no hardware qualification.
+
+The [small-file paired pass](benchmarks.md#small-file-paired-results),
+[run 42499905741](https://github.com/OrbitInfra/OrbiTE/actions/runs/42499905741),
+records another 480 checked rows per revision per toolchain, `edec7937` →
+`a52e7b7`, on one four-vCPU EPYC 7763 VM per pair. Stable tmpfs READ p50
+changes 156→51 µs and CPU 166→55 µs. WRITE p50 changes only 197→193 µs,
+still 2.30× TENT, while CPU changes 250→178 µs. Rust 1.85 independently
+records READ p50 155→53 µs and WRITE CPU 249→175 µs. The complete PR tables
+include every regression, including 1.85's 64 KiB direct-I/O latency increase.
+Gapped ext4 p99 remains 14.9/5.9 ms versus TENT's 2.2/2.6 ms on stable;
+larger file groups keep their worker path. No physical-SSD claim follows.
+
+The [real-ring owner controls](https://github.com/OrbitInfra/OrbiTE/actions/runs/42499911722)
+cover caller completion, held receipts through cancel/timeout/close, failed
+worker handoff, whole preflight, partial submission and exact short prefixes,
+with `ORBITE_REQUIRE_IO_URING=1`. The small-file stability step repeats them
+50 times on both toolchains. This preserves the Linux CI file qualification
+and makes no GPU or installed-NVMe qualification claim.
 
 [CI run 42362843121](https://github.com/OrbitInfra/OrbiTE/actions/runs/42362843121)
 records 24 passing CPU fault controls and two N/A dispositions per toolchain

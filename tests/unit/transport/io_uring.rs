@@ -11,6 +11,17 @@ use crate::{
     Transport, TransportSelectorConfig,
 };
 
+thread_local! {
+    static FAIL_WORKER_START: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+pub(crate) fn check_worker_start() -> Result<()> {
+    if FAIL_WORKER_START.with(|f| f.replace(false)) {
+        Err(std::io::Error::from_raw_os_error(libc::EAGAIN).into())
+    } else {
+        Ok(())
+    }
+}
+
 pub(crate) static RING_SETUPS: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
 
@@ -92,6 +103,7 @@ impl Fixture {
                 Ok(Box::new(FaultRing {
                     inner: ring::create(size)?,
                     calls: 0,
+                    wait_failed: false,
                     fault: if short_middle {
                         Fault::MiddleShort
                     } else {
@@ -419,6 +431,7 @@ struct FaultRing {
     inner: Box<dyn Ring>,
     fault: Fault,
     calls: usize,
+    wait_failed: bool,
     #[cfg(feature = "cuda")]
     observer: Option<(Arc<()>, Arc<Mutex<RingTrace>>)>,
 }
@@ -452,26 +465,34 @@ impl Ring for FaultRing {
         }
     }
     fn peek(&mut self) -> io::Result<Option<(u64, i32)>> {
-        if self.fault == Fault::ReapError {
-            return Err(io::Error::from_raw_os_error(libc::EIO));
+        if self.fault == Fault::ReapError || (self.fault == Fault::WaitError && !self.wait_failed) {
+            // WaitError must reach the worker's failed wait before mapped-CQ recovery.
+            return if self.fault == Fault::ReapError {
+                Err(io::Error::from_raw_os_error(libc::EIO))
+            } else {
+                Ok(None)
+            };
         }
-        self.inner.peek()
+        Ok(self.inner.peek()?.map(|(id, n)| (id, self.result(id, n))))
     }
     fn reap(&mut self, until: Instant) -> io::Result<(u64, i32)> {
         if matches!(self.fault, Fault::ReapError | Fault::WaitError) {
+            self.wait_failed = true;
             return Err(io::Error::from_raw_os_error(libc::EIO));
         }
         let (id, n) = self.inner.reap(until)?;
-        Ok((
-            id,
-            match self.fault {
-                #[cfg(feature = "cuda")]
-                Fault::MiddleShort if self.calls == 1 && id == 1 && n > 1 => 1,
-                Fault::CqeError => -libc::EIO,
-                Fault::OversizedCqe => i32::MAX,
-                _ => n,
-            },
-        ))
+        Ok((id, self.result(id, n)))
+    }
+}
+impl FaultRing {
+    fn result(&self, _id: u64, n: i32) -> i32 {
+        match self.fault {
+            #[cfg(feature = "cuda")]
+            Fault::MiddleShort if self.calls == 1 && _id == 1 && n > 1 => 1,
+            Fault::CqeError => -libc::EIO,
+            Fault::OversizedCqe => i32::MAX,
+            _ => n,
+        }
     }
 }
 
@@ -486,6 +507,7 @@ fn fault_fixture(fault: Fault) -> Result<Fixture> {
                 inner: ring::create(n)?,
                 fault,
                 calls: 0,
+                wait_failed: false,
                 #[cfg(feature = "cuda")]
                 observer: None,
             }))
@@ -593,7 +615,7 @@ impl Ring for HoldReap {
         self.inner.submit(n)
     }
     fn peek(&mut self) -> io::Result<Option<(u64, i32)>> {
-        self.inner.peek()
+        Ok(None) // Withhold the receipt from both caller and worker observations.
     }
     fn reap(&mut self, until: Instant) -> io::Result<(u64, i32)> {
         self.started
@@ -1273,3 +1295,6 @@ fn configured_pool_is_bounded_and_remains_lazy() -> Result<()> {
 
 #[path = "io_uring/vectored.rs"]
 mod vectored;
+
+#[path = "io_uring/inline.rs"]
+mod inline;

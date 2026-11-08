@@ -368,7 +368,9 @@ OrbitKV keeps extents, placement, eviction and recovery policy.
   close that drains pending fd users. See [file segments](storage.md).
 - [x] **P7.2 — DRAM/file io_uring (Qualified on Linux CI).** One ring per submission,
   exact short/error byte counts, partial submission, queued cancellation and
-  CQE drain before releasing registered memory or file leases.
+  CQE drain before releasing registered memory or file leases. Small host
+  submissions can consume a ready CQE on the caller; pending work hands the
+  existing ring to the batch worker without resubmission.
 - [x] **P7.3 — CUDA/file staging (Implemented).** An optional file pool supplies whole-request pinned slots. Larger requests and pool misses use caller-driven rounds of
   charged pinned chunks, device-range loans and event-confirmed copyback.
   The installed GPU/NVMe profile is unqualified.

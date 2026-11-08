@@ -135,7 +135,14 @@ credit and reject attached notifications.
 The caller or existing batch worker owns one ring per submission. Before
 publishing any SQE it validates every request, acquires exclusive host ranges,
 allocates aligned bounce buffers and checks SQ space. An overlapping host
-loan fails the group before I/O. The synchronous report counts only the
+loan fails the group before I/O. An idle asynchronous batch can submit one
+contiguous host request of at most 64 KiB on its caller, when runtime queuing,
+background progress and route fallback do not apply. One nonblocking CQ check
+can finish it without creating a worker. Otherwise the existing batch worker
+takes the same ring and drains it; it never resubmits the request. A failed
+worker start retains the submitted I/O and reports `Unquiesced`. CUDA, pinned
+producer waits, vectors and larger groups keep their existing worker path.
+The synchronous report counts only the
 consecutive fully successful requests before the first failure, and only their
 bytes. The failure span includes later SQEs submitted to the kernel. For a
 WRITE, any submitted request in that span makes the remote effect `Unknown`.
