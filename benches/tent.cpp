@@ -10,6 +10,7 @@
 #include <vector>
 #include <cstdlib>
 #include <ctime>
+#include <unistd.h>
 
 namespace {
 using Clock = std::chrono::steady_clock;
@@ -19,6 +20,10 @@ void check(bool ok, const char* message) { if (!ok) { std::cerr << message << '\
 void checked(int status) { check(status == 0, "TENT operation failed"); }
 uint64_t cpu_ns() {
     timespec t{}; check(clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &t) == 0, "CPU clock");
+    return uint64_t(t.tv_sec)*1000000000 + t.tv_nsec;
+}
+uint64_t monotonic_ns() {
+    timespec t{}; check(clock_gettime(CLOCK_MONOTONIC, &t) == 0, "monotonic clock");
     return uint64_t(t.tv_sec)*1000000000 + t.tv_nsec;
 }
 size_t number(const char* s) { char* end{}; auto n = std::strtoull(s, &end, 10); check(*s && !*end, "invalid number"); return n; }
@@ -82,12 +87,14 @@ int main(int argc, char** argv) {
         requests[b].transport_hint=file ? TRANSPORT_IOURING : TRANSPORT_TCP;
     }
     std::vector<uint64_t> times, cpus;
+    const bool trace=std::getenv("ORBITE_BENCH_TAIL_TRACE")!=nullptr;
     for (size_t i=0;i<warmup+samples;++i) {
         std::vector<unsigned char> image(extent, 0xa5);
         for(size_t b=0;b<batch;++b) for(size_t j=0;j<block;++j) image[b*stride+j]=(j*17+b*37+i*13)%251;
         std::memset(local, 0xa5, capacity); std::memset(remote, 0xa5, capacity);
         std::memcpy((op=="write" || cpu ? local : remote)+page, image.data(), extent);
         if(file) { std::vector<unsigned char> bytes(extent+2*page, 0xa5); if(op=="read") std::copy(image.begin(), image.end(), bytes.begin()+page); file_write(path, bytes); }
+        const auto window_start=trace ? monotonic_ns() : 0;
         const auto c=cpu_ns(); const auto start=Clock::now();
         if(cpu) { for(size_t b=0;b<batch;++b) std::memcpy(remote+page+b*stride, local+page+b*stride, block); }
         else {
@@ -106,6 +113,7 @@ int main(int argc, char** argv) {
         }
         const auto elapsed=std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now()-start).count();
         const auto cost=cpu_ns()-c;
+        if(trace) std::cerr << "ORBITE_SAMPLE " << i << ' ' << window_start << ' ' << monotonic_ns() << ' ' << getpid() << '\n';
         auto verify=[&](const unsigned char* bytes, bool populated) {
             for(size_t j=0;j<capacity;++j) check(bytes[j]==(populated && j>=page && j<page+extent ? image[j-page] : 0xa5), "bytes or guards differ");
         };

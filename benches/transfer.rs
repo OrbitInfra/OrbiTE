@@ -92,9 +92,13 @@ impl Parameters {
 
 #[cfg(unix)]
 fn cpu_ns() -> Result<u64> {
+    clock_ns(libc::CLOCK_PROCESS_CPUTIME_ID)
+}
+#[cfg(unix)]
+fn clock_ns(clock: libc::clockid_t) -> Result<u64> {
     let mut t = std::mem::MaybeUninit::<libc::timespec>::uninit();
     // SAFETY: clock_gettime initializes the writable timespec on success.
-    if unsafe { libc::clock_gettime(libc::CLOCK_PROCESS_CPUTIME_ID, t.as_mut_ptr()) } != 0 {
+    if unsafe { libc::clock_gettime(clock, t.as_mut_ptr()) } != 0 {
         return Err(std::io::Error::last_os_error().into());
     }
     // SAFETY: the call above succeeded.
@@ -283,6 +287,7 @@ fn run(p: &Parameters) -> Result<()> {
     let mut ns = Vec::new();
     let mut cpus = Vec::new();
     let mut owners = 0;
+    let trace = std::env::var_os("ORBITE_BENCH_TAIL_TRACE").is_some();
     for i in 0..p.warmup + p.samples {
         let image = p.image(i);
         local.write(0, &vec![0xa5; local.len()])?;
@@ -299,6 +304,13 @@ fn run(p: &Parameters) -> Result<()> {
             }
             fs::write(&p.path, bytes)?;
         }
+        // Diagnostic windows use perf's monotonic clock and surround the timed
+        // region. Disabled in matched sweeps; no core instrumentation or API.
+        let window_start = if trace {
+            clock_ns(libc::CLOCK_MONOTONIC)?
+        } else {
+            0
+        };
         let c = cpu_ns()?;
         let start = Instant::now();
         let mut batch = requester.allocate_batch(p.batch)?;
@@ -336,6 +348,16 @@ fn run(p: &Parameters) -> Result<()> {
         batch.free()?;
         let elapsed = start.elapsed().as_nanos() as u64;
         let c = cpu_ns()? - c;
+
+        if trace {
+            eprintln!(
+                "ORBITE_SAMPLE {} {} {} {}",
+                i,
+                window_start,
+                clock_ns(libc::CLOCK_MONOTONIC)?,
+                std::process::id()
+            );
+        }
 
         if std::env::var_os("ORBITE_BENCH_CORRUPT_BYTE").is_some() {
             local.write(0, &[0])?;
