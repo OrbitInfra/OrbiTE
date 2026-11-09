@@ -484,15 +484,47 @@ review and measurement; no wait, pool or new worker is introduced here.
 ### Reset-only paired comparison
 
 The [untraced paired run](https://github.com/OrbitInfra/OrbiTE/actions/runs/42536943466)
-uses `521861db` → `19ec2009` on one VM per toolchain with the original S26
-480-row sweeps: three trials, 100 samples, three warmups, two configured
-workers, all sizes/shapes and byte checks. Production sources are identical.
-The complete old→fixed tables for both implementations, including every ext4
-row and numerical regression, are in the [PR handoff](https://github.com/OrbitInfra/OrbiTE/pull/184).
-Reproduce them with `benches/compare.py BEFORE AFTER --changed-profile none --reset-comparison`.
-That flag permits exactly the documented reset change and changed harness
+passes all **480 old and 480 fixed rows on each toolchain**, `521861db` →
+`19ec2009`. Each pair uses one four-vCPU EPYC 7763 VM, Ubuntu 24.04 / Linux
+7.0.0-1017-azure, GCC 13.3.0, and stable Rust 1.99.1 or Rust 1.85.0. The
+original S26 three trials, 100 samples, three warmups, two configured workers,
+sizes/shapes and byte checks are unchanged. Production sources are identical.
+The complete [stable table](https://github.com/OrbitInfra/OrbiTE/pull/184#issuecomment-6730046861)
+and [1.85 table](https://github.com/OrbitInfra/OrbiTE/pull/184#issuecomment-6730078580)
+include every ext4 row for both implementations, CPU/throughput and every
+numerical regression. Raw results remain outside Git.
+
+These are medians of the three untraced trial p99s, in milliseconds:
+
+| Toolchain / 64 × 4 KiB shape | OrbiTE p99 old → fixed | TENT p99 old → fixed |
+|---|---:|---:|
+| Stable gapped READ | 15.60 → 10.41 | 2.04 → 1.74 |
+| Stable gapped WRITE | 8.08 → 32.98 | 1.67 → 1.82 |
+| Stable contiguous WRITE | 1.09 → 14.09 | 1.56 → 3.97 |
+| Rust 1.85 gapped READ | 17.17 → 10.63 | 2.44 → 1.59 |
+| Rust 1.85 gapped WRITE | 10.83 → 25.98 | 2.67 → 1.76 |
+| Rust 1.85 contiguous WRITE | 1.02 → 18.00 | 1.39 → 6.18 |
+
+The reset artifact is removed, but the tail and implementation gap do **not**
+largely disappear. WRITE tails worsen, with nonoverlapping OrbiTE trial ranges
+in both shapes/toolchains; contiguous TENT WRITE worsens too. These regressions
+remain open. Small tmpfs WRITE p50 is 194→203 / 194→195 µs (stable/MSRV),
+versus TENT after 81/79 µs. HP-TCP 1 MiB READ p50 moves 605→548 / 548→588 µs;
+the MSRV increase has nonoverlapping ranges. No watch item is declared fixed.
+
+Stable/MSRV have 110/114 of 160 cases with a worse statistic; 71 in each pair
+have all four trial ranges overlapping. Non-file rows do not execute reset
+and remain run/build-placement controls; their clock/cache/VM contributions
+are unisolated. File preparation intentionally changes allocation/cache state
+and I/O timing in **both** harnesses, so TENT file rows are not pure noise
+controls. Neither those controls nor range overlap explain away the file gap;
+range overlap is not a significance test. This is a measurement correction,
+not an engine speedup.
+
+Reproduce with `benches/compare.py BEFORE AFTER --changed-profile none --reset-comparison`.
+The flag permits exactly the documented reset transition and changed harness
 hashes; all other workload/host/CPU checks remain. Instantaneous clock readings
-are reported separately, not normalized. Raw rows remain outside Git.
+are reported separately, not normalized.
 
 ### Unchanged-code paired control
 

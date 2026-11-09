@@ -89,15 +89,19 @@ Linux runners. The TCP pair is `f0556448` → `de9fd60b`; the file pair is
 `edec7937` → `a52e7b7`. Each pair shares one VM, with full byte checks and
 frozen TENT on that runner. The table reports medians of three 100-sample
 trials; the two jobs are not pooled. These are scoped measurements, not
-release speed guarantees.
+release speed guarantees. The reset-only pair (`521861db` → `19ec2009`)
+also uses one EPYC 7763 VM per toolchain; it changes both harnesses, with
+identical production code.
 
 | Workload | Paired result / remaining limit |
 | --- | --- |
 | Scattered 64 × 4 KiB TCP READ / WRITE | p50 **8.59 → 4.23 / 9.33 → 6.30 ms**; TENT after **6.18 / 6.07 ms**. WRITE remains 3.7% slower than TENT |
 | Single 4 KiB TCP READ | CPU **370 → 190 µs** per batch; TENT after **256 µs** |
 | 4 KiB buffered tmpfs READ / WRITE | p50 **156 → 51 / 197 → 193 µs**, or **0.61× / 2.30×** TENT after. CPU **166 → 55 / 250 → 178 µs**; WRITE latency remains a limit |
-| Gapped ext4 READ / WRITE | **Old-harness** p99 **14.9 / 5.9 ms**, versus TENT **2.2 / 2.6 ms**, includes reset writeback. [Paired reset tracing](benchmarks.md#ext4-tail-diagnosis) removes that interference, but still observes long direct-I/O waits. The residual tail remains open; production owners are unchanged |
+| Gapped ext4 READ / WRITE | **Clean-reset** p99: stable **10.41 / 32.98 ms** versus TENT **1.74 / 1.82 ms**; Rust 1.85 **10.63 / 25.98 ms** versus **1.59 / 1.76 ms**. [All paired rows](benchmarks.md#reset-only-paired-comparison) retain the regressions. The tail remains open; production owners are unchanged |
 
+The earlier small-file **old-harness** ext4 p99 was 14.9/5.9 ms versus
+TENT 2.2/2.6 ms; it included reset writeback and is not isolated transfer cost.
 The [original S26 evidence](qualification.md#cpu-benchmark-evidence) keeps its
 historical values and labels. The [TCP results](benchmarks.md#paired-results-and-regressions)
 and [small-file results](benchmarks.md#small-file-paired-results)

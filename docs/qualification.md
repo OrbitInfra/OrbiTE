@@ -373,7 +373,7 @@ compares `521861db` → `19ec2009`, with production identical to `4f6bd35c`.
 It tests twenty cases × 1,000 samples in each phase on both toolchains.
 The old reset overlaps 31,999/32,000 ext4 windows. Preallocation plus in-place
 `pwrite`/`fdatasync` removes that reset writeback from every timed window;
-five unrelated 4 KiB writes remain across both runners, with no flush/FUA
+five 4 KiB writes from other processes remain across both runners, with no flush/FUA
 requests observed. Both implementations are checked, including writes already
 in flight at window start. The old ext4 evidence is contaminated.
 
@@ -388,6 +388,14 @@ remaining tmpfs WRITE handoff stay open. No production or hardware improvement
 is claimed. The earlier [unchanged-code paired control](benchmarks.md#unchanged-code-paired-control)
 retains its **old-harness** label and every row/regression; its run variation
 is not evidence of an optimization.
+
+The [reset-only paired sweeps](benchmarks.md#reset-only-paired-comparison)
+pass 480 old and 480 fixed rows on each toolchain, on one EPYC 7763 VM per
+pair. Stable gapped READ/WRITE p99 changes 15.60→10.41 / 8.08→32.98 ms;
+TENT changes 2.04→1.74 / 1.67→1.82 ms. Rust 1.85 records OrbiTE
+17.17→10.63 / 10.83→25.98 ms versus TENT 2.44→1.59 / 2.67→1.76 ms.
+Every ext4 row and regression is reported. Removing the reset artifact does
+not remove the tail; the worse clean-reset WRITEs remain an open limit.
 
 The [real-ring owner controls](https://github.com/OrbitInfra/OrbiTE/actions/runs/42499911722)
 cover caller completion, held receipts through cancel/timeout/close, failed
