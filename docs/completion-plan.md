@@ -4,8 +4,9 @@ Follow the [product positioning and non-goals](https://github.com/OrbitInfra/Orb
 OrbiTE is the KV data plane for LLM inference on NVIDIA, with OrbitKV cache
 tiering and cross-node reuse as its first use case. This plan delivers the
 [frozen TENT design](tent-parity.md) through Rust and Python, and records the
-evidence for each owner and profile. P/D integration follows the release gates
-below; it is not a current capability claim. MPComm remains deferred.
+evidence for each owner and profile. The upstream path is the proposed
+[NIXL backend](nixl-backend.md); P/D acceptance still requires the installed
+release gates below. Neither is a current capability claim. MPComm remains deferred.
 
 Storage and optional network providers are opt-in builds, like `rdma` and
 `cuda`: a network/memory-only build must run without file/SSD executors,
@@ -78,49 +79,30 @@ required profiles and evidence for each milestone.
 
 ## Current focus
 
-S14 MNNVL/EGM is merged. P3, P6 and P7 completed their original source steps.
-All 19 Port rows in the Mooncake v0.3.14 alignment are implemented at source
-level. R1a pinned the reference and CPU oracle. R1b covers RDMA, R1c covers
-storage and CUDA, and R1d covers HP-TCP, ordinary TCP and observability.
-The [release delta](tent-parity.md#v0314-delta) names the controls for each change.
-Installed GPU and RNIC profiles remain in the verification queue.
+Review the docs-only [NIXL backend design](nixl-backend.md), including its
+unposted upstream issue draft and the registration/release lifetime gaps.
+After that review, work in this order, one coherent PR at a time:
 
-S15 completes the P5 source work for cooperative peers, including opt-in GPU
-source QP/MR reuse, ProxyManager source-session ownership and ordered mixed
-direct/staged batches. S15b implements OrbitKV's local GPU↔pinned DRAM
-copy mechanics on the caller's stream, including strided DMA, batched 1D
-copies and a mapped-host kernel. The [installed comparison](qualification.md#caller-stream-local-cuda-copy)
-and the P5 hardware verification queue remain open.
-S16 reference fixtures remain only where the oracle or native wire controls use them.
-S17 TENT configuration compatibility is superseded by OrbiTE JSON/file/ORBITE_CONF
-snapshots. Public settings document OrbiTE defaults, units and ownership effects;
-provenance stays in the [design-reference map](tent-parity.md#owner-correspondence).
-S21 compatibility is superseded by the Rust-shaped Python API.
-S19 (C ABI) and S20 (C++/classic TE) are removed and out of scope.
-The P2P-only discovery boundary precedes S21. External etcd/Redis/HTTP stores,
-cluster membership and KV indexes belong to the consumer; S18 is out of scope
-by design. Per-peer admission fencing, drain and selective transport retirement
-are implemented; native cleanup is shim-tested and awaits the installed gate.
-S21 implements the [Python surface](python.md), installed-wheel byte and lifetime
-controls, and CPython 3.10–3.14 packaging. S21b adds driver-validated retained
-CUDA Array Interface/DLPack owners; its installed GPU profile is unqualified.
-S22 (device plugins) is removed and out of scope; CPU/CUDA are built in. S23 is out of scope by design; see the
-[wire and consumer boundary](tent-parity.md#wire-and-consumer-boundaries).
-S24 implements the opt-in [libfabric host path](fabric.md), with real
-software-provider controls and an unrun EFA gate. S25 MPComm is deferred: no
-consumer; provider unavailable. S26 provides [byte-checked CPU sweeps and the
-executable fault matrix](benchmarks.md); hardware fault acceptance and matched
-performance remain queued. Beta.1 preparation records the
-[CPU qualification evidence](qualification.md#linux-ci-release-profiles),
-[Rust freeze decisions](rust-api.md#freeze-decisions),
-[Python surface](python.md#surface-and-defaults) and [release notes](releases.md).
-The maintainer has settled the API decisions; publication remains their action. This work
-does not start test consolidation or hardware qualification.
+1. **Clean-harness direct-I/O WRITE tail.** Compare OrbiTE and frozen TENT per
+   request at the block layer: offsets, sizes, queue depth at issue, merges,
+   io-wq offload, fd open flags and page-cache invalidation after the buffered
+   reset. Find the implementation difference and fix only what the evidence
+   proves. The [reset-isolated results](benchmarks.md#ext4-tail-diagnosis) make
+   this the first performance item, not a noise dismissal.
+2. **Small-WRITE caller CQ wait.** Measure and remove the remaining worker
+   handoff only with a bounded completion/drain proof. Keep all retention,
+   cancellation, partial-submit and exact-prefix controls.
+3. **NIXL plugin implementation.** Start only after the maintainer approves
+   the upstream design issue and the lifetime contract is agreed with NIXL.
+   Target `src/plugins/orbite` in NIXL mainline, using existing OrbiTE owners.
+   No custom vLLM/SGLang connectors or fork are part of this plan.
 
-CPU controls run in CI. GPU and RDMA changes require written installed gates
-in the [verification queue](qualification.md#verification-queue). Prior hardware
-results apply to the recorded artifact and profile. See the
-[work order](https://github.com/OrbitInfra/OrbiTE/blob/main/AGENTS.md#7-work-order).
+The [release ladder](#release-ladder) retains the beta API decisions,
+test-consolidation and installed acceptance gates. Publication remains the
+maintainer's action. Current GPU/RDMA profiles remain in the
+[verification queue](qualification.md#verification-queue); prior hardware
+evidence applies only to its recorded artifact. Stage details below and the
+[design-reference map](tent-parity.md) remain the source-level status record.
 
 ## P0 — Freeze contracts and executable comparison
 
@@ -443,23 +425,25 @@ bounded ownership, no early reuse and eventual cleanup.
 
 ## P11 — Consumers, performance and release
 
-Requirements: F22 and the applicable accepted backend and compatibility profiles.
+Requirements: F22 and the applicable accepted backend and consumer profiles.
 S26 implements reproducible, byte-checked CPU/TCP/io_uring comparisons against
 frozen TENT, plus OrbiTE HP-TCP/SHM sweeps ([method](benchmarks.md)). The CPU
 performance pass implements bounded TCP stream reuse and small ready file
 completion. The [ext4 reset comparison](benchmarks.md#ext4-tail-diagnosis)
-removes harness writeback from the timed window; clean-reset traces still
-locate long waits before block-device completion without justifying an owner change;
-the underlying cause, small-WRITE handoff and bookkeeping remain open.
-These scoped runs make no general performance claim. Add NIXL (for example
-NIXL+UCX) as a second baseline during the hardware P11 pass; there is no NIXL
-dependency in this step.
+removes harness writeback from the timed window and exposes a real direct-I/O
+WRITE gap: gapped 64×4 KiB p99 is 33.0/26.0 ms versus TENT 1.8/1.8 ms;
+contiguous p99 is 14.1/18.0 ms versus 4.0/6.2 ms (stable/Rust 1.85).
+The underlying cause and small-WRITE handoff remain open in the
+[ordered performance work](#current-focus). These scoped runs make no general
+performance claim. Add NIXL UCX and Mooncake plugin comparisons during the
+hardware pass; the [design proposal](nixl-backend.md) adds no NIXL dependency.
 
 - [ ] Run OrbitKV against an installed artifact through its transfer owner,
   preserving the still-needed source-epoch and source-close contracts. A scoped
   installed prerequisite was accepted at consumer `eb1cc90f`
   ([OrbitKV #307](https://github.com/OrbitInfra/OrbitKV/pull/307)).
-- [ ] A separate consumer contract before claiming DeepInfer support.
+- [ ] Upstream NIXL design agreement, then the purpose-built plugin/bridge and
+  its CPU byte/lifetime controls; installed GPU/storage profiles remain separate.
 - [ ] Matched TENT/OrbiTE comparisons (small/large, fragmented, READ/WRITE,
   cold/warm, mixed priority, CPU/device/file, multirail). Initial guards:
   goodput ≥ 0.95, p99 latency ≤ 1.05 and CPU-per-byte and peak-RSS ≤ 1.10 of the
@@ -480,7 +464,7 @@ publish packages.
 | Test consolidation (after the beta.1 API freeze) | Audit `tests/unit` (about 72k lines) for repeated assertions of the same invariant through the same owner, often added by different steps; merge them into table-driven tests. Preserve every negative control and distinct failure path: timeout, cancel, partial submit, `Unquiesced`, stale epoch and each deliberate TENT difference. CPU shims and `tests/hardware` gates are out of scope. Report source/test line deltas and invariant counts before/after; the invariant count must be unchanged. Tests-only refactor: no production change and no coverage drop. |
 | API documentation closure (before `0.1.0`) | Close remaining public missing-docs findings across every feature set, then make the CI rustdoc audit enforce `-D missing-docs` on stable and Rust 1.85. Documentation additions are non-breaking and do not block beta.1. |
 | `0.1.0` | Installed hardware verification passes for the OrbitKV-critical profiles below. The [P10 fault matrix](#p10--fault-and-physical-lifetime-acceptance) must pass on those profiles, and [P11 performance comparisons](#p11--consumers-performance-and-release) must be matched against frozen TENT. |
-| Post-0.1.0 P/D integration design | Begin after the GDR and NVLink installed profiles qualify. Prefer an OrbiTE NIXL backend plugin so the official vLLM `NixlConnector`, SGLang NIXL backend and Dynamo can select it without engine changes or forks; OrbiTE does not ship custom P/D connectors. Write a design document first: capability gap; NIXL descriptors, notifications and release semantics versus physical quiescence; abort safety for in-flight WRITEs into decode pages; joint arbitration of P/D and cache traffic; and TTFT/ITL against NIXL+UCX and Mooncake. Any C/C++ glue is purpose-built for that plugin. This is a plan, not implemented code. |
+| Post-0.1.0 P/D acceptance | After installed GDR/NVLink qualification, validate the [NIXL integration](nixl-backend.md) with inference consumers: decode-page abort/reuse safety, joint P/D and cache arbitration, and TTFT/ITL against NIXL+UCX and Mooncake. The backend design and upstream agreement happen earlier under [Current focus](#current-focus); OrbiTE ships no custom P/D connector. This remains a plan, not implemented or qualified integration. |
 
 Beta evidence uses the [TCP and configuration jobs](qualification.md#linux-ci-release-profiles),
 [source and oracle checks](qualification.md#reproduce-and-review),
@@ -532,23 +516,6 @@ notifications and NIC-load observations; OrbitKV keeps its generation scopes and
 mailbox policy. Consumer PRs #303 and #304 pin OrbiTE `02d64e55`; their evidence
 lives under `/root/orbitte-artifacts/` and is valid only for those artifacts.
 
-## Code ownership and repository layout
-
-| Location | Responsibility |
-| --- | --- |
-| `src/engine.rs`, `src/batch.rs` | Engine lifetime, batch/task owners, admission and notifications |
-| `src/memory.rs`, `src/segment.rs`, `src/segment/file.rs` | Backing, registration, descriptors, file segments and retirement |
-| `src/runtime/` | Control plane, transport selection, admission queue, QoS, receiver credits and ProxyManager |
-| `src/transport/tcp/`, `src/transport/rdma/`, `src/transport/nvlink/` | Payload transports and their native resource owners |
-| `src/cuda/`, `src/platform/` | NVIDIA allocation, streams, IPC and host topology |
-| `crates/orbite-python/`, `python/` | Python packaging boundary, retained exporters and Rust-shaped P2P API |
-| `tests/` | Unit (mirroring `src/`), integration, reference, fault and installed tests |
-| `benches/` | Future reusable traces and matched-run drivers |
-| `docs/` | Contracts, recipes, support matrix and this plan |
-
-Split crates only at a real FFI, packaging or resource boundary. Keep transport
-safety in actual owners; avoid forwarding facades or a separate coordinator.
-
 ## Required gates and evidence
 
 | Gate | Trigger | What it may establish |
@@ -561,11 +528,8 @@ safety in actual owners; avoid forwarding facades or a separate coordinator.
 | Matched performance | Hot-path, scheduling, metrics or release changes | Measured benefit or regression for the recorded profile only |
 | Final installed artifact | Every supported release profile | Real package, runtime dependency and loader behavior |
 
-Each PR names its exact commands and environment; no broad gate may silently
-skip the profile it claims. Raw logs, traces, manifests and per-run reports stay
-outside Git under an explicitly selected artifact root; source keeps reusable
-workloads, small fixtures and reproduction steps. Each handoff lists the commit,
-F/B IDs, changed contracts, commands and results, artifact hashes and remaining
-limits, and an independent reviewer reruns the applicable gates before
-acceptance. New hardware evidence names fresh nodes and inventories; missing
-hardware stays unqualified.
+The [contributor guide](contributing.md) and
+[agent gates/handoff](https://github.com/OrbitInfra/OrbiTE/blob/main/AGENTS.md#5-gates-for-every-pr)
+own reproduction and review instructions. [Architecture](architecture.md)
+owns the source/owner map; [qualification](qualification.md) owns artifact
+evidence and limits. No gate may silently skip the profile it claims.

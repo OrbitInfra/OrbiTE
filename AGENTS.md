@@ -17,8 +17,12 @@ do not turn this file into a second status diary.
 - Follow the [product positioning and non-goals](README.md#overview): OrbiTE is
   the KV data plane for LLM inference on NVIDIA. OrbitKV cache tiering and
   cross-node reuse come first; P/D is a later integration target, not a current
-  qualification claim. The [release ladder](docs/completion-plan.md#release-ladder)
-  fixes the test-consolidation and post-0.1.0 NIXL design sequence.
+  qualification claim. The upstream path is an in-tree NIXL backend, described
+  in the [design proposal](docs/nixl-backend.md). Follow the
+  [current work order](docs/completion-plan.md#current-focus): direct-I/O WRITE
+  tail, small-WRITE caller wait, then plugin implementation after the maintainer
+  approves the upstream design issue. Do not post that issue or open upstream
+  plugin PRs without authorization.
 - Architecture, behavior and module boundaries follow Mooncake TENT as a design
   reference, frozen at `OrbitInfra/Mooncake@e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c`
   (v0.3.14), directory `mooncake-transfer-engine/tent/`. README, docs site and
@@ -570,38 +574,15 @@ Revisit only when a consumer brings a provider and hardware; see
 
 ## 8. Verification queue for when hardware returns
 
-The canonical list is the
-[verification queue](docs/qualification.md#verification-queue) in
-qualification.md. Keep it current, with one exact gate per profile; the seed
-list below shows its scope.
+The [verification queue](docs/qualification.md#verification-queue) is the single
+list of installed profiles, commands and evidence, including planned NIXL gates.
+Add exact commands when a gate is written; distinguish a planned gate from an
+implemented but unrun one. Current GPU/RDMA/GDS/MNNVL and physical fabric
+profiles remain unqualified until those installed runs pass.
 
-1. **Re-qualify source-accepted P5 work on the current artifact:**
-   - v19–v23 staging: requester rings, CROSS windows, shared shards, the
-     chunk event loop, concurrent CROSS, remote Delegate progress, socket,
-     connection, finish and setup progress, host staging location, cold
-     connection, MR publication and QP retirement.
-   - NVLink P5.4e–h: group completion, stream pool, event progress and native
-     batch copy; IPC cache LRU reclaim.
-   - Mixed GPU batches and per-request remote staging.
-   - GPU and pinned producer readiness.
-   - CUDA and custom topology selection.
-   - RDMA bandwidth selection, weighted multipath and effective link rate.
-   - Request priority, promotion and shared slots; receiver credits and QoS
-     on RDMA.
-2. **Close P4:** the InfiniBand profile, physical link/device loss and provider
-   teardown.
-3. **New gates from this queue:**
-   - S3 GPU↔file staging and S4 native GDS (with route evidence);
-   - S9 RDMA failover;
-   - S12 physical multi-rail;
-   - S13 CXL;
-   - S14 MNNVL/EGM;
-   - R1b/R1c alignment, S15 and the S15b local CUDA copy extension;
-   - S24 EFA;
-4. **Release work:** the P10 fault matrix, P11 matched performance against
-   TENT, and installed OrbitKV integration. Follow the
-   [release ladder](docs/completion-plan.md#release-ladder). S23 is outside the
-   verification queue; retain the frozen TENT oracle and matched comparisons.
+Release work follows the [release ladder](docs/completion-plan.md#release-ladder):
+P10 faults, P11 matched TENT/NIXL performance and installed consumer integration.
+S23 is outside that queue; retain the frozen TENT oracle and benchmark baseline.
 
 ## 9. Do not
 

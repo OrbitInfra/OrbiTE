@@ -37,7 +37,7 @@ records the source alignment. The [design-reference map](tent-parity.md) identif
 | [SHM](shm.md) | Qualified on same-host Linux CI | Guarded two-process READ/WRITE over `/dev/shm`. The file-backed path is tested on tmpfs. Physical CXL is unqualified |
 | [MNNVL / EGM](cuda-ipc.md#multi-node-nvlink-and-egm) | Implemented; installed profile unqualified | CUDA VMM fabric handles, GPU and host-NUMA exports, bounded imports and checked close. The multi-node device and EGM gates are unrun |
 | [Libfabric host DRAM](fabric.md) | Implemented (P8.2); software TCP provider tested in Linux CI | Runtime-loaded opt-in provider, bounded RMA grants and sticky native retention. EFA is implemented; installed profile unqualified |
-| MPComm | Deferred (P8.1) | No consumer; provider unavailable. Constant recognized and returns unavailable |
+| MPComm | Deferred (P8.1) | No consumer; provider unavailable |
 
 ## Memory and batches
 
@@ -68,7 +68,6 @@ records the source alignment. The [design-reference map](tent-parity.md) identif
 | QoS contracts | Implemented | Global, tenant and intent fields resolve to one local byte/request budget. Delay and reject execute. Unsupported actions return a field-specific error. See [QoS](async-batches.md#qos-contracts) |
 | Receiver credits | Implemented | Four named cumulative grants, configured receiver windows and drain-fenced epoch retirement. See [credits](async-batches.md#receiver-credit-gating) |
 | Transport failover | Implemented | Bounded physical retries, epoch-pinned Describe and release evidence. Installed RNIC profile unqualified. See [transport attempts](async-batches.md#transport-attempts) |
-| RDMA rail cooldown and recovery | Implemented; installed gate unrun | [Rail health](rdma-cuda.md#rail-health) |
 | Offline version diagnostics | Implemented | Packaged CLI and Rust API. See [diagnostics](diagnostics.md). |
 | OrbiTE metrics, request/attempt accounting and exporter health | Implemented (P6, opt-in) | OrbiTE names, HELP text and reporter logs; unchanged types, labels and buckets. [Metrics](metrics.md) |
 
@@ -87,6 +86,7 @@ qualification; GPU/RDMA/GDS installed fault fixtures remain queued.
 | Capability | Status | Limits |
 | --- | --- | --- |
 | Rust API | Beta.1 freeze decisions recorded | [Surface inventory and decisions](rust-api.md#freeze-decisions) |
+| NIXL backend and native bridge | Planned; design only | [South Bound API and owner mapping](nixl-backend.md). No plugin or C bridge is implemented or qualified; upstream lifetime agreement and the CPU performance fixes precede implementation. |
 | TENT C ABI (S19) | Removed; out of scope | No installed C interface |
 | TENT C++ and classic TE (S20) | Removed; out of scope | No source adapters or classic-TE shim |
 | Device plugin ABI (S22/F03) | Removed; out of scope | CPU and CUDA use built-in owners |

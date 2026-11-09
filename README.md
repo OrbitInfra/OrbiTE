@@ -28,9 +28,11 @@ prefetch and write-back yield).
 
 [OrbitKV](https://github.com/OrbitInfra/OrbitKV) is the first consumer, for cache
 tiering and cross-node reuse. Prefill→decode (P/D) KV transfer is the second
-target use case, using the same transfer and lifetime primitive. The
-[post-0.1.0 plan](docs/completion-plan.md#release-ladder) starts with a NIXL
-backend design, after the GDR and NVLink installed profiles qualify.
+target use case, using the same transfer and lifetime primitive. The upstream
+goal is OrbitKV in vLLM/SGLang and an OrbiTE backend in NIXL mainline, so NIXL
+consumers can select it without custom engine connectors. The
+[NIXL design](docs/nixl-backend.md) is a proposal; implementation follows the
+[CPU performance fixes and upstream design approval](docs/completion-plan.md#current-focus).
 
 The design follows Mooncake TENT's engine, transport, context, buffer, endpoint
 and worker boundaries in Rust. Intent scheduling uses configured admission and

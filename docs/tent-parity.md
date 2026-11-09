@@ -297,8 +297,9 @@ width and link-layer settings.
 The control-plane magic keeps its historical spelling, `ORBITTE\0`.
 
 Rust is the primary API; Python mirrors the Rust owners with PEP 8 names.
-Configuration and metric names are OrbiTE's own. There is no C/C++ ABI before a
-consumer needs one; any future C API would be purpose-built. There is no TENT
+Configuration and metric names are OrbiTE's own. The [NIXL design](nixl-backend.md)
+proposes a purpose-built opt-in C bridge for that plugin; no C/C++ ABI is
+implemented today, and the removed TENT interfaces stay out of scope. There is no TENT
 protocol autodetection or downgrade. A frozen TENT client is rejected at the
 native magic/version boundary before admission or payload access. The frozen
 build remains a behavior oracle and performance baseline only.
@@ -306,9 +307,8 @@ build remains a behavior oracle and performance baseline only.
 OrbiTE owns byte movement and registration/operation lifetimes. OrbitKV owns
 cache identity, replica authority, cache leases and recovery semantics. An
 engine source epoch or a region generation does not prove an inference engine's
-GPU page generation. DeepInfer is a prospective consumer; planning its use does
-not establish a released cache integration. Native engine P/D remains owned by
-the engine until separately integrated and qualified.
+GPU page generation. P/D page authority remains with the inference engine;
+NIXL integration must establish its abort/reuse contract before qualification.
 
 [reference]: https://github.com/OrbitInfra/Mooncake/tree/e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c/mooncake-transfer-engine/tent
 [api]: https://github.com/OrbitInfra/Mooncake/blob/e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c/mooncake-transfer-engine/tent/include/tent/transfer_engine.h
