@@ -10,6 +10,9 @@
 #include <vector>
 #include <cstdlib>
 #include <ctime>
+#include <cerrno>
+#include <fcntl.h>
+#include <unistd.h>
 
 namespace {
 using Clock = std::chrono::steady_clock;
@@ -21,10 +24,22 @@ uint64_t cpu_ns() {
     timespec t{}; check(clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &t) == 0, "CPU clock");
     return uint64_t(t.tv_sec)*1000000000 + t.tv_nsec;
 }
+uint64_t monotonic_ns() {
+    timespec t{}; check(clock_gettime(CLOCK_MONOTONIC, &t) == 0, "monotonic clock");
+    return uint64_t(t.tv_sec)*1000000000 + t.tv_nsec;
+}
 size_t number(const char* s) { char* end{}; auto n = std::strtoull(s, &end, 10); check(*s && !*end, "invalid number"); return n; }
-void file_write(const std::string& path, const std::vector<unsigned char>& bytes) {
-    std::ofstream f(path, std::ios::binary | std::ios::trunc);
-    f.write(reinterpret_cast<const char*>(bytes.data()), bytes.size()); f.close(); check(!f.fail(), "file setup failed");
+void file_write(int fd, const std::vector<unsigned char>& bytes) {
+    size_t offset=0;
+    while(offset<bytes.size()) {
+        const auto n=pwrite(fd, bytes.data()+offset, bytes.size()-offset, offset);
+        if(n<0 && errno==EINTR) continue;
+        check(n>0, "file reset failed"); offset+=n;
+    }
+    // In-place buffered reset keeps verification simple; finish its writeback
+    // before timing the direct-I/O operation, identically to the Rust harness.
+    int rc; do { rc=fdatasync(fd); } while(rc<0 && errno==EINTR);
+    check(rc==0, "file reset sync failed");
 }
 std::vector<unsigned char> file_read(const std::string& path) {
     std::ifstream f(path, std::ios::binary); check(f.good(), "file verification failed");
@@ -45,6 +60,7 @@ int main(int argc, char** argv) {
     const bool file=backend=="io_uring", cpu=backend=="cpu";
     tent_engine_t source=nullptr, requester=nullptr;
     tent_segment_id_t peer{};
+    int reset_fd=-1;
     if (!cpu) {
         tent_set_config("metadata_type", "p2p");
         tent_set_config("rpc_server_hostname", "127.0.0.1");
@@ -69,7 +85,11 @@ int main(int argc, char** argv) {
         check(source && requester && tent_available(source)>0 && tent_available(requester)>0, "TENT engines unavailable");
         checked(tent_register_memory(source, remote, capacity));
         checked(tent_register_memory(requester, local, capacity));
-        if (file) { file_write(path, std::vector<unsigned char>(extent+2*page, 0xa5)); checked(tent_open_segment(requester, &peer, ("file://"+path).c_str())); }
+        if (file) {
+            reset_fd=open(path.c_str(), O_CREAT|O_EXCL|O_RDWR|O_CLOEXEC, 0600);
+            check(reset_fd>=0 && posix_fallocate(reset_fd, 0, extent+2*page)==0, "file preallocation failed");
+            checked(tent_open_segment(requester, &peer, ("file://"+path).c_str()));
+        }
         else { char name[256]{}; checked(tent_segment_name(source, name, sizeof(name))); checked(tent_open_segment(requester, &peer, name)); }
     }
     std::vector<tent_request_t> requests(batch);
@@ -82,12 +102,14 @@ int main(int argc, char** argv) {
         requests[b].transport_hint=file ? TRANSPORT_IOURING : TRANSPORT_TCP;
     }
     std::vector<uint64_t> times, cpus;
+    const bool trace=std::getenv("ORBITE_BENCH_TAIL_TRACE")!=nullptr;
     for (size_t i=0;i<warmup+samples;++i) {
         std::vector<unsigned char> image(extent, 0xa5);
         for(size_t b=0;b<batch;++b) for(size_t j=0;j<block;++j) image[b*stride+j]=(j*17+b*37+i*13)%251;
         std::memset(local, 0xa5, capacity); std::memset(remote, 0xa5, capacity);
         std::memcpy((op=="write" || cpu ? local : remote)+page, image.data(), extent);
-        if(file) { std::vector<unsigned char> bytes(extent+2*page, 0xa5); if(op=="read") std::copy(image.begin(), image.end(), bytes.begin()+page); file_write(path, bytes); }
+        if(file) { std::vector<unsigned char> bytes(extent+2*page, 0xa5); if(op=="read") std::copy(image.begin(), image.end(), bytes.begin()+page); file_write(reset_fd, bytes); }
+        const auto window_start=trace ? monotonic_ns() : 0;
         const auto c=cpu_ns(); const auto start=Clock::now();
         if(cpu) { for(size_t b=0;b<batch;++b) std::memcpy(remote+page+b*stride, local+page+b*stride, block); }
         else {
@@ -106,6 +128,7 @@ int main(int argc, char** argv) {
         }
         const auto elapsed=std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now()-start).count();
         const auto cost=cpu_ns()-c;
+        if(trace) std::cerr << "ORBITE_SAMPLE " << i << ' ' << window_start << ' ' << monotonic_ns() << ' ' << getpid() << '\n';
         auto verify=[&](const unsigned char* bytes, bool populated) {
             for(size_t j=0;j<capacity;++j) check(bytes[j]==(populated && j>=page && j<page+extent ? image[j-page] : 0xa5), "bytes or guards differ");
         };
@@ -121,6 +144,7 @@ int main(int argc, char** argv) {
         tent_destroy_engine(requester); tent_destroy_engine(source);
     }
     std::free(local); std::free(remote);
+    if(file) check(close(reset_fd)==0, "file reset fd close failed");
     std::cout << "{\"verified\":true,\"payload_bytes\":" << block*batch << ",\"process_threads\":" << threads << ",\"physical_owners\":null,\"direct_io\":null,\"samples_ns\":";
     array(times); std::cout << ",\"cpu_ns\":"; array(cpus); std::cout << "}\n";
 }

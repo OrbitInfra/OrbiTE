@@ -5,9 +5,30 @@ use orbite::{
 };
 use std::{
     fs,
+    os::unix::fs::FileExt,
     sync::Arc,
     time::{Duration, Instant},
 };
+
+#[cfg(target_os = "linux")]
+fn preallocate(path: &str, length: usize) -> Result<fs::File> {
+    use std::os::fd::AsRawFd;
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(path)?;
+    // SAFETY: the live fd and bounded positive length describe this new file.
+    let code = unsafe { libc::posix_fallocate(file.as_raw_fd(), 0, length as libc::off_t) };
+    if code != 0 {
+        return Err(std::io::Error::from_raw_os_error(code).into());
+    }
+    Ok(file)
+}
+#[cfg(not(target_os = "linux"))]
+fn preallocate(_: &str, _: usize) -> Result<fs::File> {
+    Err(Error::Unavailable("file benchmark requires Linux"))
+}
 
 const PAGE: usize = 4096;
 const LIMIT: usize = 64 << 20;
@@ -92,9 +113,13 @@ impl Parameters {
 
 #[cfg(unix)]
 fn cpu_ns() -> Result<u64> {
+    clock_ns(libc::CLOCK_PROCESS_CPUTIME_ID)
+}
+#[cfg(unix)]
+fn clock_ns(clock: libc::clockid_t) -> Result<u64> {
     let mut t = std::mem::MaybeUninit::<libc::timespec>::uninit();
     // SAFETY: clock_gettime initializes the writable timespec on success.
-    if unsafe { libc::clock_gettime(libc::CLOCK_PROCESS_CPUTIME_ID, t.as_mut_ptr()) } != 0 {
+    if unsafe { libc::clock_gettime(clock, t.as_mut_ptr()) } != 0 {
         return Err(std::io::Error::last_os_error().into());
     }
     // SAFETY: the call above succeeded.
@@ -251,8 +276,10 @@ fn run(p: &Parameters) -> Result<()> {
         Permission::RemoteReadWrite,
     )?;
     let is_file = transport == Transport::IoUring;
+    let reset_file = is_file
+        .then(|| preallocate(&p.path, p.extent() + 2 * PAGE))
+        .transpose()?;
     let file = if is_file {
-        fs::write(&p.path, vec![0xa5; p.extent() + 2 * PAGE])?;
         Some(
             requester
                 .open_file_segment(&format!("file://{}", p.path), Permission::RemoteReadWrite)?,
@@ -283,6 +310,7 @@ fn run(p: &Parameters) -> Result<()> {
     let mut ns = Vec::new();
     let mut cpus = Vec::new();
     let mut owners = 0;
+    let trace = std::env::var_os("ORBITE_BENCH_TAIL_TRACE").is_some();
     for i in 0..p.warmup + p.samples {
         let image = p.image(i);
         local.write(0, &vec![0xa5; local.len()])?;
@@ -292,13 +320,23 @@ fn run(p: &Parameters) -> Result<()> {
         } else if !is_file {
             remote.write(ro, &image)?;
         }
-        if is_file {
+        if let Some(file) = &reset_file {
             let mut bytes = vec![0xa5; p.extent() + 2 * PAGE];
             if p.op == TransferOp::Read {
                 bytes[PAGE..PAGE + p.extent()].copy_from_slice(&image);
             }
-            fs::write(&p.path, bytes)?;
+            // In-place buffered reset keeps verification simple; fdatasync
+            // finishes its writeback before timing the direct-I/O operation.
+            file.write_all_at(&bytes, 0)?;
+            file.sync_data()?;
         }
+        // Diagnostic windows use perf's monotonic clock and surround the timed
+        // region. Disabled in matched sweeps; no core instrumentation or API.
+        let window_start = if trace {
+            clock_ns(libc::CLOCK_MONOTONIC)?
+        } else {
+            0
+        };
         let c = cpu_ns()?;
         let start = Instant::now();
         let mut batch = requester.allocate_batch(p.batch)?;
@@ -336,6 +374,16 @@ fn run(p: &Parameters) -> Result<()> {
         batch.free()?;
         let elapsed = start.elapsed().as_nanos() as u64;
         let c = cpu_ns()? - c;
+
+        if trace {
+            eprintln!(
+                "ORBITE_SAMPLE {} {} {} {}",
+                i,
+                window_start,
+                clock_ns(libc::CLOCK_MONOTONIC)?,
+                std::process::id()
+            );
+        }
 
         if std::env::var_os("ORBITE_BENCH_CORRUPT_BYTE").is_some() {
             local.write(0, &[0])?;

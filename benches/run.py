@@ -53,6 +53,7 @@ def main():
     p.add_argument("--trials", type=int, default=3)
     p.add_argument("--profile", action="store_true", help="also collect strace/perf evidence for the slow-path targets")
     p.add_argument("--profile-only", action="store_true", help="collect profiles without reporting traced timings as benchmark rows")
+    p.add_argument("--tail-profile-only", action="store_true", help="trace per-sample io_uring and scheduler timelines; never report traced performance")
     a = p.parse_args()
     out, ref = a.output.resolve(), a.reference.resolve()
     if out.is_relative_to(ROOT) or out.is_relative_to(ref) or platform.system() != "Linux":
@@ -105,7 +106,7 @@ def main():
                 "poll": "128 hot then 1,2,4,...,128,200 us capped", "metrics": False,
                 "timing": "allocate batch + submit + poll + free; per-batch wall and whole-process CPU",
                 "checks": "every warmup and sample; changed pattern, reset destination, full bytes and guards; excluded from time",
-                "file_state": "buffered reset before each sample; warmed ext4 O_DIRECT / tmpfs; no fsync, no durability or SSD performance claim",
+                "file_state": "preallocated once; in-place pwrite + fdatasync before each sample; warmed ext4 O_DIRECT / tmpfs; timed writes are not durability receipts",
                 "builds": {"rust": "release, io-uring", "tent": oracle["contract"]["cmake_options"]},
                 "harness_sha256": {f.name: hashlib.sha256(f.read_bytes()).hexdigest() for f in (ROOT / "benches").iterdir() if f.is_file()},
                 "binary_sha256": {k: hashlib.sha256(v.read_bytes()).hexdigest() for k, v in {"orbite": rust, "tent": tent}.items()},
@@ -115,6 +116,12 @@ def main():
         text = run(name+"-bad-byte", [exe, "tcp", "read", 4096, 1, "contiguous", 1, 1, a.workers, "-"], overrides=({**(tent_env if name == "tent" else {}), "ORBITE_BENCH_CORRUPT_BYTE": "1"}), expect_failure=True)
         if '"verified":true' in text:
             raise ValueError("corrupted guard produced a report")
+    if a.tail_profile_only:
+        from profile_io_tail import record
+        manifest["profile_cases"] = record(out, [("orbite", rust), ("tent", tent)], a, env, tent_env)
+        manifest["status"] = "passed-tail-profiles"
+        (out / "manifest.json").write_text(json.dumps(manifest, indent=2)+"\n")
+        return
     if a.profile or a.profile_only:
         from profile_cpu import record
         manifest["profile_cases"] = record(out, [("orbite", rust), ("tent", tent)], a, env, tent_env)

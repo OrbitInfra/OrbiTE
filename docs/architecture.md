@@ -231,6 +231,10 @@ it does not defer completion work to the submitting thread's next ring call.
 `pending_native_io_completes_on_worker_while_caller_only_computes` forces
 asynchronous kernel I/O and checks reaping on the worker without caller polling.
 The same preflight, partial-submit drain and prefix aggregation serve both paths.
+Aligned gapped and contiguous host batches keep one ring for the whole group,
+without bounce allocation, as checked by
+`aligned_file_batches_use_one_ring_without_bounce_for_gaps_or_contiguous_ranges`.
+The [tail diagnosis](benchmarks.md#ext4-tail-diagnosis) changes no drain owner.
 CUDA/file submissions use the same
 worker and ring for successive rounds. The optional file pool lends one
 aligned slot per eligible request. A miss uses the charged pageable or proxy

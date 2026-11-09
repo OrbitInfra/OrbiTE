@@ -143,6 +143,7 @@ if [[ ${2:-} == rdma-priority ]]; then
 fi
 if [[ ${2:-} == io-small ]]; then
   controls=(
+    transport::io_uring::tests::aligned_file_batches_use_one_ring_without_bounce_for_gaps_or_contiguous_ranges
     transport::io_uring::tests::inline::ready_small_file_cqes_finish_on_the_caller_with_exact_prefix_and_guards
     transport::io_uring::tests::inline::pending_small_file_handoff_keeps_loans_through_cancel_timeout_and_close
     transport::io_uring::tests::inline::failed_worker_handoff_quarantines_the_accepted_sqe_without_replay

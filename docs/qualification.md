@@ -304,8 +304,10 @@ The runner now names both settings explicitly without changing those values.
 
 Cells are **OrbiTE / TENT**, the median of the three per-trial statistics.
 CPU time is whole-process microseconds per batch, including clock overhead.
-A dash means no matched baseline in this driver. Files are warmed ext4 with
-OrbiTE O_DIRECT or buffered tmpfs, without fsync. These cloud-loopback results
+A dash means no matched baseline in this driver. These **old-harness** file
+rows use warmed ext4 with OrbiTE O_DIRECT or buffered tmpfs; each reset
+truncates and rewrites through the page cache without syncing. The reset can
+therefore overlap the timed direct I/O. These cloud-loopback results
 are neither installed hardware qualification nor a general performance claim.
 
 | Profile / operation / shape | p50 µs O / T | p99 µs O / T | GiB/s O / T | CPU µs O / T |
@@ -338,8 +340,9 @@ The subsequent [profile](benchmarks.md#tcp-profile-and-connection-reuse)
 confirmed connection churn and hot reply polling; this TCP change removes
 those costs while retaining the batch worker and all ownership checks. Ext4's gapped
 64-block READ/WRITE tails also inflate (p99 15.7/8.8 ms versus 1.8/1.7 ms),
-reducing throughput despite similar medians. That tail cause is unresolved in
-this warmed, page-cache/coherence-sensitive workload. The TCP fix left storage
+reducing throughput despite similar medians. Those **old-harness** ext4
+figures include reset writeback; the clean-reset comparison below supersedes
+them for isolating transfer cost. The TCP fix left storage
 unchanged; the small-file pass below addresses ready completions, not that tail.
 
 The [paired TCP pass](benchmarks.md#paired-results-and-regressions),
@@ -363,8 +366,36 @@ changes 156→51 µs and CPU 166→55 µs. WRITE p50 changes only 197→193 µs,
 still 2.30× TENT, while CPU changes 250→178 µs. Rust 1.85 independently
 records READ p50 155→53 µs and WRITE CPU 249→175 µs. The complete PR tables
 include every regression, including 1.85's 64 KiB direct-I/O latency increase.
-Gapped ext4 p99 remains 14.9/5.9 ms versus TENT's 2.2/2.6 ms on stable;
-larger file groups keep their worker path. No physical-SSD claim follows.
+The **old-harness** stable gapped ext4 p99 is 14.9/5.9 ms versus TENT's
+2.2/2.6 ms. The [paired reset diagnosis](benchmarks.md#ext4-tail-diagnosis),
+[run 42536940169](https://github.com/OrbitInfra/OrbiTE/actions/runs/42536940169),
+compares `521861db` → `19ec2009`, with production identical to `4f6bd35c`.
+It tests twenty cases × 1,000 samples in each phase on both toolchains.
+The old reset overlaps 31,999/32,000 ext4 windows. Preallocation plus in-place
+`pwrite`/`fdatasync` removes that reset writeback from every timed window;
+five 4 KiB writes from other processes remain across both runners, with no flush/FUA
+requests observed. Both implementations are checked, including writes already
+in flight at window start. The old ext4 evidence is contaminated.
+
+The clean reset does not eliminate all tails: the Rust 1.85 / EPYC 9V45
+OrbiTE gapped WRITE trace still has a slowest-1% median of 31.8 ms, including
+31.3 ms block waits, despite zero extra writes/flushes/FUA/discards in the
+case. Stable uses EPYC 9V74 and has different tails. These traced times are
+diagnostic, not benchmark p99s. Both implementations use one ring and one
+submitting enter per group; aligned gaps need no bounce allocation, and the
+drain worker does not sleep with backoff. The residual direct-I/O tail and
+remaining tmpfs WRITE handoff stay open. No production or hardware improvement
+is claimed. The earlier [unchanged-code paired control](benchmarks.md#unchanged-code-paired-control)
+retains its **old-harness** label and every row/regression; its run variation
+is not evidence of an optimization.
+
+The [reset-only paired sweeps](benchmarks.md#reset-only-paired-comparison)
+pass 480 old and 480 fixed rows on each toolchain, on one EPYC 7763 VM per
+pair. Stable gapped READ/WRITE p99 changes 15.60→10.41 / 8.08→32.98 ms;
+TENT changes 2.04→1.74 / 1.67→1.82 ms. Rust 1.85 records OrbiTE
+17.17→10.63 / 10.83→25.98 ms versus TENT 2.44→1.59 / 2.67→1.76 ms.
+Every ext4 row and regression is reported. Removing the reset artifact does
+not remove the tail; the worse clean-reset WRITEs remain an open limit.
 
 The [real-ring owner controls](https://github.com/OrbitInfra/OrbiTE/actions/runs/42499911722)
 cover caller completion, held receipts through cancel/timeout/close, failed
