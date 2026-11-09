@@ -25,7 +25,12 @@ def record(out, executables, args, env, tent_env):
 
     # Keep the kernel's field definitions with the evidence: names/layouts vary
     # across kernels. All-CPU recording includes io-wq and interrupt completions.
-    run("formats", ["sudo", "sh", "-c", "cat /sys/kernel/tracing/events/io_uring/*/format"])
+    run("formats", ["sudo", "sh", "-c", "cat " + " ".join(
+        f"/sys/kernel/tracing/events/{group}/*/format" for group in ("io_uring", "block", "iomap", "filemap"))])
+    run("devices", ["lsblk", "-O", "-J"])
+    run("queues", ["sh", "-c", "for q in /sys/block/*/queue; do echo \"$q\"; "
+                  "for k in scheduler nr_requests max_sectors_kb rotational wbt_lat_usec; "
+                  "do test ! -r \"$q/$k\" || { echo \"$k\"; cat \"$q/$k\"; }; done; done"])
     events = ["io_uring:*", "sched:sched_switch", "sched:sched_wakeup",
               "sched:sched_process_fork", "sched:sched_process_exit",
               "syscalls:sys_enter_io_uring_setup", "syscalls:sys_exit_io_uring_setup",
@@ -35,8 +40,13 @@ def record(out, executables, args, env, tent_env):
               "syscalls:sys_enter_munmap", "syscalls:sys_exit_munmap",
               "syscalls:sys_enter_futex", "syscalls:sys_exit_futex",
               "syscalls:sys_enter_fdatasync", "syscalls:sys_exit_fdatasync",
-              "block:block_rq_issue", "block:block_rq_complete"]
-    shapes = [("ext4", 64, "gapped"), ("ext4", 8, "gapped"),
+              "block:block_rq_issue", "block:block_rq_complete", "block:block_rq_insert",
+              "block:block_bio_queue", "block:block_bio_backmerge", "block:block_bio_frontmerge",
+              "block:block_split", "block:block_plug", "block:block_unplug",
+              "iomap:iomap_dio_rw_begin", "iomap:iomap_dio_complete",
+              "iomap:iomap_iter", "iomap:iomap_iter_dstmap",
+              "filemap:mm_filemap_delete_from_page_cache"]
+    shapes = [("ext4", 64, "gapped"), ("ext4", 64, "contiguous"), ("ext4", 8, "gapped"),
               ("ext4", 8, "contiguous"), ("ext4", 1, "contiguous"),
               ("tmpfs", 1, "contiguous")]
     samples = max(args.samples, 1000)
@@ -96,6 +106,15 @@ def record(out, executables, args, env, tent_env):
                 finally:
                     subprocess.run(["sudo", "rm", "-f", path], check=True)
                     scratch.cleanup()
+                # Separate, short syscall run: confirm the actual descriptor flags,
+                # not just the source spelling. Never use ptrace timings as rows.
+                run(name + "-fds", ["strace", "-f", "-yy", "-ttt", "-o", root / (name + ".strace"),
+                                     "-e", "trace=openat,fcntl,io_uring_setup,io_uring_enter,fdatasync",
+                                     "env", *[f"{k}={v}" for k, v in overrides.items()], exe,
+                                     "io_uring", op, 4096, batch, layout, args.warmup, 3, args.workers, path])
+                path.unlink()
+                if json.loads((root / (name + "-fds.stdout")).read_text()).get("verified") is not True:
+                    raise ValueError("descriptor trace failed byte checks")
     from analyze_io_tail import analyze, controls
     controls()
     analyze(root)
