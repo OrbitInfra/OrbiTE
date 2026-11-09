@@ -18,6 +18,7 @@ pub(super) struct State {
     register_error: bool,
     close_error: bool,
     version: i32,
+    peermem_root: Option<std::path::PathBuf>,
     exports: Vec<(u64, usize, u64, i32)>,
     calls: Vec<(usize, u64, usize, u64, i32, i32)>,
     closed: Vec<i32>,
@@ -39,12 +40,14 @@ unsafe extern "C" fn range(base: *mut u64, size: *mut usize, addr: u64) -> drive
     }
     SUCCESS
 }
-unsafe extern "C" fn version(out: *mut c_int) -> driver::Status {
-    // SAFETY: CUDA supplies a writable integer.
-    unsafe {
-        *out = shim::current().dmabuf.lock().unwrap().version;
-    }
-    SUCCESS
+pub(crate) fn peermem_root() -> std::path::PathBuf {
+    shim::current()
+        .dmabuf
+        .lock()
+        .unwrap()
+        .peermem_root
+        .clone()
+        .unwrap()
 }
 unsafe extern "C" fn export(
     out: *mut c_void,
@@ -61,6 +64,9 @@ unsafe extern "C" fn export(
     assert_eq!(length % 4096, 0);
     let owner = shim::device_at(base);
     let mut state = owner.dmabuf.lock().unwrap();
+    if flags != 0 && state.version < 12080 {
+        return driver::Status::CUDA_ERROR_INVALID_VALUE;
+    }
     if state.export_error {
         return driver::Status::CUDA_ERROR_UNKNOWN;
     }
@@ -126,7 +132,6 @@ fn backing_with_export(available: bool) -> (Arc<shim::Device>, Arc<CudaMemory>) 
     let mut d = Arc::try_unwrap(driver()).ok().unwrap();
     d.dmabuf_export = available.then_some(export);
     d.address_range = range;
-    d.version = version;
     d.close_fd = close;
     let d = Arc::new(d);
     // SAFETY: the boxed allocation remains owned and fixed in the shim Device.
@@ -411,7 +416,7 @@ fn dmabuf_unregister_and_close_timeout_keep_fds_until_the_real_invalidation() {
 
 #[test]
 fn dmabuf_pcie_flag_and_optional_cuda_symbol_follow_the_driver_contract() {
-    for (available, version, flag) in [(true, 12040, 0), (true, 12080, 1), (false, 13000, 0)] {
+    for (available, version) in [(true, 12040), (true, 12080), (true, 13000), (false, 13000)] {
         let (owner, memory) = backing_with_export(available);
         owner.dmabuf.lock().unwrap().version = version;
         let engine = engine("direct:copy", Policy::Auto, true, true, false);
@@ -428,9 +433,61 @@ fn dmabuf_pcie_flag_and_optional_cuda_symbol_follow_the_driver_contract() {
         let s = owner.dmabuf.lock().unwrap();
         assert_eq!(s.exports.len(), usize::from(available));
         if available {
-            assert_eq!(s.exports[0].2, flag);
+            assert_eq!(s.exports[0].2, 0, "driver version {version}");
         }
     }
+}
+
+#[test]
+fn dmabuf_peermem_version_paths_select_each_module_and_reject_directories_only() {
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    let root = std::env::temp_dir().join(format!(
+        "orbite-peermem-probe-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir(&root).unwrap();
+    let paths = [
+        "sys/kernel/mm/memory_peers/nv_mem/version",
+        "sys/kernel/mm/memory_peers/nv_mem_nc/version",
+        "sys/module/nvidia_peermem/version",
+    ];
+    for path in paths {
+        std::fs::create_dir_all(root.join(path).parent().unwrap()).unwrap();
+    }
+    // All module directories exist throughout. Only a version path is evidence.
+    for present in [None, Some(0), Some(1), Some(2)] {
+        if let Some(i) = present {
+            std::fs::write(root.join(paths[i]), b"test-version\n").unwrap();
+        }
+        for policy in [Policy::Auto, Policy::Peermem] {
+            let (owner, memory) = backing();
+            owner.dmabuf.lock().unwrap().peermem_root = Some(root.clone());
+            let engine = rdma_fixture_with_runtime(verbs::dmabuf_runtime_with_peermem_root(policy));
+            let result =
+                engine.register_cuda_memory_batch(&[(memory, 31, 55)], Permission::RemoteReadWrite);
+            if present.is_some() {
+                let view = result.unwrap().remove(0);
+                let peer = engine
+                    .open_segment(engine.endpoint(), engine.source_epoch(), EVENTUAL_PROGRESS)
+                    .unwrap();
+                let route = peer.regions()[0].gpu_direct_routes();
+                assert!(route.peermem && !route.dmabuf);
+                engine.unregister_memory(&view).unwrap();
+            } else {
+                assert!(matches!(result, Err(Error::Unavailable(_))), "{result:?}");
+            }
+            let stats = engine.stats().unwrap().rdma.unwrap();
+            assert_eq!(stats.peermem_registrations, u64::from(present.is_some()));
+            assert_eq!(stats.dmabuf_registrations, 0);
+            assert!(owner.dmabuf.lock().unwrap().exports.is_empty());
+            engine.close(EVENTUAL_PROGRESS).unwrap();
+        }
+        if let Some(i) = present {
+            std::fs::remove_file(root.join(paths[i])).unwrap();
+        }
+    }
+    std::fs::remove_dir_all(root).unwrap();
 }
 
 #[test]
@@ -477,7 +534,6 @@ fn dmabuf_rounds_the_export_but_never_widens_the_registered_view() {
     let mut d = Arc::try_unwrap(driver()).ok().unwrap();
     d.dmabuf_export = Some(export);
     d.address_range = range;
-    d.version = version;
     d.close_fd = close;
     // SAFETY: retained boxed shim storage; the entire shorter native extent is owned.
     let address = (unsafe { &*owner.bytes.get() }.as_ptr() as u64 + 4095) & !4095;

@@ -22,6 +22,8 @@ mod gpu_registration;
 mod memory;
 #[cfg(feature = "cuda")]
 pub(crate) use gpu_registration::GpuRegistrationVerbs;
+#[cfg(all(test, feature = "cuda"))]
+pub(super) use gpu_registration::peermem_at;
 mod port;
 mod qp;
 

@@ -43,11 +43,18 @@ With `cuda_memory: "direct"`, set `rdma.gpu_direct_registration` to `auto`
 (default), `dmabuf` or `peermem`. The typed field takes
 `GpuDirectRegistration::{Auto, Dmabuf, Peermem}`. `auto` prefers dma-buf when
 CUDA advertises `DMA_BUF_SUPPORTED` and both export and verbs symbols exist;
-otherwise it uses peermem only when `nvidia_peermem` is loaded. An explicit
+otherwise it uses peermem only when a supported kernel module is loaded. An explicit
 route with missing prerequisites returns `Unavailable`. The default CUDA memory
 policy remains `staged`; a failed explicit Direct registration does not change
 that policy or retry a device pointer as host memory. An attempted export or
 native registration failure is returned without trying another route.
+
+Peermem detection follows [NCCL's module probe](https://github.com/NVIDIA/nccl/blob/3e46c089f4ae4732722a419eb6096aead7e47a30/src/transport/net_ib/gdr.cc):
+any one of `/sys/kernel/mm/memory_peers/nv_mem/version`,
+`/sys/kernel/mm/memory_peers/nv_mem_nc/version` or
+`/sys/module/nvidia_peermem/version` must exist. This covers MLNX_OFED's
+`nv_peer_mem` and NVIDIA's `nvidia_peermem`; a module directory alone is not
+evidence of support.
 
 `cuMemGetHandleForAddressRange` exports the containing allocation. Its base and
 export size are host-page aligned; a legacy allocation's length rounds up to a
@@ -59,12 +66,15 @@ and the [verbs offset/IOVA rule](https://github.com/linux-rdma/rdma-core/blob/v5
 It follows [NCCL's host-page registration geometry](https://github.com/NVIDIA/nccl/blob/3e46c089f4ae4732722a419eb6096aead7e47a30/src/transport/net_ib/reg.cc),
 while keeping OrbiTE's exact-range grant authority.
 
-For PCIe RNIC mappings, CUDA 12.8 or later receives
-`CU_MEM_RANGE_FLAG_DMA_BUF_MAPPING_TYPE_PCIE`; earlier drivers receive zero.
-The flag requests PCIe/BAR1 mapping rather than a default C2C mapping on Grace.
-This follows [NCCL's PCIe route flag](https://github.com/NVIDIA/nccl/blob/3e46c089f4ae4732722a419eb6096aead7e47a30/src/transport/net.cc).
-OrbiTE does not select a C2C RNIC path. Grace/BAR1 behavior still needs an
-installed run; an unsupported export fails closed.
+Export flags are zero on every driver and platform, preserving CUDA's default
+mapping. [NCCL's mapping flag](https://github.com/NVIDIA/nccl/blob/3e46c089f4ae4732722a419eb6096aead7e47a30/src/transport/net.cc)
+forces PCIe only for its `ncclTopoGdrModePci` mode:
+[topology selection](https://github.com/NVIDIA/nccl/blob/3e46c089f4ae4732722a419eb6096aead7e47a30/src/graph/paths.cc)
+requires a local GPU→CPU `PATH_C2C` and a GPU→NIC distance other than `PATH_P2C`.
+x86 PCIe and Grace CPU-attached NIC paths use zero. OrbiTE lacks this C2C/PCI
+classification, so forced PCIe mapping is **not implemented**. Grace mapping
+and route verification remain an installed-gate limit; an export error fails
+closed rather than trying peermem.
 
 The optional `ibv_reg_dmabuf_mr` symbol is resolved from loaded libibverbs;
 older rdma-core needs no new link-time symbol. Linux

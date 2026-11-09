@@ -82,7 +82,7 @@ impl FromStr for SourceEpoch {
 pub struct GpuDirectRoutes {
     /// At least one native MR for this registration used an exported dma-buf.
     pub dmabuf: bool,
-    /// At least one native MR for this registration used nvidia_peermem.
+    /// At least one native MR for this registration used NVIDIA/MLNX_OFED peermem.
     pub peermem: bool,
 }
 impl GpuDirectRoutes {

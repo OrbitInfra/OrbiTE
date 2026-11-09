@@ -158,12 +158,9 @@ impl CudaMemory {
                     // VMM mappings already cover whole allocation-granularity pages.
                     let size = size.checked_add(page - 1).ok_or(Error::InvalidRange)? & !(page - 1);
                     base.checked_add(size as u64).ok_or(Error::InvalidRange)?;
-                    let mut version = 0;
-                    // SAFETY: writable driver version output; no runtime state is changed.
-                    check("cuDriverGetVersion dma-buf", unsafe { (context.driver.version)(&mut version) })?;
-                    // OrbiTE selects PCIe RNIC paths, not a topology-selected C2C route.
-                    // CUDA before 12.8 accepts only zero; newer drivers can force BAR1.
-                    let flags = if version >= 12080 { sys::CUmemRangeFlags_enum::CU_MEM_RANGE_FLAG_DMA_BUF_MAPPING_TYPE_PCIE as u64 } else { 0 };
+                    // NCCL forces PCIe mapping only with a classified C2C/PCI path.
+                    // Without that topology evidence, retain CUDA's default mapping.
+                    let flags = 0;
                     let mut fd = -1;
                     // SAFETY: the containing native allocation is fully mapped, retained and
                     // host-page aligned. The output is an owned Linux dma-buf descriptor.
@@ -181,7 +178,7 @@ impl CudaMemory {
                 } else if policy != GpuDirectRegistration::Dmabuf && (verbs.peermem)() {
                     handles.gpu_route = 2;
                 } else {
-                    return Err(Error::Unavailable("GPU Direct registration route unavailable: require CUDA dma-buf and ibv_reg_dmabuf_mr, or nvidia_peermem"));
+                    return Err(Error::Unavailable("GPU Direct registration route unavailable: require CUDA dma-buf and ibv_reg_dmabuf_mr, or nvidia_peermem/nv_peer_mem"));
                 }
             }
             operation(handles)

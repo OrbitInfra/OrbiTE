@@ -164,7 +164,13 @@ fn main() -> Result<()> {
         "peermem" => GpuDirectRegistration::Peermem,
         _ => return Err("explicit route required".into()),
     };
-    let loaded = std::path::Path::new("/sys/module/nvidia_peermem").is_dir();
+    let loaded = [
+        "/sys/kernel/mm/memory_peers/nv_mem/version",
+        "/sys/kernel/mm/memory_peers/nv_mem_nc/version",
+        "/sys/module/nvidia_peermem/version",
+    ]
+    .iter()
+    .any(|path| std::path::Path::new(path).exists());
     if loaded != (policy == GpuDirectRegistration::Peermem) {
         return Err("kernel peermem state differs from requested profile".into());
     }

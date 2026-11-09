@@ -26,7 +26,18 @@ fn dmabuf() -> Option<DmabufVerb> {
     })
 }
 
+pub(in crate::transport::rdma) fn peermem_at(root: &std::path::Path) -> bool {
+    // NCCL's ibGdrSupportInitOnce recognizes both MLNX_OFED and NVIDIA modules.
+    [
+        "sys/kernel/mm/memory_peers/nv_mem/version",
+        "sys/kernel/mm/memory_peers/nv_mem_nc/version",
+        "sys/module/nvidia_peermem/version",
+    ]
+    .iter()
+    .any(|path| root.join(path).exists())
+}
+
 pub(super) const REAL: GpuRegistrationVerbs = GpuRegistrationVerbs {
     dmabuf,
-    peermem: || std::path::Path::new("/sys/module/nvidia_peermem").is_dir(),
+    peermem: || peermem_at(std::path::Path::new("/")),
 };

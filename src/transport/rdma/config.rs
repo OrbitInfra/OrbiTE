@@ -30,7 +30,7 @@ pub enum RdmaCudaMemory {
     Direct,
 }
 
-/// Native CUDA MR route. Auto prefers dma-buf, then an installed nvidia_peermem
+/// Native CUDA MR route. Auto prefers dma-buf, then a loaded NVIDIA/MLNX_OFED peermem
 /// module. A failed native export/registration never retries the other route.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Deserialize)]
 #[non_exhaustive]

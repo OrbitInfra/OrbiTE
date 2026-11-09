@@ -632,8 +632,6 @@ pub(super) fn driver() -> Arc<Driver> {
         #[cfg(feature = "rdma")]
         dmabuf_export: None,
         #[cfg(feature = "rdma")]
-        version: dmabuf_version,
-        #[cfg(feature = "rdma")]
         close_fd: libc::close,
         _library: None,
         vmm: None,
@@ -1105,15 +1103,6 @@ unsafe extern "C" fn pci_bus_id(
     // output buffer.
     unsafe {
         std::ptr::copy_nonoverlapping(id.as_ptr(), out.cast(), id.len());
-    }
-    SUCCESS
-}
-
-#[cfg(feature = "rdma")]
-unsafe extern "C" fn dmabuf_version(out: *mut c_int) -> Status {
-    // SAFETY: the driver-version ABI supplies a writable integer.
-    unsafe {
-        *out = 13000;
     }
     SUCCESS
 }

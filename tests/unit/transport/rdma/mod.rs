@@ -2725,3 +2725,17 @@ pub(crate) fn dmabuf_runtime(
     // Constructors retain the table selected for this test before any native owner exists.
     r
 }
+
+#[cfg(feature = "cuda")]
+pub(crate) fn dmabuf_runtime_with_peermem_root(policy: GpuDirectRegistration) -> RdmaTransport {
+    static PATHS: sys::Verbs = sys::Verbs {
+        gpu_registration: sys::GpuRegistrationVerbs {
+            dmabuf: || None,
+            peermem: || sys::peermem_at(&crate::cuda::tests::dmabuf::peermem_root()),
+        },
+        ..VERBS
+    };
+    let mut runtime = dmabuf_runtime("direct:copy", policy, false, false, false);
+    runtime.verbs = &PATHS;
+    runtime
+}

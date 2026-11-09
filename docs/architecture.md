@@ -431,7 +431,12 @@ or registration error can fall through to pointer registration. The
 `dmabuf_export_or_registration_error_never_calls_the_pointer_registration`
 negative control includes an error after an fd was returned. Host registration
 is unchanged. The [route guide](rdma-cuda.md#gpu-direct-registration-routes)
-records NVIDIA/NCCL alignment, PCIe mapping and fd lifetime contracts.
+records NVIDIA/NCCL alignment, default mapping and fd lifetime contracts.
+Export flags remain zero without NCCL's C2C/PCI topology evidence;
+`dmabuf_pcie_flag_and_optional_cuda_symbol_follow_the_driver_contract` checks
+older and newer drivers. Peermem detects the same three version paths as NCCL;
+`dmabuf_peermem_version_paths_select_each_module_and_reject_directories_only`
+drives registration through each path and rejects directory-only fixtures.
 
 `dmabuf_unregister_and_close_timeout_keep_fds_until_the_real_invalidation`
 holds real control traffic at the verbs shim, checks private and reused GPU
