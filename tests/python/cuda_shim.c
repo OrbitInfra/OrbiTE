@@ -44,6 +44,7 @@ int orbite_test_count(int n) { pthread_mutex_lock(&mu); int v=n==0?entered:n==1?
 uintptr_t orbite_test_context(void) { return depth ? (uintptr_t)stack[depth-1] : 0; }
 static int failed(int n) { pthread_mutex_lock(&mu); int v=fault==n; pthread_mutex_unlock(&mu); return v; }
 int cuInit(unsigned int f) { (void)f; return 0; }
+int cuDriverGetVersion(int *out) { *out=13000; return 0; }
 int cuDeviceGet(int *out,int d) { if(d<0 || d>1)return 101; *out=d;return 0; }
 int cuDeviceGetCount(int *out) { *out=2;return 0; }
 int cuDeviceGetAttribute(int *out,int a,int d) { (void)a;(void)d;*out=0;return 0; }
