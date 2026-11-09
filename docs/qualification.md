@@ -363,7 +363,7 @@ those costs while retaining the batch worker and all ownership checks. Ext4's ga
 reducing throughput despite similar medians. Those **old-harness** ext4
 figures include reset writeback; the clean-reset comparison below supersedes
 them for isolating transfer cost. The TCP fix left storage
-unchanged; the small-file pass below addresses ready completions, not that tail.
+unchanged; the small-file passes below address caller completion, not that tail.
 
 The [paired TCP pass](benchmarks.md#paired-results-and-regressions),
 [run 42441063520](https://github.com/OrbitInfra/OrbiTE/actions/runs/42441063520),
@@ -378,7 +378,7 @@ repeat 16 default / 17 combined-feature controls 50 times on each toolchain,
 including dirty-stream retirement, retained backing/charges, peer epochs and
 ordered byte/guard checks. This changes no hardware qualification.
 
-The [small-file paired pass](benchmarks.md#small-file-paired-results),
+The historical ready-CQE pass,
 [run 42499905741](https://github.com/OrbitInfra/OrbiTE/actions/runs/42499905741),
 records another 480 checked rows per revision per toolchain, `edec7937` →
 `a52e7b7`, on one four-vCPU EPYC 7763 VM per pair. Stable tmpfs READ p50
@@ -406,8 +406,9 @@ submitting enter per group; aligned gaps need no bounce allocation, and the
 drain worker does not sleep with backoff. The [subsequent block-layer comparison](benchmarks.md#direct-io-issue-paths-and-verification-load)
 finds a verification/load-dependent tail below driver issue, reproduced in
 unchanged TENT by bulk verification reads. Normal verification is now bulk in
-both harnesses; virtual-disk tails and the tmpfs WRITE handoff remain limits.
-No production or hardware improvement is claimed. The earlier [unchanged-code paired control](benchmarks.md#unchanged-code-paired-control)
+both harnesses. That diagnosis changes no production owner and makes no
+hardware improvement claim. Virtual-disk tails stay a P11 limit; the separate
+small-file caller-wait pass below measures the pending-WRITE handoff. The earlier [unchanged-code paired control](benchmarks.md#unchanged-code-paired-control)
 retains its **old-harness** label and every row/regression; its run variation
 is not evidence of an optimization.
 
@@ -426,12 +427,27 @@ confounder; it does not qualify a physical SSD or promise a tail bound. The
 [full PR report](https://github.com/OrbitInfra/OrbiTE/pull/186) retains every
 untraced row, including regressions and unchanged TENT CPU/TCP controls.
 
-The [real-ring owner controls](https://github.com/OrbitInfra/OrbiTE/actions/runs/42499911722)
-cover caller completion, held receipts through cancel/timeout/close, failed
-worker handoff, whole preflight, partial submission and exact short prefixes,
-with `ORBITE_REQUIRE_IO_URING=1`. The small-file stability step repeats them
-50 times on both toolchains. This preserves the Linux CI file qualification
-and makes no GPU or installed-NVMe qualification claim.
+The current [small-file caller-wait pair](benchmarks.md#small-file-paired-results),
+[run 42692901727](https://github.com/OrbitInfra/OrbiTE/actions/runs/42692901727),
+passes 480 rows before and after on each toolchain, `578531b7` → `a5874066`,
+with unchanged workload hashes, reset, bulk verification and S26 parameters.
+Each pair shares one VM: four-vCPU EPYC 9V74 on stable and EPYC 7763 on 1.85.
+Tmpfs 4 KiB WRITE p50 changes **117.9→57.3 / 192.8→76.1 µs**; CPU changes
+**130.2→61.5 / 181.3→86.6 µs**. Stable ext4 64 KiB WRITE p99 also regresses
+**331→544 µs**, with separate trial ranges. A missed bounded wait can delay
+handoff; VM/device variation and its contribution are not isolated. Complete
+stable and 1.85 tables retain every row and regression, with unchanged TENT
+as the reference. This is scoped CPU evidence, not a general latency promise.
+
+The [real-ring owner controls](https://github.com/OrbitInfra/OrbiTE/actions/runs/42693036386)
+cover late CQEs on tmpfs/ext4 with zero worker starts, a bounded caller wait,
+EINTR/EAGAIN and enter failure, held receipts through cancel/drop/timeout/close,
+failed worker handoff, whole preflight, partial submission and exact short
+prefixes. `ORBITE_REQUIRE_IO_URING=1` remains mandatory. The small-file step
+passes **15 io-uring / 16 combined-feature controls × 50 × both toolchains**,
+3,100 executions. Disabling only the caller wait makes the late-CQE negative
+control fail with one worker start instead of zero. This preserves the Linux
+CI file qualification and makes no GPU or installed-NVMe qualification claim.
 
 [CI run 42362843121](https://github.com/OrbitInfra/OrbiTE/actions/runs/42362843121)
 records 24 passing CPU fault controls and two N/A dispositions per toolchain

@@ -97,9 +97,10 @@ CUDA exporters. Older accepted H20/RoCE artifacts do not qualify this release.
 Physical two-host TCP and physical multi-rail remain unqualified. CPU shim tests are not device evidence. Required installed
 gates remain in the [verification queue](qualification.md#verification-queue).
 
-The profile-guided TCP and small-file passes repeat S26 on four-vCPU EPYC 7763
-Linux runners. The TCP pair is `f0556448` → `de9fd60b`; the file pair is
-`edec7937` → `a52e7b7`. Each pair shares one VM, with full byte checks and
+The profile-guided TCP and small-file passes repeat S26 on four-vCPU Linux
+runners. The TCP pair is `f0556448` → `de9fd60b` on EPYC 7763. The current file pair
+is `578531b7` → `a5874066`, on four-vCPU EPYC 9V74 (stable) and EPYC 7763
+(1.85) runners. Each pair shares one VM, with full byte checks and
 frozen TENT on that runner. The table reports medians of three 100-sample
 trials; the two jobs are not pooled. These are scoped measurements, not
 release speed guarantees. The reset-only pair (`521861db` → `19ec2009`)
@@ -110,7 +111,8 @@ identical production code.
 | --- | --- |
 | Scattered 64 × 4 KiB TCP READ / WRITE | p50 **8.59 → 4.23 / 9.33 → 6.30 ms**; TENT after **6.18 / 6.07 ms**. WRITE remains 3.7% slower than TENT |
 | Single 4 KiB TCP READ | CPU **370 → 190 µs** per batch; TENT after **256 µs** |
-| 4 KiB buffered tmpfs READ / WRITE | p50 **156 → 51 / 197 → 193 µs**, or **0.61× / 2.30×** TENT after. CPU **166 → 55 / 250 → 178 µs**; WRITE latency remains a limit |
+| 4 KiB buffered tmpfs WRITE | Stable p50 **117.9→57.3 µs**, CPU **130.2→61.5 µs**; 1.85 p50 **192.8→76.1 µs**, CPU **181.3→86.6 µs**. After p50 is **1.02×/0.96×** TENT. A missed caller window still needs worker drain |
+| Small-file regressions | Stable tmpfs 4 KiB READ p50 **+9.3%**; stable ext4 64 KiB WRITE p99 **331→544 µs (+64.4%)**, with separate trial ranges. The bounded wait can delay handoff on a miss; its contribution versus VM/device variation is not isolated. [Every row and regression](benchmarks.md#small-file-paired-results) is retained |
 | Gapped ext4 READ / WRITE | **Clean-reset** p99: stable **10.41 / 32.98 ms** versus TENT **1.74 / 1.82 ms**; Rust 1.85 **10.63 / 25.98 ms** versus **1.59 / 1.76 ms**. [All paired rows](benchmarks.md#reset-only-paired-comparison) retain the regressions. The [verification-load control](benchmarks.md#direct-io-issue-paths-and-verification-load) reproduces the long tail in unchanged TENT; current virtual-disk tails remain a limit |
 
 The earlier small-file **old-harness** ext4 p99 was 14.9/5.9 ms versus
@@ -122,9 +124,11 @@ pin revisions, hosts, parameters and every numerical regression. The TCP profile
 connection per physical request and substantial reply-poll CPU. TCP now reuses
 bounded, epoch-scoped streams and uses deadline-bounded socket waits. Dirty
 streams retire without replay, and uncertain cleanup retains its owners.
-One small host-file operation can now finish on its caller when its CQE is
-ready. Pending I/O keeps the same ring and moves to the existing worker;
-uncertain handoff retains all owners. No polling contract or ring bound changes.
+One eligible host-file operation can finish on its caller after an initial
+CQ check and a wait of at most 200 µs, capped by its deadline and three enter
+attempts. A missed window or enter failure moves the same ring to the existing
+drain worker without resubmitting. Uncertain handoff retains every owner.
+No public API, observational polling contract or ring bound changes.
 In the **old-harness** small-file pair, Rust 1.85's 64 KiB ext4 READ/WRITE
 p50 regresses 15%/17% while CPU falls
 16%/20%; the contribution of changed wake timing versus file/VM variation is
@@ -139,9 +143,9 @@ only TENT's verifier reproduces the long gapped tail; reducing offered load
 reduces most tails, with residual outliers. Both normal harnesses now use bulk
 verification reads. This corrects the comparison without changing production
 owners or claiming a runtime speedup; host rate limiting remains an inference. The earlier [unchanged-code control](benchmarks.md#unchanged-code-paired-control)
-remains labeled old-harness. Small tmpfs WRITE still usually creates a worker
-after the caller sees a pending CQE; its old control-pair p50 is 199→191 µs
-versus TENT's 84 µs. The caller-wait candidate is deferred.
+remains labeled old-harness. The small-file caller wait now addresses the
+separate pending-WRITE handoff; requests that exceed its bounded window still
+use the existing drain worker.
 There is one exclusive direct-TCP lane per peer, without a concurrent-caller performance
 claim. The separate Rust 1.85 pair used a newer EPYC 9V45: scattered TCP
 improved, but 64 MiB READ p50/p99 regressed 2.8%/10.7% while CPU fell 4.2%.
