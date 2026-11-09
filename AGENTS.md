@@ -29,8 +29,11 @@ do not turn this file into a second status diary.
   OrbiTE's own: no wire, API or configuration compatibility with TENT.
   The frozen C++ build is a CPU oracle and benchmark baseline, never a runtime dependency.
 - Platforms: CPU and NVIDIA CUDA only.
-- In-scope transports (9): `TCP`, `HP_TCP`, `SHM`, `RDMA`, `NVLINK`, `MNNVL`,
-  `IOURING`, `GDS` are core; `FABRIC` is an optional network module.
+- In-scope transports (8): `TCP`, `HP_TCP`, `SHM`, `RDMA`, `NVLINK`, `MNNVL`,
+  `IOURING`, `GDS`.
+- B17 `FABRIC` (libfabric) is excluded by design: NVIDIA platforms only; AWS
+  EFA is a non-goal. RDMA, NVLink and MNNVL cover NVIDIA networks. See the
+  [scope and revisit condition](docs/tent-parity.md#upstream-transport-inventory-and-selected-scope).
 - B15 `MPCOMM` is deferred: no consumer; provider unavailable. Add no public identity or provider implementation.
 - Excluded: `UB`/URMA, Ascend, Sunrise, TPU/PJRT, XPU/SYCL, MLU, Hylink,
   MemFabric and ROCm/HIP. Do not expose compatibility constants, implement them or add their SDKs.
@@ -70,9 +73,9 @@ Check `gh pr list` before branching from current main. The work order is in §7.
   exact gate command to the verification queue in
   [docs/qualification.md](docs/qualification.md).
 - Paths that need no special hardware (io_uring on Linux, HP-TCP, SHM,
-  Python and libfabric `tcp` provider) must be
+  and Python) must be
   tested for real in CI. Only those can be called qualified on CI evidence.
-- Never write "qualified" or "accepted" for a GPU, RDMA, GDS, MNNVL or fabric
+- Never write "qualified" or "accepted" for a GPU, RDMA, GDS or MNNVL
   profile without an installed hardware run. Missing hardware means
   unqualified, not passed.
 - Do not request hardware jobs. Do not edit the OrbitKV repository or its
@@ -545,14 +548,10 @@ Removed and out of scope: CPU and NVIDIA CUDA are built in; external accelerator
 
 Out of scope by design; see the [wire and consumer boundary](docs/tent-parity.md#wire-and-consumer-boundaries).
 
-### S24 — P8.2 libfabric (B17) [CPU via the tcp provider]
+### S24 — P8.2 FABRIC (B17)
 
-- **TENT:** `transport/fabric/{fabric_attrs,fabric_context,fabric_transport}.cpp`.
-- **Implement:**
-  - Runtime-loaded libfabric and the host DRAM path.
-  - Provider attributes and capabilities.
-  - Endpoint, progress and completion ownership.
-- CI moves real bytes with the `tcp` provider. EFA qualification is deferred.
+Removed and out of scope: libfabric carries host DRAM only; OrbiTE targets
+NVIDIA platforms and AWS EFA is a non-goal. CUDA fabric handles remain in scope.
 
 ### S25 — P8.1 MPComm (B15)
 
@@ -576,8 +575,7 @@ Revisit only when a consumer brings a provider and hardware; see
 The [verification queue](docs/qualification.md#verification-queue) is the single
 list of installed profiles, commands and evidence, including planned NIXL gates.
 Add exact commands when a gate is written; distinguish a planned gate from an
-implemented but unrun one. Current GPU/RDMA/GDS/MNNVL and physical fabric
-profiles remain unqualified until those installed runs pass.
+implemented but unrun one. Current GPU/RDMA/GDS/MNNVL profiles remain unqualified until those installed runs pass.
 
 Release work follows the [release ladder](docs/completion-plan.md#release-ladder):
 P10 faults, P11 matched TENT/NIXL performance and installed consumer integration.

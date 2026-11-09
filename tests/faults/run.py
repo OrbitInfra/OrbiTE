@@ -11,7 +11,7 @@ ROOT = Path(__file__).resolve().parents[2]
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--binary", type=Path, required=True, help="cargo test --features io-uring,fabric --lib --no-run executable")
+    parser.add_argument("--binary", type=Path, required=True, help="cargo test --features io-uring --lib --no-run executable")
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--kill-repeats", type=int, default=50)
     args = parser.parse_args()
@@ -19,7 +19,7 @@ def main():
     if out.is_relative_to(ROOT) or not 1 <= args.kill_repeats <= 2000:
         parser.error("external evidence directory and bounded repetitions required")
     out.mkdir(parents=True, exist_ok=False)
-    env = dict(os.environ, ORBITE_REQUIRE_IO_URING="1", ORBITE_REQUIRE_FABRIC="1", FI_PROVIDER="tcp")
+    env = dict(os.environ, ORBITE_REQUIRE_IO_URING="1")
     if not all(k in env for k in ("ORBITE_EXT4_DIR", "ORBITE_TMPFS_DIR")):
         parser.error("required ext4/tmpfs fixture directories missing")
     tests = subprocess.check_output([args.binary, "--list"], text=True).splitlines()

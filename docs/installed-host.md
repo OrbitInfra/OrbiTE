@@ -72,7 +72,7 @@ unchanged and joins each accepted payload WR to its successful CQE by context,
 CQ, QPN and WR ID. The verifier checks both rails' payload, at least two parents
 outstanding on each rail's shared QP, at most eight payload WRs per QP, and
 native bytes equal to the public counters. This measures accepted work, not
-fabric saturation, fairness or throughput.
+RDMA-network saturation, fairness or throughput.
 
 ## Automatic discovery against an independent inventory
 

@@ -8,10 +8,9 @@ evidence for each owner and profile. The upstream path is the proposed
 [NIXL backend](nixl-backend.md); P/D acceptance still requires the installed
 release gates below. Neither is a current capability claim. MPComm remains deferred.
 
-Storage and optional network providers are opt-in builds, like `rdma` and
-`cuda`: a network/memory-only build must run without file/SSD executors,
-cuFile or provider SDKs. This does not restrict CPU, SSD or network-device
-vendors, and no non-NVIDIA accelerator SDK is a dependency.
+Native transports use opt-in builds, like `rdma` and `cuda`: a network/memory-only
+build must run without file/SSD executors, cuFile or storage SDKs. CPU and
+local SSD paths remain supported; no non-NVIDIA accelerator SDK is a dependency.
 
 This is OrbiTE's only status record and execution queue; the parity document
 defines requirements. OrbitKV keeps its own cache delivery queue, and this plan
@@ -48,7 +47,7 @@ artifacts and hardware profiles.
 | P5 | CUDA, GPUDirect, NVLink/MNNVL and staging | P4 | Complete at source level for the frozen cooperative profile. Current installed GPU/RDMA profiles remain in the verification queue |
 | P6 | Routing, progress, QoS, deadlines and recovery | P3/P4; staging cases also P5 | Complete at source level. Installed RDMA profiles remain in the verification queue |
 | P7 | File, io_uring and GDS paths | P2; GDS also P5 | S1–S5 complete at source level. DRAM/file io_uring qualified in Linux CI. Installed CUDA staging and native GDS gates unrun |
-| P8 | Additional CPU/NVIDIA-compatible network providers | P1/P2; relevant P4–P6 | P8.2 libfabric implemented; EFA unqualified. P8.1 MPComm is deferred: no consumer; provider unavailable |
+| P8 | Additional CPU/NVIDIA-compatible network providers | P1/P2; relevant P4–P6 | P8.2 libfabric removed and excluded: NVIDIA platforms only; AWS EFA is a non-goal. P8.1 MPComm is deferred: no consumer; provider unavailable |
 | P9 | Rust/Python APIs and operations | P0/P2/P6 | OrbiTE configuration and Python CPU/TCP qualified on Linux CI; S19/S20/S22 removed and out of scope |
 | P10 | Cross-backend fault and lifetime acceptance | Relevant P3–P9 deliveries | CPU fixture matrix implemented; installed acceptance remains open |
 | P11 | Consumer integration, matched performance and release | Accepted P2–P10 profiles | Scoped CPU comparisons implemented; consumer/hardware release gates remain open |
@@ -82,16 +81,20 @@ required profiles and evidence for each milestone.
 Follow the maintainer's 2026-11-09 order, one PR at a time, stopping for review
 after each:
 
-1. **NIXL design alignment.** Update the [backend proposal](nixl-backend.md)
-   against the existing upstream cancellation, lifetime and TENT-mode work.
+1. **NIXL design alignment — done.** The [backend proposal](nixl-backend.md)
+   follows the upstream cancellation, lifetime and TENT-mode discussions.
    No upstream posts, comments, forks or PRs; the maintainer handles them.
-2. **Remove libfabric (FABRIC).** Wait for the separate implementation brief.
+2. **Remove libfabric (FABRIC).** Excluded by design: NVIDIA platforms only;
+   AWS EFA is a non-goal. Remove its owner, public surface and gates, preserving
+   CUDA fabric handles, MNNVL and EGM.
 3. **dma-buf GPUDirect RDMA registration.** Wait for its separate brief;
    installed GPU/RDMA evidence remains required.
-4. **Small-WRITE caller CQ wait.** Measure and remove the remaining worker
+4. **Local-copy kernel SM budget and intent-aware Auto.** Wait for its
+   separate brief; do not change local-copy scheduling in the removal PR.
+5. **Small-WRITE caller CQ wait.** Measure and remove the remaining worker
    handoff only with a bounded completion/drain proof. Keep all retention,
    cancellation, partial-submit and exact-prefix controls.
-5. **NIXL plugin implementation.** Requires the upstream explicit-cancel API
+6. **NIXL plugin implementation.** Requires the upstream explicit-cancel API
    and the outcome of #1958, plus the hardware batch before the formal backend
    RFC: installed GPU/RDMA results for the current artifact and `nixlbench`
    UCX/Mooncake baselines. The maintainer must approve posting the RFC and
@@ -377,18 +380,17 @@ ext4/tmpfs evidence and the queued GPU/NVMe and native GDS commands.
 
 ## P8 — Additional network providers
 
-These optional providers are separate deliveries. Non-NVIDIA accelerators,
-UB/URMA and dependent transports are excluded; their ABI constants return
-unavailable instead of instantiating stubs.
+Neither additional provider is in the current scope. Non-NVIDIA accelerators,
+UB/URMA and dependent transports are excluded without public identities.
 
 | Substage | Required implementation | Parity IDs | Hardware acceptance |
 | --- | --- | --- | --- |
 | P8.1 | Deferred: no consumer; provider unavailable. No public identity or provider | B15 | No verification gate; revisit with a consumer, provider and hardware |
-| P8.2 | Implemented: libfabric attributes, bounded exact-range registration, domain progress and host READ/WRITE | B17 | Software `tcp;ofi_rxm` exercised in Linux CI; EFA installed gate written but unrun |
+| P8.2 | Removed and excluded by design: libfabric / FABRIC | B17 | NVIDIA platforms only; AWS EFA is a non-goal. Revisit only for a direct AWS consumer with GPU FI_HMEM from the start; see [scope](tent-parity.md#upstream-transport-inventory-and-selected-scope) |
 
-Exit per row: build without the provider, explicit unavailable result,
-fake-provider contract tests, then real installed bytes, permissions, faults,
-drain and peer retirement.
+Neither row has a current implementation gate. A future scope decision must
+establish a consumer, GPU memory support, bounded owners and physical drain
+before a provider is reintroduced.
 
 ## P9 — Rust and Python APIs
 
@@ -472,7 +474,7 @@ publish packages.
 | Version | Release gate |
 | --- | --- |
 | `0.1.0-alpha.N` | Maintainer-published milestones during early development; APIs remain unstable. The current release is `0.1.0-alpha.1`, published from main [`7cc48490`](https://github.com/OrbitInfra/OrbiTE/commit/7cc48490). |
-| `0.1.0-beta.1` | S21, S24 and S26 and per-peer retirement are complete; S25 is deferred. The [Rust](rust-api.md#beta1-freeze-candidate) and [Python](python.md#surface-and-defaults) APIs are the freeze candidate; the [freeze decisions](rust-api.md#freeze-decisions) settle extensibility, names and hidden binding/core boundaries. TCP, HP-TCP, SHM, io_uring, configuration and Python CPU/TCP are qualified in their stated Linux CI profiles. Publication requires review of the prepared version, notes and packaging gates. Current GPU, RDMA, GDS, MNNVL/EGM, EFA, CXL and physical fabric profiles remain explicitly unqualified. |
+| `0.1.0-beta.1` | S21, S26 and per-peer retirement are complete; S24 is removed and out of scope, and S25 is deferred. The [Rust](rust-api.md#beta1-freeze-candidate) and [Python](python.md#surface-and-defaults) APIs are the freeze candidate; the [freeze decisions](rust-api.md#freeze-decisions) settle extensibility, names and hidden binding/core boundaries. TCP, HP-TCP, SHM, io_uring, configuration and Python CPU/TCP are qualified in their stated Linux CI profiles. Publication requires review of the prepared version, notes and packaging gates. Current GPU, RDMA, GDS, MNNVL/EGM, CXL and physical fabric profiles remain explicitly unqualified. |
 | Test consolidation (after the beta.1 API freeze) | Audit `tests/unit` (about 72k lines) for repeated assertions of the same invariant through the same owner, often added by different steps; merge them into table-driven tests. Preserve every negative control and distinct failure path: timeout, cancel, partial submit, `Unquiesced`, stale epoch and each deliberate TENT difference. CPU shims and `tests/hardware` gates are out of scope. Report source/test line deltas and invariant counts before/after; the invariant count must be unchanged. Tests-only refactor: no production change and no coverage drop. |
 | API documentation closure (before `0.1.0`) | Close remaining public missing-docs findings across every feature set, then make the CI rustdoc audit enforce `-D missing-docs` on stable and Rust 1.85. Documentation additions are non-breaking and do not block beta.1. |
 | `0.1.0` | Installed hardware verification passes for the OrbitKV-critical profiles below. The [P10 fault matrix](#p10--fault-and-physical-lifetime-acceptance) must pass on those profiles, and [P11 performance comparisons](#p11--consumers-performance-and-release) must be matched against frozen TENT. |
@@ -500,7 +502,6 @@ and artifact requirements for the stable release; they are not duplicated here.
 | P10 faults and P11 matched performance | {ref}`Release verification entry <queue-release>` |
 
 `0.1.0` may also ship [MNNVL/EGM](qualification.md#multi-node-nvlink-fabric),
-[EFA](qualification.md#verification-queue),
 {ref}`CXL <queue-shm-cxl>` and
 physical multi-rail ({ref}`RDMA <queue-rdma-rails>` and
 {ref}`HP-TCP <queue-physical-rails>`) as **experimental

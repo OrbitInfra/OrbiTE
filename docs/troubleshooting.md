@@ -30,7 +30,7 @@ pin. `device_mask` uses topology NIC IDs, including inert slots after failed
 construction. Host Direct registration itself initializes contexts; inspect
 `TransferEngine::topology()` after registration or first RDMA use.
 
-Matching GID families or NIC names does not prove that two fabric ports can
+Matching GID families or NIC names does not prove that two RDMA ports can
 connect. The current implementation does not replay a failed transfer through
 another rail.
 

@@ -3,6 +3,26 @@ use super::*;
 use crate::test_support::EVENTUAL_PROGRESS;
 
 #[test]
+fn transport_identities_preserve_the_removed_variant_gap() {
+    for (transport, discriminant, wire) in [
+        (Transport::Tcp, 0, 7),
+        (Transport::HpTcp, 1, 13),
+        (Transport::Shm, 2, 3),
+        (Transport::Rdma, 3, 1),
+        (Transport::Nvlink, 5, 4),
+        (Transport::Mnnvl, 6, 2),
+        (Transport::IoUring, 7, 6),
+        (Transport::Gds, 8, 5),
+        (Transport::Unspec, 9, 0),
+    ] {
+        assert_eq!(transport as u8, discriminant);
+        assert_eq!(transport.wire_id(), wire);
+        assert_eq!(Transport::from_wire_id(wire), Some(transport));
+    }
+    assert_eq!(Transport::from_wire_id(16), None);
+}
+
+#[test]
 fn source_close_is_permanent_and_timeout_is_not_a_drain_receipt() {
     let engine = TransferEngine::new(EngineConfig::default()).unwrap();
     let permit = engine.source.admit().unwrap();
@@ -197,8 +217,6 @@ pub(crate) fn rdma_fixture_with_config(
         .enable
         .then(|| config.hp_tcp.bind(config.bind_addr).unwrap());
     let source = Arc::new(Source {
-        #[cfg(feature = "fabric")]
-        fabric: None,
         #[cfg(target_os = "linux")]
         shm: config.shm.enable.then(|| {
             crate::transport::shm::ShmTransport::new(
@@ -1192,8 +1210,6 @@ pub(crate) fn staging_fixture(
     config.validate().unwrap();
     let epoch = SourceEpoch::generate().unwrap();
     let source = Arc::new(Source {
-        #[cfg(feature = "fabric")]
-        fabric: None,
         #[cfg(target_os = "linux")]
         shm: None,
         metadata: SegmentMetadata {

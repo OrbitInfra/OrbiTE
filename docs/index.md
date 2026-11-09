@@ -67,7 +67,6 @@ capabilities
 
 cpu-tcp
 hp-tcp
-fabric
 shm
 storage
 transport-selection

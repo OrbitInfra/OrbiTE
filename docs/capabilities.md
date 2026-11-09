@@ -14,7 +14,7 @@ is preparing `0.1.0-beta.1`, which is not published by this change; see
 
 [Qualification](qualification.md) records the exact artifacts, cases and limits
 behind each CI and hardware result. Historical hardware acceptance below applies
-only to its recorded artifact; every current beta GPU/RDMA/GDS/MNNVL/EFA/CXL
+only to its recorded artifact; every current beta GPU/RDMA/GDS/MNNVL/CXL
 profile remains unqualified. The [v0.3.14 delta](tent-parity.md#v0314-delta)
 records the source alignment. The [design-reference map](tent-parity.md) identifies the corresponding owners.
 
@@ -36,7 +36,6 @@ records the source alignment. The [design-reference map](tent-parity.md) identif
 | [HP-TCP](hp-tcp.md) | Qualified on Linux loopback | Least-loaded single-operation lanes and striped READs on multiple loopback IPv4 rails. Physical rail gate unrun |
 | [SHM](shm.md) | Qualified on same-host Linux CI | Guarded two-process READ/WRITE over `/dev/shm`. The file-backed path is tested on tmpfs. Physical CXL is unqualified |
 | [MNNVL / EGM](cuda-ipc.md#multi-node-nvlink-and-egm) | Implemented; installed profile unqualified | CUDA VMM fabric handles, GPU and host-NUMA exports, bounded imports and checked close. The multi-node device and EGM gates are unrun |
-| [Libfabric host DRAM](fabric.md) | Implemented (P8.2); software TCP provider tested in Linux CI | Runtime-loaded opt-in provider, bounded RMA grants and sticky native retention. EFA is implemented; installed profile unqualified |
 | MPComm | Deferred (P8.1) | No consumer; provider unavailable |
 
 ## Memory and batches

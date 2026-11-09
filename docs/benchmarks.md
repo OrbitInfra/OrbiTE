@@ -74,7 +74,7 @@ python3 benches/run.py --reference "$OUT/reference" --output "$OUT/sweep" \
 
 Both output directories must be fresh and outside the checkout. The
 `Frozen TENT CPU comparison` CI workflow runs this on stable and Rust 1.85 and
-uploads `cpu-bench-*` artifacts. GPU, RDMA, GDS and EFA are emitted as
+uploads `cpu-bench-*` artifacts. GPU, RDMA and GDS are emitted as
 **not run (hardware)**, without estimated numbers. The scoped summary lives in
 [qualification](qualification.md#cpu-benchmark-evidence).
 
@@ -672,16 +672,15 @@ unchanged.
 
 The matrix covers peer death, timeout, cancellation, partial submission,
 unregister/close during work, and restart authority. It distinguishes native
-provider failures from injected completion faults. Fabric uses the real
-`tcp;ofi_rxm` provider; its held/error CQ controls wrap that provider. io_uring
-uses real files/rings. A missing kernel/provider fails, never silently skips.
+socket failures from injected completion faults. io_uring uses real files/rings.
+A missing required kernel facility fails, never silently skips.
 SHM's synchronous memcpy has no native cancel or partial-post queue; queued
 cancellation belongs to the common batch owner. Local files have no peer epoch:
 path replacement is tested against the admitted inode. Those dispositions are
 explicit, not counted as passes.
 
 ```bash
-cargo test --locked --features io-uring,fabric --lib --no-run --message-format=json > "$OUT/build.json"
+cargo test --locked --features io-uring --lib --no-run --message-format=json > "$OUT/build.json"
 # BINARY is the compiler-artifact executable in build.json.
 ORBITE_EXT4_DIR="$EXT4_DIR" ORBITE_TMPFS_DIR=/dev/shm \
   python3 tests/faults/run.py --binary "$BINARY" --output "$OUT/faults" --kill-repeats 50

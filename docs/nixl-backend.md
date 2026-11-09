@@ -15,9 +15,10 @@ contract reviewed here. Recheck that pin before implementation. OrbiTE's
 design/oracle baseline remains Mooncake TENT v0.3.14; NIXL is neither a new
 runtime dependency of the Rust crate nor a replacement for that baseline.
 
-The [work order](completion-plan.md#current-focus) puts design alignment,
-libfabric removal, dma-buf GPUDirect registration and the small-WRITE caller
-wait before plugin implementation. The upstream explicit-cancel API, the
+The [work order](completion-plan.md#current-focus) puts FABRIC removal,
+dma-buf GPUDirect registration, local-copy SM budgeting and intent-aware Auto,
+and the small-WRITE caller wait before plugin implementation. Design alignment
+is complete. The upstream explicit-cancel API, the
 outcome of the existing lifetime discussion and the hardware batch below are
 prerequisites. The maintainer must approve the formal backend RFC. Nothing in
 this document authorizes posting, commenting, forking, publishing or opening
@@ -80,7 +81,7 @@ owner-derived capabilities still select the route; no adapter fallback is added.
 
 | NIXL memory or pair | Existing OrbiTE path and restriction |
 | --- | --- |
-| `DRAM_SEG` | Retained `HostMemory` and registry ranges. TCP; opt-in SHM for actual shared mappings on the same boot identity; RDMA when installed. HP-TCP and fabric remain eligible only through their existing configured policies. |
+| `DRAM_SEG` | Retained `HostMemory` and registry ranges. TCP; opt-in SHM for actual shared mappings on the same boot identity; RDMA when installed. HP-TCP remains eligible only through their existing configured policies. |
 | `VRAM_SEG` | Driver-validated `CudaMemory`, allocation/context lease and range loans. RDMA GPU Direct or staging; TCP through staging; NVLink for eligible same-host IPC allocations; MNNVL only for fabric-exportable backing and an explicit fabric capability. Neither IP addresses nor a device ordinal prove reachability. |
 | DRAM ↔ VRAM | The existing staged TCP/RDMA or eligible CUDA/pinned-memory owners. Ordinary pageable DRAM is not silently relabeled pinned memory or CUDA IPC backing. |
 | `FILE_SEG` ↔ DRAM/VRAM | Local `segment::file::Entry`, io_uring and CUDA staging, or eligible GDS. Native GDS alignment, strict explicit hints, completed-prefix results and fallback selection retain their current meaning. No remote file service. |
@@ -323,7 +324,7 @@ budgets. Do not add an uncharged C++ pending-request list.
 Install `liborbite_nixl.so`, its generated header and `orbite-nixl.pc`.
 Meson discovers that dependency and builds the in-tree plugin using NIXL's
 C++20/STL-only plugin interface. No Mooncake library or Python interpreter is
-linked. Native CUDA/RDMA/GDS/fabric dependencies retain their current opt-in
+linked. Native CUDA/RDMA/GDS dependencies retain their current opt-in
 loading rules. NIXL's plugin API version (currently 3), the bridge ABI version
 and OrbiTE's wire policy are separate checks. Reject an ABI-major/layout
 mismatch before engine construction. Additive records negotiate size/features;

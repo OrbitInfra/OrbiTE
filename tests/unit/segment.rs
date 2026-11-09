@@ -99,3 +99,15 @@ fn direct_gpu_describe_requires_an_installed_rdma_source() {
         Err(Error::Protocol(_))
     ));
 }
+
+#[test]
+fn retired_capability_byte_is_reserved_and_rejected() {
+    let mut bytes = [0; SegmentMetadata::WIRE_SIZE];
+    SegmentMetadata::default().encode(&mut bytes);
+    assert!(SegmentMetadata::decode(&bytes).is_ok());
+    bytes[1] = 1;
+    assert!(matches!(
+        SegmentMetadata::decode(&bytes),
+        Err(Error::Protocol(_))
+    ));
+}

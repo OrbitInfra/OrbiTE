@@ -110,6 +110,44 @@ fn request_fixture_and_decoder_reject_protocol_drift() {
 }
 
 #[test]
+fn retired_operations_reject_before_source_admission() {
+    let source = TransferEngine::new(EngineConfig::default()).unwrap();
+    let memory = source
+        .register_memory(
+            vec![0x5a; 8].into_boxed_slice(),
+            Permission::RemoteReadWrite,
+        )
+        .unwrap();
+    for operation in [23, 24] {
+        let mut bytes = Request {
+            operation: Operation::TcpWrite,
+            epoch: source.source_epoch(),
+            region: memory.id(),
+            offset: 0,
+            length: 8,
+        }
+        .encode();
+        bytes[10] = operation;
+        assert!(matches!(
+            Request::decode(&bytes),
+            Err(Error::Protocol("reserved operation"))
+        ));
+        let mut channel =
+            ControlChannel::connect(source.endpoint(), deadline(TIMEOUT).unwrap()).unwrap();
+        channel.write_all(&bytes).unwrap();
+        assert!(matches!(
+            Reply::read(&mut channel, source.source_epoch()),
+            Err(Error::Protocol(_))
+        ));
+        assert_eq!(source.stats().unwrap().active_source_operations, 0);
+        let mut actual = [0; 8];
+        memory.read(0, &mut actual).unwrap();
+        assert_eq!(actual, [0x5a; 8]);
+    }
+    source.close(TIMEOUT).unwrap();
+}
+
+#[test]
 fn source_rejects_a_legacy_header_and_accepts_a_same_build_peer() {
     let source = TransferEngine::new(EngineConfig::default()).unwrap();
     let memory = source

@@ -72,9 +72,6 @@ pub struct EngineConfig {
     /// Enable ordinary TCP payloads. The control service is independent.
     pub tcp: bool,
     pub hp_tcp: crate::HpTcpConfig,
-    /// Explicit libfabric host transport. None does not load a provider.
-    #[cfg(feature = "fabric")]
-    pub fabric: Option<crate::FabricConfig>,
     #[cfg(feature = "io-uring")]
     pub io_uring: crate::IoUringConfig,
     #[cfg(feature = "io-uring")]
@@ -211,8 +208,6 @@ impl EngineConfig {
             #[cfg(feature = "io-uring")]
             io_uring: Default::default(),
             hp_tcp: Default::default(),
-            #[cfg(feature = "fabric")]
-            fabric: None,
             shm: Default::default(),
             #[cfg(feature = "metrics")]
             metrics: Default::default(),
@@ -288,10 +283,6 @@ impl EngineConfig {
     }
 
     pub(crate) fn validate(&self) -> Result<()> {
-        #[cfg(feature = "fabric")]
-        if let Some(fabric) = &self.fabric {
-            fabric.validate()?;
-        }
         #[cfg(feature = "io-uring")]
         self.io_uring.slot_size()?;
         #[cfg(feature = "metrics")]

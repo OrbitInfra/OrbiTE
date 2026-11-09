@@ -170,9 +170,9 @@ operation or status and one zero reserved byte.
 | Descriptor payload | Region count (4), segment capabilities (44, including the eight-byte maximum transfer length), then records ordered by registration ID. Each contains ID (8), base address (8), length (8), permission bits (1), memory type (1), IPC export consent (1), HP-TCP registration flag (1) and MNNVL export location (4) |
 
 The [selector guide](transport-selection.md#protocol-and-qualification) describes
-the capability fields; each transfer still needs a grant. Segment capability
-byte 1 bit 0 advertises configured libfabric. Its epoch-scoped RMA grant and
-completion receipt are defined in the [libfabric layout](fabric.md#native-control-layout).
+the capability fields; each transfer still needs a grant. The retired provider
+capability byte is reserved and must be zero; old provider requests are rejected
+before admission. See the [wire policy](tent-parity.md#wire-and-consumer-boundaries).
 
 Segment capability bit 7 requires the RDMA capability and identifies a source
 whose immutable RDMA policy directly registers published GPU ranges. Classic

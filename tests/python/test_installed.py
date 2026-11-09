@@ -147,7 +147,11 @@ class Contract(unittest.TestCase):
             self.assertTrue(hasattr(te, name), name)
         for name in ("TentException", "Request", "TransferStatusEnum", "TransportType", "kWildcardLocation", "LOCAL_SEGMENT_ID", "UB", "MPCOMM"):
             self.assertFalse(hasattr(te, name), name)
-        self.assertEqual(set(te.Transport.__members__), {"UNSPEC", "TCP", "HP_TCP", "SHM", "RDMA", "FABRIC", "NVLINK", "MNNVL", "IO_URING", "GDS"})
+        self.assertEqual({name: value.value for name, value in te.Transport.__members__.items()},
+                         {"UNSPEC": 0, "TCP": 1, "HP_TCP": 2, "SHM": 3, "RDMA": 4,
+                          "NVLINK": 6, "MNNVL": 7, "IO_URING": 8, "GDS": 9})
+        with self.assertRaises(ValueError):
+            te.Transport(5)
         self.assertEqual(asdict(te.TransferRequest(10, 20, 4)), dict(local_address=10,remote_address=20,length=4,transport=te.Transport.UNSPEC,priority=te.Priority.HIGH,policy_name=None,deadline_ns=0,intent=te.IntentType.UNSPEC))
         self.assertEqual(te.MemoryOptions().permission, te.Permission.REMOTE_READ_WRITE)
         with self.assertRaises(AttributeError):
@@ -285,8 +289,8 @@ engine.close()
             engine.register_memory(1, 8)
         with self.assertRaises(te.InvalidRangeError):
             engine.register_memory_ranges([(1, 8)], owners=[])
-        with self.assertRaises(te.UnavailableError):
-            engine.allocate_memory(8, te.MemoryOptions(transport=te.Transport.FABRIC))
+        with self.assertRaises(te.InvalidRangeError):
+            engine.allocate_memory(8, te.MemoryOptions(transport=5))
         with self.assertRaises((te.InvalidRangeError, BufferError, TypeError)):
             engine.register_buffer(b"immutable")
         view = bytearray(32)

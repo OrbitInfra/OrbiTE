@@ -3,6 +3,18 @@ use crate::{Permission, TransferEngine};
 use serde_json::json;
 
 #[test]
+fn removed_transport_configuration_and_policy_are_rejected() {
+    for text in [r#"{"fabric":{}}"#, r#"{"transports":{"fabric":{}}}"#] {
+        let error = EngineConfig::from_json(text).unwrap_err();
+        assert!(matches!(error, Error::Config { .. }));
+        assert!(error.to_string().contains("fabric"));
+    }
+    assert!(
+        EngineConfig::from_json(r#"{"selector":{"policy":[{"transports":["fabric"]}]}}"#).is_err()
+    );
+}
+
+#[test]
 fn strict_document_rejects_compatibility_keys_unknowns_duplicates_and_wrong_types() {
     for text in [
         "[]",
@@ -204,21 +216,6 @@ fn native_settings_are_typed_and_topology_file_is_captured() {
 
 #[test]
 fn provider_settings_reach_the_typed_snapshot_without_loading_native_libraries() {
-    #[cfg(feature = "fabric")]
-    {
-        let c = EngineConfig::from_json(r#"{"fabric":{"provider":"tcp","slice_size":65536,"max_pending_ops":64,"max_peer_addresses":4,"max_domains":2}}"#).unwrap();
-        let f = c.fabric.unwrap();
-        assert_eq!(f.provider, crate::FabricProvider::Tcp);
-        assert_eq!(
-            (
-                f.slice_size,
-                f.max_pending_ops,
-                f.max_peer_addresses,
-                f.max_domains
-            ),
-            (65536, 64, 4, 2)
-        );
-    }
     #[cfg(feature = "metrics")]
     {
         let c = EngineConfig::from_json(r#"{"metrics":{"enabled":false,"http_host":"127.0.0.1","http_port":9123,"http_server_threads":1,"report_interval_seconds":0}}"#).unwrap();

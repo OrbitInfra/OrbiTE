@@ -31,8 +31,6 @@ io-uring = ["dep:io-uring"]
 gds = ["cuda"]
 metrics = []
 rdma-adaptive = ["rdma"]
-# Headers compile only the inline-vtable bridge; libfabric is loaded at runtime.
-fabric = ["dep:cc", "dep:bindgen", "dep:libloading"]
 
 [lints.clippy]
 undocumented_unsafe_blocks = "deny"
@@ -145,11 +143,6 @@ required-features = ["cuda"]
 [[example]]
 name = "peer_gpu_requester"
 path = "tests/hardware/peer_gpu_requester.rs"
-
-[[example]]
-name = "fabric"
-path = "tests/hardware/fabric.rs"
-required-features = ["fabric"]
 
 [[bench]]
 name = "transfer"

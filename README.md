@@ -54,6 +54,9 @@ Non-goals:
 
 ## Updates
 
+- **Nov 9, 2026**: The host-only FABRIC transport is removed. NVIDIA network
+  paths remain RDMA, NVLink and MNNVL; see the [transport scope](docs/tent-parity.md#upstream-transport-inventory-and-selected-scope).
+
 - **Nov 8, 2026**: TCP reuses bounded connections keyed by peer epoch and waits
   on socket readiness. The CPU performance pass records matched results and
   remaining regressions. [Benchmarks](docs/benchmarks.md#paired-results-and-regressions)
@@ -65,8 +68,6 @@ Non-goals:
 - **Nov 7, 2026**: Byte-checked CPU size/batch sweeps compare against frozen
   TENT, with an executable CPU fault matrix and explicit hardware gaps.
   [Method and limits](docs/benchmarks.md)
-- **Nov 7, 2026**: The opt-in libfabric host path moves real bytes through the
-  software TCP provider in Linux CI. EFA remains unqualified. [Libfabric](docs/fabric.md)
 - **Nov 3, 2026**: Local file segments support DRAM transfers through io_uring,
   CUDA staging through pinned DRAM, and GDS through cuFile. The DRAM path is
   qualified on ext4 and tmpfs in CI. [Local storage](docs/storage.md)
@@ -109,7 +110,6 @@ Non-goals:
 | [HP-TCP](docs/hp-tcp.md) | DRAM over persistent IPv4 lanes | Qualified on Linux loopback. Physical rails unqualified |
 | [SHM](docs/shm.md) | Same-host DRAM over POSIX SHM | Qualified on Linux CI. Physical CXL unqualified |
 | [MNNVL / EGM](docs/cuda-ipc.md#multi-node-nvlink-and-egm) | GPU and host-NUMA memory over an NVLink fabric | Implemented. Installed profile unqualified |
-| libfabric | Host DRAM RMA, opt-in software TCP/EFA profiles | Implemented; EFA installed profile unqualified |
 | MPComm | Optional network provider | Deferred: no consumer; provider unavailable |
 
 Rust is the primary API; the [Python API](docs/python.md) mirrors OrbiTE's owned P2P operations. See the [wire and consumer boundary](docs/tent-parity.md#wire-and-consumer-boundaries).
