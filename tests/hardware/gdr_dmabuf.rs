@@ -173,6 +173,7 @@ fn main() -> Result<()> {
     r.cuda_memory = RdmaCudaMemory::Direct;
     r.gpu_direct_registration = policy;
     r.max_direct_bytes = 256 << 20;
+    r.max_cached_mr_bytes = 256 << 20;
     let mut c = EngineConfig::default();
     c.rdma = Some(r);
     c.tcp = false;
