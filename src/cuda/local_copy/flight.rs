@@ -46,6 +46,8 @@ pub(super) struct Pool {
     config: LocalCopyConfig,
     pitch: usize,
     kernel: Option<kernel::Kernel>,
+    policy: policy::Policy,
+    classes: [LocalCopyClassStats; policy::CLASSES],
     descriptor_bytes: usize,
     slots: Vec<Option<Flight>>,
     closed: bool,
@@ -59,7 +61,7 @@ impl Pool {
         config: LocalCopyConfig,
         pitch: usize,
         kernel: Option<kernel::Kernel>,
-        reserve: usize,
+        policy: policy::Policy,
     ) -> Self {
         Self {
             ctx,
@@ -68,8 +70,14 @@ impl Pool {
             stream_owner,
             config,
             pitch,
-            descriptor_bytes: if kernel.is_some() { reserve } else { 0 },
+            descriptor_bytes: if kernel.is_some() {
+                config.max_descriptors * config.max_inflight * 48
+            } else {
+                0
+            },
             kernel,
+            policy,
+            classes: policy::counters(),
             slots: (0..config.max_inflight).map(|_| None).collect(),
             closed: false,
             close_error: None,
@@ -78,6 +86,12 @@ impl Pool {
     pub fn stats(&self) -> LocalCopyStats {
         let mut s = LocalCopyStats {
             descriptor_bytes: self.descriptor_bytes,
+            classes: self
+                .classes
+                .iter()
+                .filter(|c| c.dma_submissions != 0 || c.kernel_submissions != 0)
+                .copied()
+                .collect(),
             ..Default::default()
         };
         for f in self.slots.iter().flatten() {
@@ -150,21 +164,10 @@ impl Pool {
         &self,
         plan: &plan::Plan,
         dir: CopyDirection,
-    ) -> Result<(Dispatch, LocalCopyBackend)> {
-        let choose_kernel = !plan.rows.is_empty()
-            && match self.config.backend {
-                LocalCopyBackend::Kernel => true,
-                LocalCopyBackend::Auto => {
-                    plan.independent && plan.dma.len() >= self.config.kernel_threshold
-                }
-                LocalCopyBackend::Dma => false,
-            };
-        if choose_kernel {
-            if !plan.independent {
-                return Err(Error::InvalidConfig(
-                    "local copy kernel requires disjoint destinations",
-                ));
-            }
+        class: usize,
+    ) -> Result<(Dispatch, LocalCopyBackend, Option<LocalCopyFallback>)> {
+        let mut reason = self.policy.dma_reason(class, plan)?;
+        if reason.is_none() {
             if let Some(k) = &self.kernel {
                 match k.descriptors(plan, dir) {
                     Ok(triples) => {
@@ -174,12 +177,16 @@ impl Pool {
                                 plan.rows.iter().map(|r| r.width).max().unwrap_or(0),
                             ),
                             LocalCopyBackend::Kernel,
+                            None,
                         ));
                     }
                     Err(Error::Unavailable(_)) if self.config.backend == LocalCopyBackend::Auto => {
+                        reason = Some(LocalCopyFallback::MappingUnavailable);
                     }
                     Err(e) => return Err(e),
                 }
+            } else {
+                reason = Some(self.policy.kernel_unavailable);
             }
         }
         let batch = self
@@ -198,6 +205,11 @@ impl Pool {
         Ok((
             Dispatch::Dma(dma::commands(&plan.dma, dir, batch)),
             LocalCopyBackend::Dma,
+            if self.config.backend != LocalCopyBackend::Auto {
+                None
+            } else {
+                reason
+            },
         ))
     }
 
@@ -205,7 +217,7 @@ impl Pool {
         &mut self,
         dir: CopyDirection,
         descs: &[LocalCopyDesc],
-        ready: Option<&ProducerEvent>,
+        options: LocalCopyOptions,
     ) -> Result<(usize, Arc<Signal>, LocalCopyBackend)> {
         if self.closed {
             return Err(Error::Unavailable("local CUDA copy admission closed"));
@@ -223,24 +235,25 @@ impl Pool {
             .ok_or(Error::ResourceExhausted)?;
         let ctx = self.ctx.clone();
         let stream = self.stream as sys::CUstream;
-        if ready.is_some() && ctx.driver.local.wait_event.is_none() {
+        if options.ready.is_some() && ctx.driver.local.wait_event.is_none() {
             return Err(Error::Unavailable("cuStreamWaitEvent"));
         }
         let plan = plan::Plan::new(&ctx, descs, dir, self.pitch, self.config.max_descriptors)?;
-        let usage = self.stats();
-        if plan.bytes > self.config.max_bytes - usage.descriptor_bytes - usage.payload_bytes {
+        let payload_bytes: usize = self.slots.iter().flatten().map(|f| f.plan.bytes).sum();
+        if plan.bytes > self.config.max_bytes - self.descriptor_bytes - payload_bytes {
             return Err(Error::ResourceExhausted);
         }
-        let (dispatch, backend) = ctx.current(|| {
+        let class = policy::class(dir, &options);
+        let (dispatch, backend, reason) = ctx.current(|| {
             check_capture(&ctx, stream)?;
-            self.dispatch(&plan, dir)
+            self.dispatch(&plan, dir, class)
         })?;
         let signal = Arc::new(Signal(Mutex::new(None)));
         // Install the actual owners before the first possibly accepted operation.
         let f = self.slots[i].insert(Flight {
             plan,
             dispatch,
-            ready: ready.cloned(),
+            ready: options.ready,
             event: 0,
             recorded: false,
             producers_waited: false,
@@ -248,6 +261,16 @@ impl Pool {
             error: None,
             signal: signal.clone(),
         });
+        let counters = &mut self.classes[class];
+        counters.last_backend = backend;
+        counters.last_fallback = reason;
+        counters.last_kernel_ctas = 0;
+        let count = if backend == LocalCopyBackend::Kernel {
+            &mut counters.kernel_submissions
+        } else {
+            &mut counters.dma_submissions
+        };
+        *count = count.saturating_add(1);
         let submitted = ctx.current(|| {
             let mut event = std::ptr::null_mut();
             // SAFETY: private output and a timing-disabled event on the retained context.
@@ -280,14 +303,23 @@ impl Pool {
                     })?;
                 }
                 match &mut f.dispatch {
-                    Dispatch::Dma(ops) => ops
-                        .iter_mut()
-                        .try_for_each(|op| op.enqueue(&ctx, dir, stream)),
-                    Dispatch::Kernel(triples, width) => self
-                        .kernel
-                        .as_ref()
-                        .ok_or(Error::Internal("missing local kernel"))?
-                        .enqueue(i, triples, *width, stream),
+                    Dispatch::Dma(ops) => ops.iter_mut().try_for_each(|op| {
+                        op.enqueue(&ctx, dir, stream)?;
+                        if matches!(op, dma::Command::Batch { .. }) {
+                            counters.dma_batch_calls = counters.dma_batch_calls.saturating_add(1);
+                        }
+                        Ok(())
+                    }),
+                    Dispatch::Kernel(triples, width) => {
+                        let grid = self
+                            .kernel
+                            .as_ref()
+                            .ok_or(Error::Internal("missing local kernel"))?
+                            .enqueue(i, triples, *width, stream)?;
+                        counters.last_kernel_ctas = grid;
+                        counters.kernel_ctas = counters.kernel_ctas.saturating_add(u64::from(grid));
+                        Ok(())
+                    }
                 }
             })();
             f.error = attempt.err();

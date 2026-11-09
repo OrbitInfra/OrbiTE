@@ -9,6 +9,7 @@ pub(super) struct Kernel {
     module: usize,
     function: usize,
     cta_budget: usize,
+    cta_limit: usize,
     slots: Vec<Scratch>,
     closed: bool,
 }
@@ -31,6 +32,7 @@ impl Kernel {
             module: 0,
             function: 0,
             cta_budget: 0,
+            cta_limit: config.kernel_cta_limit.map_or(65535, |n| n.get() as usize),
             slots: Vec::with_capacity(config.max_inflight),
             closed: false,
         };
@@ -41,6 +43,9 @@ impl Kernel {
                 sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT,
             )?
             .saturating_mul(4);
+            if let Some(limit) = config.kernel_cta_limit {
+                k.cta_budget = k.cta_budget.min(limit.get() as usize);
+            }
             let mut module = std::ptr::null_mut();
             // SAFETY: the embedded PTX is NUL terminated; the module belongs to this exact context.
             let status = unsafe { (api.load)(&mut module, PTX.as_ptr().cast()) };
@@ -178,13 +183,13 @@ impl Kernel {
         triples: &[u64],
         max_bytes: usize,
         stream: sys::CUstream,
-    ) -> Result<()> {
+    ) -> Result<u32> {
         let slot = &self.slots[index];
         let n = triples.len() / 3;
         let ctas = (self.cta_budget / n)
             .clamp(1, 16)
             .min(max_bytes.div_ceil(65536).clamp(1, 16));
-        let grid = (n * ctas).min(65535) as u32;
+        let grid = (n * ctas).min(self.cta_limit).min(65535) as u32;
         // SAFETY: the slot is exclusively reserved for this generation and sized
         // for max_descriptors triples. The pinned upload source remains live through the event.
         unsafe {
@@ -223,7 +228,8 @@ impl Kernel {
                 args.as_mut_ptr(),
                 std::ptr::null_mut(),
             )
-        })
+        })?;
+        Ok(grid)
     }
     pub fn close(&mut self) -> Result<()> {
         if self.closed {

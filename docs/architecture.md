@@ -35,6 +35,8 @@ Architectural alignment alone establishes no behavior or performance result. See
 
 OrbiTE is a transfer engine for LLM inference on NVIDIA.
 
+Non-goals:
+
 - Cluster discovery and metadata, which belong to the consumer.
 - Collectives.
 - Non-NVIDIA accelerators.
@@ -692,6 +694,18 @@ restoration. Separate pinned and device descriptor slots let outstanding kernel
 launches retain their own upload. `pending_events_own_distinct_kernel_slots_payloads_and_abandoned_work`
 and `query_destroy_record_or_restore_failure_quarantines_once_and_keeps_owners`
 exercise those boundaries. [Caller-stream API](local-copy.md)
+
+The local-copy policy is compiled at bind from typed settings. Direction,
+intent and priority identify a bounded diagnostic class; priority stays
+advisory on the caller-owned stream. Background D2H has a separate higher
+Auto threshold. An optional total CTA cap restricts the unchanged
+grid-strided kernel without changing the event receipt or retaining fewer
+loans. `auto_selection_matrix_keeps_stream_order_and_reports_each_submission_class`
+and `capped_grids_cover_every_descriptor_vector_and_byte_tail_both_directions`
+cover this OrbiTE extension, including ordered overlap, missing images and
+grids smaller than the descriptor count. Invalid caps fail before descriptor
+allocation. Calibration remains an [unrun installed gate](qualification.md#caller-stream-local-cuda-copy);
+no SM isolation or decode-latency claim follows from a shim.
 
 | Owner | Responsibility |
 | --- | --- |

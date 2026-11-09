@@ -130,6 +130,8 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
             raise ValueError('packaged consumer differs from the qualified source')
         fixture_modules = library / 'tests/hardware/rdma_host'
         fixture_files = [fixture, *(sorted(fixture_modules.rglob('*.rs')) if consumer_kind == 'host' else [])]
+        if consumer_kind == 'local-copy':
+            fixture_files.extend(sorted((library / 'tests/hardware/local_copy').glob('*')))
         if consumer_kind == 'mixed-gpu':
             fixture_files.extend(library / 'tests/hardware' / name
                                  for name in ('mixed_gpu.py', 'run.py', 'supervise.py'))
@@ -214,6 +216,8 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
         consumer = output / 'consumer'
         (consumer / 'src').mkdir(parents=True)
         shutil.copy2(fixture, consumer / 'src/main.rs')
+        if consumer_kind == 'local-copy':
+            shutil.copytree(library / 'tests/hardware/local_copy', consumer / 'src/local_copy')
         if consumer_kind == 'host':
             shutil.copytree(fixture_modules, consumer / 'src/rdma_host')
         (consumer / 'Cargo.toml').write_text(

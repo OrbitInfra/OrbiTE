@@ -1,9 +1,10 @@
 //! Stream-ordered local copies between registered CUDA and pinned host ranges.
 use super::{Context, driver};
-use crate::{Error, RegisteredMemory, Result};
+use crate::{Error, IntentType, Priority, RegisteredMemory, Result};
 use cudarc::driver::sys;
 use driver::check;
 use std::ffi::c_void;
+use std::num::NonZeroU32;
 use std::ptr::NonNull;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
@@ -12,6 +13,7 @@ mod dma;
 mod flight;
 mod kernel;
 mod plan;
+mod policy;
 
 use flight::{Inner, Pool};
 
@@ -83,6 +85,12 @@ pub struct LocalCopyConfig {
     pub backend: LocalCopyBackend,
     /// Minimum number of DMA operations after contiguous and strided coalescing.
     pub kernel_threshold: usize,
+    /// Higher Auto threshold for background device-to-host copies, in compiled
+    /// DMA operations. `usize::MAX` keeps these copies on DMA pending calibration.
+    pub kernel_threshold_background: usize,
+    /// Maximum blocks in one kernel launch, not an SM reservation. `None` keeps
+    /// the existing device-derived budget. Checked against the device at bind.
+    pub kernel_cta_limit: Option<NonZeroU32>,
     /// Bounds input descriptors and expanded rows in one submission.
     pub max_descriptors: usize,
     pub max_inflight: usize,
@@ -94,11 +102,56 @@ impl Default for LocalCopyConfig {
         Self {
             backend: LocalCopyBackend::Auto,
             kernel_threshold: 128,
+            kernel_threshold_background: usize::MAX,
+            kernel_cta_limit: None,
             max_descriptors: 4096,
             max_inflight: 4,
             max_bytes: 256 << 20,
         }
     }
+}
+
+/// Per-submission scheduling metadata and an optional producer generation.
+/// Priority is advisory on a caller-owned stream: submissions are never reordered.
+#[derive(Clone, Default)]
+#[non_exhaustive]
+pub struct LocalCopyOptions {
+    pub intent: IntentType,
+    pub priority: Priority,
+    pub ready: Option<ProducerEvent>,
+}
+
+/// Why Auto used DMA instead of a mapped-memory kernel.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum LocalCopyFallback {
+    Threshold,
+    Intent,
+    Overlap,
+    ImageUnavailable,
+    MappingUnavailable,
+    DescriptorBudget,
+}
+
+/// Cumulative decisions for one direction, intent and priority. Failed preflight
+/// is not a submission. Counts include enqueues whose event is still pending.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[non_exhaustive]
+pub struct LocalCopyClassStats {
+    pub direction: CopyDirection,
+    pub intent: IntentType,
+    pub priority: Priority,
+    pub dma_submissions: u64,
+    /// Native batch-DMA enqueue calls that returned success.
+    /// Like kernel launches, these are not physical completion receipts.
+    pub dma_batch_calls: u64,
+    pub kernel_submissions: u64,
+    /// Sum of blocks from successful native kernel launches (not completed work).
+    pub kernel_ctas: u64,
+    /// Blocks launched by the latest submission; zero if none launched successfully.
+    pub last_kernel_ctas: u32,
+    pub last_backend: LocalCopyBackend,
+    pub last_fallback: Option<LocalCopyFallback>,
 }
 
 #[derive(Clone, Debug)]
@@ -168,13 +221,16 @@ pub struct LocalCopyEngine {
     inner: Arc<Inner>,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct LocalCopyStats {
     pub active: usize,
     pub retained: usize,
     pub payload_bytes: usize,
     pub descriptor_bytes: usize,
+    /// Only classes with a submitted decision, bounded by direction × intent × priority.
+    /// These counters survive retirement and close; inspecting them makes no CUDA calls.
+    pub classes: Vec<LocalCopyClassStats>,
 }
 
 impl LocalCopyEngine {
@@ -201,6 +257,11 @@ impl LocalCopyEngine {
                 "invalid local copy descriptor, slot, threshold or byte limit",
             ));
         }
+        if config.kernel_threshold_background <= config.kernel_threshold {
+            return Err(Error::InvalidConfig(
+                "kernel_threshold_background must exceed kernel_threshold",
+            ));
+        }
         let (gpu, _) = device.cuda_range(0, device.len())?;
         let ctx = gpu
             .allocation
@@ -221,6 +282,17 @@ impl LocalCopyEngine {
         }
         let pitch = ctx.current(|| {
             check_capture(&ctx, stream.cast())?;
+            if let Some(limit) = config.kernel_cta_limit {
+                let maximum = attribute(
+                    &ctx,
+                    sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_X,
+                )?;
+                if limit.get() as usize > maximum.min(65535) {
+                    return Err(Error::InvalidConfig(
+                        "local copy CTA limit exceeds launch grid limit",
+                    ));
+                }
+            }
             if ctx.driver.local.copy_2d.is_some() && ctx.driver.local.attribute.is_some() {
                 attribute(&ctx, sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MAX_PITCH)
             } else {
@@ -231,24 +303,25 @@ impl LocalCopyEngine {
         let want_kernel = config.backend == LocalCopyBackend::Kernel
             || (config.backend == LocalCopyBackend::Auto
                 && config.kernel_threshold <= config.max_descriptors);
-        let kernel = if !want_kernel {
-            None
+        let (kernel, kernel_unavailable) = if !want_kernel {
+            (None, LocalCopyFallback::Threshold)
         } else if reserve >= config.max_bytes {
             if config.backend == LocalCopyBackend::Kernel {
                 return Err(Error::ResourceExhausted);
             }
-            None
+            (None, LocalCopyFallback::DescriptorBudget)
         } else {
             match kernel::Kernel::install(&ctx, &config) {
-                Ok(k) => Some(k),
+                Ok(k) => (Some(k), LocalCopyFallback::ImageUnavailable),
                 Err(Error::Unavailable(reason)) if config.backend == LocalCopyBackend::Auto => {
                     log::debug!("local CUDA DMA selected: {reason}");
-                    None
+                    (None, LocalCopyFallback::ImageUnavailable)
                 }
                 Err(e) => return Err(e),
             }
         };
-        let pool = Pool::new(ctx, stream as usize, owner, config, pitch, kernel, reserve);
+        let policy = policy::Policy::new(config, kernel_unavailable);
+        let pool = Pool::new(ctx, stream as usize, owner, config, pitch, kernel, policy);
         Ok(Self {
             inner: Arc::new(Inner(Mutex::new(pool))),
         })
@@ -260,14 +333,14 @@ impl LocalCopyEngine {
         &self,
         direction: CopyDirection,
         descs: &[LocalCopyDesc],
-        ready: Option<&ProducerEvent>,
+        options: LocalCopyOptions,
     ) -> Result<LocalCopyCompletion> {
         let mut pool = self
             .inner
             .0
             .lock()
             .map_err(|_| Error::Internal("local copy pool lock"))?;
-        let (index, signal, backend) = pool.submit(direction, descs, ready)?;
+        let (index, signal, backend) = pool.submit(direction, descs, options)?;
         Ok(LocalCopyCompletion {
             inner: self.inner.clone(),
             index,

@@ -99,6 +99,7 @@ Ownership (the core contract of this codebase):
 
 Code:
 
+- Before 0.1.0, choose clean breaking APIs without aliases or compatibility shims; record each break in `docs/releases.md`.
 - Rust edition 2024, MSRV 1.85. Give shared dependencies semver-compatible
   requirements with explicit minimum versions. Commit Cargo.lock and run CI
   with `--locked` on stable and 1.85. Reserve exact pins for bindings whose

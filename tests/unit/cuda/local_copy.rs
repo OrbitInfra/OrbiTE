@@ -48,24 +48,27 @@ const SIZE: usize = 4096;
 const GUARD: u8 = 0x5a;
 impl Fixture {
     fn new(driver: Driver) -> Self {
-        let device = allocation(&[GUARD; SIZE]);
+        Self::sized(driver, SIZE)
+    }
+    fn sized(driver: Driver, size: usize) -> Self {
+        let device = allocation(&vec![GUARD; size]);
         // SAFETY: fixture owns this stationary device allocation.
         let ptr = unsafe { &*device.bytes.get() }.as_ptr() as u64;
         let g =
-            Arc::new(CudaMemory::register(ptr, SIZE, device.clone(), Arc::new(driver)).unwrap());
+            Arc::new(CudaMemory::register(ptr, size, device.clone(), Arc::new(driver)).unwrap());
         let ctx = g.allocation.lock().unwrap().context.clone();
         let stream = Stream::new(&ctx);
         let pin = Arc::new(HostMemory::from_cuda_pinned(Arc::new(
-            PinnedAllocation::new(&ctx, SIZE).unwrap(),
+            PinnedAllocation::new(&ctx, size).unwrap(),
         )));
-        pin.write(0, &[GUARD; SIZE]).unwrap();
+        pin.write(0, &vec![GUARD; size]).unwrap();
         let engine = TransferEngine::new(EngineConfig::default()).unwrap();
         let gpu = engine
-            .register_cuda_memory_batch(&[(g, 0, SIZE)], Permission::LocalOnly)
+            .register_cuda_memory_batch(&[(g, 0, size)], Permission::LocalOnly)
             .unwrap()
             .remove(0);
         let host = engine
-            .register_host_memory_batch(&[(pin.clone(), 0, SIZE)], Permission::LocalOnly)
+            .register_host_memory_batch(&[(pin.clone(), 0, size)], Permission::LocalOnly)
             .unwrap()
             .remove(0);
         Self {
@@ -137,6 +140,7 @@ fn config(backend: LocalCopyBackend) -> LocalCopyConfig {
         max_descriptors: 320,
         max_inflight: 2,
         max_bytes: 1 << 20,
+        ..Default::default()
     }
 }
 #[test]
@@ -166,7 +170,9 @@ fn strided_dma_preserves_unrequested_bytes_both_directions() {
                 f.desc(21, 22, 6),
                 f.desc(18, 98, 2),
             ];
-            f.guarded(dir, Dma, &rows, || worker.submit(dir, &batch, None));
+            f.guarded(dir, Dma, &rows, || {
+                worker.submit(dir, &batch, LocalCopyOptions::default())
+            });
             assert_eq!(f.calls("copy-batch"), usize::from(optional));
             assert_eq!(f.calls("copy-2d"), usize::from(optional));
         }
@@ -181,10 +187,16 @@ fn kernel_matches_direct_both_directions_and_auto_counts_compiled_operations() {
         .collect();
     let descs: Vec<_> = rows.iter().map(|&(d, h, n)| f.desc(d, h, n)).collect();
     for dir in [HostToDevice, DeviceToHost] {
-        f.guarded(dir, Kernel, &rows, || worker.submit(dir, &descs, None));
+        f.guarded(dir, Kernel, &rows, || {
+            worker.submit(dir, &descs, LocalCopyOptions::default())
+        });
         assert_eq!(f.calls("kernel-launch"), 1);
         f.guarded(dir, Dma, &[(4, 8, 4), (12, 20, 4), (20, 32, 4)], || {
-            worker.submit(dir, &[f.desc(4, 8, 4).strided(3, 8, 12)], None)
+            worker.submit(
+                dir,
+                &[f.desc(4, 8, 4).strided(3, 8, 12)],
+                LocalCopyOptions::default(),
+            )
         });
         assert_eq!(f.calls("copy-2d"), 1);
     }
@@ -192,15 +204,25 @@ fn kernel_matches_direct_both_directions_and_auto_counts_compiled_operations() {
 #[test]
 fn pending_events_own_distinct_kernel_slots_payloads_and_abandoned_work() {
     let f = Fixture::new(local_driver());
-    let worker = f.bind(config(Kernel)).unwrap();
+    let mut cfg = config(Kernel);
+    cfg.kernel_cta_limit = std::num::NonZeroU32::new(1);
+    let worker = f.bind(cfg).unwrap();
     f.host.write(8, b"orbit").unwrap();
     f.host.write(32, b"bytes").unwrap();
     f.device.query_hold.store(true, Ordering::Release);
     let a = worker
-        .submit(HostToDevice, &[f.desc(50, 8, 5)], None)
+        .submit(
+            HostToDevice,
+            &[f.desc(50, 8, 5)],
+            LocalCopyOptions::default(),
+        )
         .unwrap();
     let b = worker
-        .submit(HostToDevice, &[f.desc(80, 32, 5)], None)
+        .submit(
+            HostToDevice,
+            &[f.desc(80, 32, 5)],
+            LocalCopyOptions::default(),
+        )
         .unwrap();
     assert!(matches!(a.wait(Duration::ZERO), Err(Error::Timeout)));
     drop(a);
@@ -210,11 +232,27 @@ fn pending_events_own_distinct_kernel_slots_payloads_and_abandoned_work() {
             active: 2,
             retained: 0,
             payload_bytes: 10,
-            descriptor_bytes: 320 * 2 * 48
+            descriptor_bytes: 320 * 2 * 48,
+            classes: vec![LocalCopyClassStats {
+                direction: HostToDevice,
+                intent: crate::IntentType::Unspec,
+                priority: crate::Priority::High,
+                dma_submissions: 0,
+                dma_batch_calls: 0,
+                kernel_submissions: 2,
+                kernel_ctas: 2,
+                last_kernel_ctas: 1,
+                last_backend: Kernel,
+                last_fallback: None,
+            }],
         }
     );
     assert!(matches!(
-        worker.submit(HostToDevice, &[f.desc(100, 100, 2)], None),
+        worker.submit(
+            HostToDevice,
+            &[f.desc(100, 100, 2)],
+            LocalCopyOptions::default()
+        ),
         Err(Error::ResourceExhausted)
     ));
     assert!(f.host.write(9, b"x").is_err());
@@ -223,8 +261,15 @@ fn pending_events_own_distinct_kernel_slots_payloads_and_abandoned_work() {
     assert!(matches!(worker.close(Duration::ZERO), Err(Error::Timeout)));
     f.device.query_hold.store(false, Ordering::Release);
     b.wait(EVENTUAL_PROGRESS).unwrap();
+    let classes = worker.stats().unwrap().classes;
     worker.close(EVENTUAL_PROGRESS).unwrap();
-    assert_eq!(worker.progress().unwrap(), LocalCopyStats::default());
+    assert_eq!(
+        worker.progress().unwrap(),
+        LocalCopyStats {
+            classes,
+            ..Default::default()
+        }
+    );
     let mut actual = vec![0; SIZE];
     f.gpu.read(0, &mut actual).unwrap();
     let mut expected = vec![GUARD; SIZE];
@@ -242,11 +287,19 @@ fn missing_symbols_overlap_and_invalid_final_row_are_checked_before_payload() {
     assert_eq!(w.progress().unwrap().descriptor_bytes, 0);
     for dir in [HostToDevice, DeviceToHost] {
         assert!(matches!(
-            w.submit(dir, &[f.desc(1, 2, 3), f.desc(0, SIZE - 1, 2)], None),
+            w.submit(
+                dir,
+                &[f.desc(1, 2, 3), f.desc(0, SIZE - 1, 2)],
+                LocalCopyOptions::default()
+            ),
             Err(Error::InvalidRange)
         ));
         assert!(matches!(
-            w.submit(dir, &[f.desc(0, 0, 1).strided(321, 1, 1)], None),
+            w.submit(
+                dir,
+                &[f.desc(0, 0, 1).strided(321, 1, 1)],
+                LocalCopyOptions::default()
+            ),
             Err(Error::ResourceExhausted)
         ));
         let bad = f
@@ -258,7 +311,11 @@ fn missing_symbols_overlap_and_invalid_final_row_are_checked_before_payload() {
             .unwrap()
             .remove(0);
         assert!(matches!(
-            w.submit(dir, &[LocalCopyDesc::new(&f.gpu, 0, &bad, 0, 2)], None),
+            w.submit(
+                dir,
+                &[LocalCopyDesc::new(&f.gpu, 0, &bad, 0, 2)],
+                LocalCopyOptions::default()
+            ),
             Err(Error::Unavailable(_))
         ));
     }
@@ -266,13 +323,17 @@ fn missing_symbols_overlap_and_invalid_final_row_are_checked_before_payload() {
     let rows = [(3, 12, 3), (3, 19, 4), (21, 14, 2)];
     let descs: Vec<_> = rows.iter().map(|&(d, h, n)| f.desc(d, h, n)).collect();
     f.guarded(HostToDevice, Dma, &rows, || {
-        w.submit(HostToDevice, &descs, None)
+        w.submit(HostToDevice, &descs, LocalCopyOptions::default())
     });
     assert_eq!(f.calls("copy-batch"), 0);
     let f = Fixture::new(local_driver());
     let w = f.bind(config(Kernel)).unwrap();
     assert!(matches!(
-        w.submit(HostToDevice, &[f.desc(1, 0, 2), f.desc(1, 2, 1)], None),
+        w.submit(
+            HostToDevice,
+            &[f.desc(1, 0, 2), f.desc(1, 2, 1)],
+            LocalCopyOptions::default()
+        ),
         Err(Error::InvalidConfig(_))
     ));
 }
@@ -283,7 +344,13 @@ fn failed_submission_waits_for_already_enqueued_stream_work() {
     f.host.write(0, b"abcd").unwrap();
     f.device.copy_error.store(700, Ordering::Release);
     f.device.query_hold.store(true, Ordering::Release);
-    let h = w.submit(HostToDevice, &[f.desc(3, 0, 4)], None).unwrap();
+    let h = w
+        .submit(
+            HostToDevice,
+            &[f.desc(3, 0, 4)],
+            LocalCopyOptions::default(),
+        )
+        .unwrap();
     assert!(!h.poll().unwrap());
     assert!(f.host.write(0, b"x").is_err());
     f.device.query_hold.store(false, Ordering::Release);
@@ -298,7 +365,9 @@ fn failed_submission_waits_for_already_enqueued_stream_work() {
 fn query_destroy_record_or_restore_failure_quarantines_once_and_keeps_owners() {
     for fault in ["query", "destroy", "record", "restore"] {
         let f = Fixture::new(local_driver());
-        let w = f.bind(config(Kernel)).unwrap();
+        let mut cfg = config(Kernel);
+        cfg.kernel_cta_limit = std::num::NonZeroU32::new(1);
+        let w = f.bind(cfg).unwrap();
         let (weak_pin, weak_stream) = (Arc::downgrade(&f.pin), Arc::downgrade(&f.stream));
         match fault {
             "query" => f.device.event_query_fail_at.store(1, Ordering::Release),
@@ -306,7 +375,15 @@ fn query_destroy_record_or_restore_failure_quarantines_once_and_keeps_owners() {
             "record" => f.device.record_error.store(700, Ordering::Release),
             _ => f.device.pop_after_completion.store(true, Ordering::Release),
         }
-        let result = w.submit(HostToDevice, &[f.desc(5, 2, 9)], None);
+        let result = w.submit(
+            HostToDevice,
+            &[f.desc(5, 2, 9)],
+            LocalCopyOptions {
+                intent: crate::IntentType::Checkpoint,
+                priority: crate::Priority::Low,
+                ..Default::default()
+            },
+        );
         if fault == "record" {
             assert!(matches!(result, Err(Error::Unquiesced { .. })));
         } else {
@@ -317,7 +394,15 @@ fn query_destroy_record_or_restore_failure_quarantines_once_and_keeps_owners() {
         }
         assert!(matches!(w.progress(), Err(Error::Unquiesced { .. })));
         assert!(matches!(
-            w.submit(HostToDevice, &[f.desc(64, 64, 8)], None),
+            w.submit(
+                HostToDevice,
+                &[f.desc(64, 64, 8)],
+                LocalCopyOptions {
+                    intent: crate::IntentType::Checkpoint,
+                    priority: crate::Priority::Low,
+                    ..Default::default()
+                }
+            ),
             Err(Error::Unquiesced { .. })
         ));
         assert_eq!(
@@ -326,7 +411,19 @@ fn query_destroy_record_or_restore_failure_quarantines_once_and_keeps_owners() {
                 active: 1,
                 retained: 1,
                 payload_bytes: 9,
-                descriptor_bytes: 320 * 2 * 48
+                descriptor_bytes: 320 * 2 * 48,
+                classes: vec![LocalCopyClassStats {
+                    direction: HostToDevice,
+                    intent: crate::IntentType::Checkpoint,
+                    priority: crate::Priority::Low,
+                    dma_submissions: 0,
+                    dma_batch_calls: 0,
+                    kernel_submissions: 1,
+                    kernel_ctas: 1,
+                    last_kernel_ctas: 1,
+                    last_backend: Kernel,
+                    last_fallback: None,
+                }],
             }
         );
         assert!(f.host.write(2, b"x").is_err());
@@ -415,7 +512,10 @@ fn caller_stream_waits_for_pinned_and_external_producers_and_restores_exact_cont
             .submit(
                 HostToDevice,
                 &[f.desc(2, 12, 5), f.desc(20, 20, 5)],
-                Some(&ready),
+                LocalCopyOptions {
+                    ready: Some(ready.clone()),
+                    ..Default::default()
+                },
             )
             .unwrap();
         drop(ready);
@@ -485,12 +585,14 @@ fn shared_physical_pin_coalesces_across_retained_slots_and_checks_each_boundary(
         w.submit(
             HostToDevice,
             &[LocalCopyDesc::new(&f.gpu, 3, &slots[0], 12, 8)],
-            None
+            LocalCopyOptions::default()
         ),
         Err(Error::InvalidRange)
     ));
     f.device.events.lock().unwrap().clear();
-    let h = w.submit(HostToDevice, &[a, b], None).unwrap();
+    let h = w
+        .submit(HostToDevice, &[a, b], LocalCopyOptions::default())
+        .unwrap();
     assert!(slots[1].write(0, b"x").is_err());
     assert!(h.poll().unwrap());
     assert_eq!(f.calls("HtoD"), 1);
@@ -525,7 +627,8 @@ fn auto_falls_back_before_upload_and_explicit_kernel_reports_missing_mapping_or_
             assert!(matches!(k, Err(Error::Unavailable(_))));
         } else {
             assert!(matches!(
-                k.unwrap().submit(HostToDevice, &a, None),
+                k.unwrap()
+                    .submit(HostToDevice, &a, LocalCopyOptions::default()),
                 Err(Error::Unavailable(_))
             ));
         }
@@ -534,7 +637,7 @@ fn auto_falls_back_before_upload_and_explicit_kernel_reports_missing_mapping_or_
             HostToDevice,
             Dma,
             &[(15, 0, 2), (8, 8, 3), (2, 18, 1)],
-            || w.submit(HostToDevice, &a, None),
+            || w.submit(HostToDevice, &a, LocalCopyOptions::default()),
         );
         assert_eq!(f.calls("kernel-launch"), 0);
     }
@@ -552,23 +655,41 @@ fn capture_foreign_context_and_budget_rejections_do_not_enqueue() {
         .unwrap();
     let invalid = LocalCopyDesc::new(&other.gpu, 0, &f.host, 0, 4);
     assert!(matches!(
-        w.submit(HostToDevice, &[invalid], None),
+        w.submit(HostToDevice, &[invalid], LocalCopyOptions::default()),
         Err(Error::Unavailable(_))
     ));
     f.device.capture_active.store(true, Ordering::Release);
     assert!(matches!(
-        w.submit(HostToDevice, &[f.desc(0, 0, 8)], None),
+        w.submit(
+            HostToDevice,
+            &[f.desc(0, 0, 8)],
+            LocalCopyOptions::default()
+        ),
         Err(Error::Unavailable(_))
     ));
     f.device.capture_active.store(false, Ordering::Release);
     assert!(matches!(
-        w.submit(HostToDevice, &[f.desc(0, 0, 9)], None),
+        w.submit(
+            HostToDevice,
+            &[f.desc(0, 0, 9)],
+            LocalCopyOptions::default()
+        ),
         Err(Error::ResourceExhausted)
     ));
     f.device.query_hold.store(true, Ordering::Release);
-    let a = w.submit(HostToDevice, &[f.desc(0, 0, 5)], None).unwrap();
+    let a = w
+        .submit(
+            HostToDevice,
+            &[f.desc(0, 0, 5)],
+            LocalCopyOptions::default(),
+        )
+        .unwrap();
     assert!(matches!(
-        w.submit(HostToDevice, &[f.desc(16, 16, 4)], None),
+        w.submit(
+            HostToDevice,
+            &[f.desc(16, 16, 4)],
+            LocalCopyOptions::default()
+        ),
         Err(Error::ResourceExhausted)
     ));
     f.device.query_hold.store(false, Ordering::Release);
@@ -603,14 +724,16 @@ fn legacy_batch_abi_uses_failure_index_only_as_a_diagnostic() {
     let rows = [(3, 8, 2), (12, 20, 3)];
     let ds = [f.desc(3, 8, 2), f.desc(12, 20, 3)];
     f.guarded(DeviceToHost, Dma, &rows, || {
-        w.submit(DeviceToHost, &ds, None)
+        w.submit(DeviceToHost, &ds, LocalCopyOptions::default())
     });
     f.host.write(8, b"ab").unwrap();
     f.host.write(20, b"xyz").unwrap();
     f.gpu.write(0, &[GUARD; SIZE]).unwrap();
     f.device.copy_error.store(700, Ordering::Release);
     f.device.query_hold.store(true, Ordering::Release);
-    let h = w.submit(HostToDevice, &ds, None).unwrap();
+    let h = w
+        .submit(HostToDevice, &ds, LocalCopyOptions::default())
+        .unwrap();
     assert!(!h.poll().unwrap());
     assert!(f.host.write(20, b"!").is_err());
     f.device.query_hold.store(false, Ordering::Release);
@@ -666,3 +789,6 @@ fn terminal_kernel_load_or_unload_is_never_a_dma_fallback_or_a_destroy_retry() {
     drop(w);
     assert_eq!(f.calls("failed-unload"), 1);
 }
+
+#[path = "local_copy/selection.rs"]
+mod selection;

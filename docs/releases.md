@@ -13,6 +13,18 @@ from `7cc48490`. The beta.1 version is spelled `0.1.0b1` on PyPI.
 
 ### Changes since 0.1.0-alpha.1
 
+- Local-copy `submit` now takes `LocalCopyOptions` in place of the optional
+  producer-event reference: set `intent`, `priority` and `ready` there. No
+  alternate submit method or compatibility alias is provided. `LocalCopyStats`
+  includes per-class diagnostic snapshots and is no longer `Copy`. The Python
+  API does not expose local copy and is unchanged. Before 0.1.0, clean breaking
+  changes remain allowed while ownership and wire safety rules stay fixed.
+- Local-copy kernels accept a validated total CTA cap. Auto uses a higher
+  threshold for background DeviceToHost copies; its new default keeps these
+  copies on DMA until calibrated. Normal/default-options selection remains at
+  128 compiled operations with no cap. Forced backends, ordered DMA for
+  overlap and event-retained owners are unchanged. The Hopper PCIe and Grace
+  C2C calibration gates are written, not run; defaults await hardware evidence.
 - Rust is the primary interface. Python lives in the separate
   `orbite-python` packaging crate and mirrors the Rust API with PEP 8 names.
   Installed wheels cover CPython
