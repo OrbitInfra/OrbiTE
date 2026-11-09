@@ -43,14 +43,16 @@ void file_write(int fd, const std::vector<unsigned char>& bytes) {
 }
 std::vector<unsigned char> file_read(const std::string& path) {
     std::ifstream f(path, std::ios::binary); check(f.good(), "file verification failed");
-    if (std::getenv("ORBITE_BENCH_BULK_VERIFY")) {
+    if (std::getenv("ORBITE_BENCH_LEGACY_VERIFY")) {
         check(std::getenv("ORBITE_BENCH_TAIL_TRACE")!=nullptr, "diagnostic verification requires tracing");
-        std::vector<unsigned char> bytes(std::filesystem::file_size(path));
-        f.read(reinterpret_cast<char*>(bytes.data()), bytes.size());
-        check(f.good() && size_t(f.gcount())==bytes.size(), "short file verification");
-        return bytes;
+        return {std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>()};
     }
-    return {std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>()};
+    // Match the Rust harness's bulk verification read. Small stream-buffer
+    // reads otherwise change readahead, cached folios and the next sample's I/O.
+    std::vector<unsigned char> bytes(std::filesystem::file_size(path));
+    f.read(reinterpret_cast<char*>(bytes.data()), bytes.size());
+    check(f.good() && size_t(f.gcount())==bytes.size(), "short file verification");
+    return bytes;
 }
 void array(const std::vector<uint64_t>& samples) { std::cout << '['; for (size_t i=0;i<samples.size();++i) std::cout << (i ? "," : "") << samples[i]; std::cout << ']'; }
 }

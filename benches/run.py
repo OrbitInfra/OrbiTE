@@ -63,7 +63,9 @@ def main():
     if any(n < 4096 or n > 64 << 20 or n % 4096 for n in a.sizes) or any(n < 1 or n > 64 for n in a.batches):
         p.error("invalid sweep bounds")
     out.mkdir(parents=True, exist_ok=False)
-    env = {k: v for k, v in os.environ.items() if not k.startswith(("MC_", "TENT_", "MOONCAKE_")) and k not in ("LD_PRELOAD", "LD_LIBRARY_PATH", "ORBITE_BENCH_CORRUPT_BYTE", "ORBITE_BENCH_RESET_SETTLE_US", "ORBITE_BENCH_BULK_VERIFY")}
+    env = {k: v for k, v in os.environ.items()
+           if not k.startswith(("MC_", "TENT_", "MOONCAKE_", "ORBITE_BENCH_"))
+           and k not in ("LD_PRELOAD", "LD_LIBRARY_PATH")}
     commands = []
     tent_env = {"MC_RPC_CLIENT_IO_THREADS": str(a.workers), "MC_TE_RPC_CLIENT_IO_THREADS": str(a.workers)}
 
@@ -107,6 +109,7 @@ def main():
                 "timing": "allocate batch + submit + poll + free; per-batch wall and whole-process CPU",
                 "checks": "every warmup and sample; changed pattern, reset destination, full bytes and guards; excluded from time",
                 "file_state": "preallocated once; in-place pwrite + fdatasync before each sample; warmed ext4 O_DIRECT / tmpfs; timed writes are not durability receipts",
+                "verification_io": "whole-file bulk read in both harnesses",
                 "builds": {"rust": "release, io-uring", "tent": oracle["contract"]["cmake_options"]},
                 "harness_sha256": {f.name: hashlib.sha256(f.read_bytes()).hexdigest() for f in (ROOT / "benches").iterdir() if f.is_file()},
                 "binary_sha256": {k: hashlib.sha256(v.read_bytes()).hexdigest() for k, v in {"orbite": rust, "tent": tent}.items()},

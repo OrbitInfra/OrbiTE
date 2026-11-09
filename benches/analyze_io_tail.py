@@ -166,6 +166,8 @@ def analyze(root):
             while next_request is not None and next_request['issue_ns'] <= end:
                 active.append(next_request)
                 next_request = next(requests, None)
+            previous_end = windows[w['sample'] - 1]['end_ns'] if w['sample'] else begin
+            between = [r for r in active if r['pid'] == pid and previous_end <= r['issue_ns'] < begin]
             active = [r for r in active if r['complete_ns'] is None or r['complete_ns'] >= begin]
             es = events[bisect.bisect_left(times, begin):bisect.bisect_right(times, end)]
             own = [e for e in es if e[1] == pid]
@@ -191,7 +193,7 @@ def analyze(root):
                        issuer_sleeps=sum(e[2] == issuer and e[3] == 'syscalls:sys_enter_clock_nanosleep' for e in own),
                        async_work=sum(e[3] == 'io_uring:io_uring_queue_async_work' for e in io))
             row.update(blocks(es, pid))
-            _, filesystem, direction, count, _ = name.removesuffix('-settled').removesuffix('-bulk').split('-')
+            _, filesystem, direction, count, _ = name.removesuffix('-settled').removesuffix('-bulk').removesuffix('-legacy').split('-')
             row.update(window_io(active, begin, end, sq[0][0], pid,
                                  'R' if direction == 'read' else 'W', 4096 * int(count)))
             if filesystem == 'ext4' and not row['window_direct_blocks']:
@@ -206,6 +208,16 @@ def analyze(root):
                                          for e in own if e[3].startswith(('iomap:', 'filemap:', 'block:'))]
             row['async_timeline'] = [dict(at_ns=e[0], tid=e[2], event=e[3], detail=e[4])
                                      for e in io if e[3] == 'io_uring:io_uring_queue_async_work']
+            row['between_windows_us'] = (begin - previous_end) / 1000
+            row['between_io_geometry'] = dict(collections.Counter(
+                f"{r['flags']}:{r['bytes']}" for r in between))
+            row['page_cache_orders'] = dict(collections.Counter(
+                e[4].split('order=')[1] for e in own
+                if e[3] == 'filemap:mm_filemap_delete_from_page_cache'))
+            row['unplug_widths'] = dict(collections.Counter(
+                e[4].rsplit(' ', 1)[1] for e in own if e[3] == 'block:block_unplug'))
+            for event in ('block_bio_queue', 'block_bio_backmerge', 'block_bio_frontmerge', 'block_plug'):
+                row[event] = sum(e[3] == 'block:' + event for e in own)
             row['caller_forks'] = sum(e[3] == 'sched:sched_process_fork' and e[2] == pid for e in own)
             row['fork_timeline'] = [dict(at_ns=e[0], detail=e[4]) for e in own if e[3] == 'sched:sched_process_fork']
             row['wake_timeline'] = [dict(at_ns=e[0], event=e[3], detail=e[4]) for e in es
@@ -218,6 +230,7 @@ def analyze(root):
             raise ValueError('no measured windows')
         tail = sorted(rows, key=lambda r: r['latency_us'])[-max(1, len(rows) // 100):]
         metrics = [k for k in rows[0] if k.endswith('_us') or k in ('rings', 'sqes', 'cqes', 'enters', 'submitting_enters', 'cross_thread_cqes', 'caller_sleeps', 'issuer_sleeps', 'async_work', 'block_issues', 'paired_blocks', 'unmatched_block_issues', 'caller_forks')]
+        metrics += ['max_batch_depth', 'block_bio_queue', 'block_bio_backmerge', 'block_bio_frontmerge', 'block_plug']
         def med(values):
             return {k: statistics.median(r[k] for r in values) for k in metrics}
         summary = dict(name=name, samples=len(rows), duplicate_perf_records=duplicate_records,
@@ -225,6 +238,8 @@ def analyze(root):
         counters = [k for k in rows[0] if k.startswith('window_') and k != 'window_devices']
         summary['window_io_totals'] = {k: sum(r[k] for r in rows) for k in counters}
         summary['window_io_samples'] = {k: sum(r[k] > 0 for r in rows) for k in counters}
+        for key in ('between_io_geometry', 'page_cache_orders', 'unplug_widths'):
+            summary[key] = dict(sum((collections.Counter(r[key]) for r in rows), collections.Counter()))
         summaries.append(summary)
         (root / (name + '.timeline.json')).write_text(json.dumps(dict(summary=summary, samples=rows, tail=tail), indent=2) + '\n')
         print(json.dumps(summary), flush=True)
