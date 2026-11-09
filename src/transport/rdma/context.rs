@@ -381,7 +381,7 @@ impl RdmaContext {
                     },
                 )
             });
-        self.record_gpu_registration(handles, memory, &resources.usage);
+        self.record_gpu_registration(handles, memory, memory.len(), &resources.usage);
         result
     }
 
@@ -389,6 +389,7 @@ impl RdmaContext {
         &self,
         handles: &sys::MemoryHandles,
         memory: &RegisteredMemory,
+        length: usize,
         usage: &Arc<Mutex<RdmaStats>>,
     ) {
         if handles.mr.is_null() || handles.gpu_route == 0 {
@@ -404,10 +405,11 @@ impl RdmaContext {
         } else {
             stats.peermem_registrations += 1;
         }
+        drop(stats);
         log::debug!(
             "CUDA RDMA registration id={} bytes={} route={}",
             memory.id(),
-            memory.len(),
+            length,
             if handles.gpu_route == 1 {
                 "dmabuf"
             } else {
@@ -580,7 +582,7 @@ impl RdmaContext {
         };
         if new_mr {
             if let Some(memory) = &registration {
-                self.record_gpu_registration(handles, memory, &device.usage);
+                self.record_gpu_registration(handles, memory, length, &device.usage);
             }
         }
         if private_pd && !connection.handles.private_pd.is_null() {
