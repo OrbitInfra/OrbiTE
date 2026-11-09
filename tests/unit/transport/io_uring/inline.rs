@@ -6,6 +6,9 @@ struct Trace {
     submits: usize,
     peeks: usize,
     reaps: usize,
+    waits: Vec<Instant>,
+    wait_ready: bool,
+    errors: std::collections::VecDeque<i32>,
     alive: std::sync::Weak<()>,
 }
 struct Observed {
@@ -48,18 +51,41 @@ impl Ring for Observed {
         })
     }
     fn reap(&mut self, until: Instant) -> io::Result<(u64, i32)> {
-        self.trace.lock().unwrap().reaps += 1;
+        let mut t = self.trace.lock().unwrap();
+        t.reaps += 1;
+        if t.submitter == Some(std::thread::current().id()) {
+            t.waits.push(until);
+            if let Some(code) = t.errors.pop_front() {
+                return Err(io::Error::from_raw_os_error(code));
+            }
+            if !self.ready && !t.wait_ready {
+                return Err(io::Error::from_raw_os_error(libc::ETIME));
+            }
+        }
+        drop(t);
         self.receipt
             .take()
             .map_or_else(|| self.ring.reap(until), Ok)
     }
 }
 fn observed(ready: bool, truncate: bool, no_space: bool) -> Result<(Fixture, Arc<Mutex<Trace>>)> {
-    let mut f = Fixture::new(
+    observed_at(
         &std::env::temp_dir(),
         b"abcdefgh",
-        TransferEngine::new(Default::default())?,
-    )?;
+        ready,
+        truncate,
+        no_space,
+    )
+}
+
+fn observed_at(
+    directory: &Path,
+    image: &[u8],
+    ready: bool,
+    truncate: bool,
+    no_space: bool,
+) -> Result<(Fixture, Arc<Mutex<Trace>>)> {
+    let mut f = Fixture::new(directory, image, TransferEngine::new(Default::default())?)?;
     let path = f.path.clone();
     let trace = Arc::new(Mutex::new(Trace::default()));
     let copy = trace.clone();
@@ -86,6 +112,9 @@ fn observed(ready: bool, truncate: bool, no_space: bool) -> Result<(Fixture, Arc
     });
     Ok((f, trace))
 }
+
+#[path = "inline_wait.rs"]
+mod wait;
 
 #[test]
 fn ready_small_file_cqes_finish_on_the_caller_with_exact_prefix_and_guards() -> Result<()> {
@@ -222,46 +251,49 @@ fn failed_worker_handoff_quarantines_the_accepted_sqe_without_replay() -> Result
     if !kernel() {
         return Ok(());
     }
-    let (f, trace) = observed(false, false, false)?;
-    FAIL_WORKER_START.with(|f| f.set(true));
-    let mut batch = f.engine.submit_async(
-        TransferOp::Write,
-        &f.segment,
-        &[f.request(1, 0, 8)],
-        None,
-        TIMEOUT,
-    )?;
-    let status = batch.wait(TIMEOUT)?;
-    assert!(!status.locally_drained);
-    assert_eq!(status.completed_tasks, 0);
-    let task = batch.task_status(0)?;
-    let failure = task.failure.unwrap();
-    assert!(matches!(
-        failure.error,
-        Error::Unquiesced {
-            operation: "io_uring worker start",
-            ..
-        }
-    ));
-    assert_eq!(failure.remote_effect, RemoteEffect::Unknown);
-    let t = trace.lock().unwrap();
-    assert_eq!((t.submits, t.peeks, t.reaps), (1, 1, 0));
-    assert!(t.alive.upgrade().is_some());
-    drop(t);
-    assert_eq!(f.engine.stats()?.inflight_bytes, 8);
-    assert_eq!(f.engine.stats()?.requester_workers, 0);
-    assert!(matches!(batch.free(), Err(Error::BatchBusy)));
-    assert!(matches!(
-        f.engine.close_file_segment(&f.segment, Duration::ZERO),
-        Err(Error::Timeout)
-    ));
-    f.engine.unregister_memory(&f.memory)?;
-    assert!(f.memory.read(1, &mut [0; 8]).is_err());
-    // Actual kernel WRITE completed, but no release receipt reached the owner.
-    assert_eq!(fs::read(&f.path)?, vec![0x9a; 8]);
-    drop(batch);
-    assert!(trace.lock().unwrap().alive.upgrade().is_some());
-    assert_eq!(f.engine.stats()?.inflight_bytes, 8);
+    for error in [libc::ETIME, libc::EIO] {
+        let (f, trace) = observed(false, false, false)?;
+        trace.lock().unwrap().errors.push_back(error);
+        FAIL_WORKER_START.with(|f| f.set(true));
+        let mut batch = f.engine.submit_async(
+            TransferOp::Write,
+            &f.segment,
+            &[f.request(1, 0, 8)],
+            None,
+            TIMEOUT,
+        )?;
+        let status = batch.wait(TIMEOUT)?;
+        assert!(!status.locally_drained);
+        assert_eq!(status.completed_tasks, 0);
+        let task = batch.task_status(0)?;
+        let failure = task.failure.unwrap();
+        assert!(matches!(
+            failure.error,
+            Error::Unquiesced {
+                operation: "io_uring worker start",
+                ..
+            }
+        ));
+        assert_eq!(failure.remote_effect, RemoteEffect::Unknown);
+        let t = trace.lock().unwrap();
+        assert_eq!((t.submits, t.peeks, t.reaps), (1, 1, 1));
+        assert!(t.alive.upgrade().is_some());
+        drop(t);
+        assert_eq!(f.engine.stats()?.inflight_bytes, 8);
+        assert_eq!(f.engine.stats()?.requester_workers, 0);
+        assert!(matches!(batch.free(), Err(Error::BatchBusy)));
+        assert!(matches!(
+            f.engine.close_file_segment(&f.segment, Duration::ZERO),
+            Err(Error::Timeout)
+        ));
+        f.engine.unregister_memory(&f.memory)?;
+        assert!(f.memory.read(1, &mut [0; 8]).is_err());
+        // Actual kernel WRITE completed, but no release receipt reached the owner.
+        assert_eq!(fs::read(&f.path)?, vec![0x9a; 8]);
+        drop(batch);
+        assert!(trace.lock().unwrap().alive.upgrade().is_some());
+        assert_eq!(f.engine.stats()?.inflight_bytes, 8);
+    }
     Ok(())
 }
 
@@ -364,6 +396,9 @@ fn pending_native_io_completes_on_worker_while_caller_only_computes() -> Result<
             Ok(None) // Force worker handoff even if the real CQE arrived early.
         }
         fn reap(&mut self, until: Instant) -> io::Result<(u64, i32)> {
+            if std::thread::current().id() == self.caller {
+                return Err(io::Error::from_raw_os_error(libc::ETIME));
+            }
             assert_ne!(std::thread::current().id(), self.caller);
             let cqe = self.inner.reap(until)?;
             self.reaped.store(true, Ordering::Release);

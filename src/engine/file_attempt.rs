@@ -387,7 +387,7 @@ impl TransferEngine {
             return false;
         };
         // Keep queued/deferred policy and CUDA producer waits on their existing
-        // worker. One small host request needs only one bounded CQ observation.
+        // worker. One small host request can use a bounded caller CQ wait.
         let [request] = requests.as_slice() else {
             return false;
         };
@@ -446,7 +446,8 @@ impl TransferEngine {
                 .start_host(submission.operation, requests, 1, owner.deadline)
         };
         match run() {
-            Ok(started) => match started.poll_one(submission.operation, Some((&attempts, 0))) {
+            Ok(started) => match started.complete_small(submission.operation, Some((&attempts, 0)))
+            {
                 Ok(done) => report = done,
                 Err(pending) => {
                     attempts.posted(0);

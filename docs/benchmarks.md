@@ -228,122 +228,134 @@ stay separate work.
 
 ## Small io_uring submission profile
 
-[Run 42495924134](https://github.com/OrbitInfra/OrbiTE/actions/runs/42495924134)
-profiles `4b831f3`, whose production sources are identical to `edec7937`.
-The stable job uses four EPYC 9V74 logical CPUs and Rust 1.99.1; the Rust 1.85
-job uses four EPYC 7763 logical CPUs. Both use Ubuntu 24.04, Linux
-7.0.0-1017-azure, the frozen reference above and the same S26 parameters.
-The eighteen byte-checked profiles add the HP-TCP 1 MiB READ/WRITE watch item
-to the earlier sixteen cases. Raw profiles remain in `cpu-bench-*` artifacts.
+The historical [ready-CQE pass](https://github.com/OrbitInfra/OrbiTE/pull/183)
+reduced stable tmpfs 4 KiB READ p50 from 156 to 51 µs, but WRITE remained
+193 µs versus TENT's 84 µs: one nonblocking check often missed the WRITE CQE
+and started a batch worker. Its ext4 values used the old reset harness.
 
-The table uses the one-sample setup subtraction described above. Futex calls
-are synchronization syscalls, not a count of ownership handoffs.
+The [before profiles](https://github.com/OrbitInfra/OrbiTE/actions/runs/42691895658)
+at `578531b7` and [after profiles](https://github.com/OrbitInfra/OrbiTE/actions/runs/42692901727)
+at `a5874066` use the current preallocated, synchronized reset and bulk
+verification. Before profiles use EPYC 7763; after uses EPYC 9V74 on stable
+and EPYC 7763 on 1.85. These are separate diagnostic runs; the untraced
+same-VM pairs below establish the timing comparison. Raw `perf` and `strace` output stays
+in `cpu-bench-*` artifacts. Setup-subtracted calls per 4 KiB tmpfs batch are:
 
-| Per 4 KiB tmpfs batch (READ / WRITE) | OrbiTE stable | OrbiTE 1.85 | TENT 1.85 |
+| Toolchain / operation | clone/clone3 before → after | futex before → after | io_uring_enter before → after |
 |---|---:|---:|---:|
-| User-thread creation (`clone`/`clone3`) | 1 / 1 | 1 / 1 | 0 / 0 |
-| Ring setup | 1 / 1 | 1 / 1 | 1 / 1 |
-| Ring enter | 1 / 1 | 1 / 1.01 | 1 / 1 |
-| Futex | 11.26 / 11.85 | 13.21 / 13.08 | 0.01 / 0 |
-| Polling sleeps | 6.65 / 6.65 | 5.41 / 5.45 | 0 / 0 |
+| Stable READ | 0.00 → 0.00 | 6.00 → 6.00 | 1.00 → 1.00 |
+| Stable WRITE | 0.00 → 0.00 | 6.00 → 6.00 | 1.00 → 1.00 |
+| Rust 1.85 READ | 0.00 → 0.00 | 6.00 → 6.01 | 1.00 → 1.00 |
+| Rust 1.85 WRITE | 0.00 → 0.00 | 6.00 → 6.00 | 1.00 → 1.00 |
 
-This confirms one caller-to-new-worker handoff per OrbiTE batch, versus TENT's
-caller submission. It rejects a repeated extra probe: four executed batches
-(one sample plus three warmups) create five OrbiTE rings; 103 batches create
-104. The one lazy probe is outside the measured interval. Both keep one ring
-per batch. The aligned workload allocates **zero bounce buffers**, also checked
-by `aligned_small_file_requests_need_no_bounce_allocation`; removing an
-allocation would not address this target. Unaligned requests keep their
-charged bounce owner.
+Both keep one ring setup per batch; the one lazy availability probe is outside
+measurement. TENT likewise records no per-batch clone, one setup/enter and
+approximately zero futex calls. Futex calls are not a handoff count. Tracing
+delays the initial CQ check enough to hide worker creation even on the old
+source, so these zero-clone traces cannot prove ordinary WRITEs avoided it.
+The less intrusive before WRITE CPU profiles still attribute 1.75%/9.72% to
+`pthread_create` on stable/1.85. Neither that frame nor `Batch::start_worker`
+appears in the after
+WRITE reports at the 0.5% cutoff. The 1.85 reports contain only 72 before and
+118 after user-stack samples, so absence is not proof of zero calls. Its
+separate `perf stat` WRITE sample changes p50/process-CPU from 197/193 to
+86/97 µs; process context switches remain 253→225, including setup and warmup.
+Blocking CQ waits still sleep and wake. These diagnostic runs do not replace
+the untraced paired comparison.
 
-On 1.85, the tmpfs READ/WRITE user stacks attribute 17.4%/17.0% to
-`Batch::status`, 7.4%/6.0% to `ProgressState::status`, and 27.9%/32.1% to the
-main VDSO clock frame. These are 258/265 samples, so small frame differences
-are not precise rankings. The separate `perf stat` run measures mean
-wall/process-CPU per batch of 174/180 µs READ and 240/284 µs WRITE, versus
-TENT's 98/107 and 106/118 µs. Process context switches, including setup and
-warmup, are 139/545 versus 211/234. Under tracing, OrbiTE's sleep/futex/epoll
-wall sums are 0.72/0.47/12.43 ms for READ and 0.73/0.50/12.64 ms for WRITE.
-Those include concurrent idle workers and tracer overhead; they are not
-critical-path percentages. The status stacks and thread creation identify
-handoff and polling work; only untraced matched sweeps measure the improvement.
-
-The bounded change submits one contiguous host request of at most 64 KiB on
-an idle batch's caller and makes one nonblocking CQ observation. A ready CQE
-finishes through the normal prefix and admission owners. Otherwise the same
-ring moves to the existing batch worker for drain. Runtime queuing, background
-progress, eligible fallback, CUDA/pinned producer waits, vectors and larger
-groups keep their existing worker path. No ring pool or coordinator is added.
-A worker-start failure after submission quarantines ring, fd, loans and charges.
-[The owner contract and controls](storage.md) preserve preflight, partial-submit
-drain, short-prefix copyback and the destruction deadline.
+The caller now submits one contiguous host request of at most 64 KiB on an
+idle batch, checks the CQ once, then waits up to 200 µs, capped by the request
+deadline. At most three interrupted/unready waits share that window. A CQE
+finishes through the normal prefix and admission owners. A missed window or
+enter error moves the same ring to the existing drain worker without resubmission.
+Runtime queues, background progress, eligible fallback, CUDA/pinned producer
+waits, vectors and larger groups retain their worker path. No ring pool,
+thread pool or coordinator is added. The [owner controls](storage.md) preserve
+preflight, partial-submit drain, exact short prefixes and quarantine. The
+late-CQE tmpfs/ext4 control counts zero worker starts; disabling only the
+wait makes it fail with one start. This is the deterministic handoff proof.
 
 ### Small-file paired results
 
-[Run 42499905741](https://github.com/OrbitInfra/OrbiTE/actions/runs/42499905741)
+[Run 42692901727](https://github.com/OrbitInfra/OrbiTE/actions/runs/42692901727)
 completed **480 checked rows before and after on each toolchain**, comparing
-`edec7937` with `a52e7b7`. Both jobs use four EPYC 7763 logical CPUs, matching
-S26's processor class, with Rust 1.99.1 or 1.85.0. Each revision pair shares
-one VM, compiler, ext4/tmpfs mounts, workload hashes and the parameters above.
-Revision order is before then after; implementation order alternates across
-three trials. The complete [stable](https://github.com/OrbitInfra/OrbiTE/pull/183#issuecomment-6725185335)
-and [1.85](https://github.com/OrbitInfra/OrbiTE/pull/183#issuecomment-6725185819)
-tables include all 160 workload/implementation cases per toolchain, not just
-improved cases. Each cell aggregates three checked trial rows. Reproduce them with
-`python3 benches/compare.py BEFORE AFTER --changed-profile io_uring-ext4 --changed-profile io_uring-tmpfs`;
-raw samples and profiles stay in the run's `cpu-bench-*` artifacts.
+`578531b7` with `a5874066`. Each pair shares one VM, compiler, ext4/tmpfs mounts,
+workload hashes, reset and verification. Three trials, 100 samples, three
+warmups, one caller and two configured engine workers are unchanged. Revision
+order is before then after; implementation order alternates across trials.
+The frozen reference is Mooncake v0.3.14 `e1ea5d31`. No diagnostic pacing is
+used. Raw trials and profiles stay outside Git in the run's artifacts.
 
-Stable medians of the three trial statistics:
+The complete [stable table](https://github.com/OrbitInfra/OrbiTE/pull/193#issuecomment-6752994908) and
+[1.85 table](https://github.com/OrbitInfra/OrbiTE/pull/193#issuecomment-6752602865)
+include all 160 workload/implementation cases per toolchain and every numerical
+regression; each case aggregates three byte-checked trial rows. Reproduce with
+`python3 benches/compare.py BEFORE AFTER --changed-profile io_uring-ext4 --changed-profile io_uring-tmpfs`.
+CPU is process time per batch; the tables show medians of trial statistics.
 
-| Workload | OrbiTE p50 µs before → after | TENT p50 µs after | OrbiTE p99 µs before → after | OrbiTE CPU µs before → after |
+Stable: four logical CPUs (AMD EPYC 9V74), Ubuntu 24.04, Linux
+7.0.0-1017-azure, rustc 1.99.1 (58cf8f9c3 2026-10-13), GCC 13.3.0.
+
+| Workload | OrbiTE p50 µs before → after | TENT p50 µs before → after | OrbiTE p99 µs before → after | OrbiTE CPU µs before → after |
 |---|---:|---:|---:|---:|
-| tmpfs, 1 × 4 KiB READ | 156.0 → 51.0 | 83.7 | 293.6 → 84.2 | 166.3 → 54.9 |
-| tmpfs, 1 × 4 KiB WRITE | 196.9 → 193.0 | 83.8 | 294.2 → 289.6 | 249.5 → 178.4 |
-| ext4, 1 × 4 KiB READ | 313.6 → 313.1 | 227.9 | 631.3 → 425.7 | 264.0 → 249.3 |
-| ext4, 1 × 4 KiB WRITE | 306.4 → 315.5 | 205.5 | 460.0 → 574.7 | 294.2 → 259.3 |
-| ext4, 1 × 64 KiB READ | 407.5 → 402.2 | 357.6 | 611.2 → 559.7 | 291.7 → 251.4 |
-| ext4, 1 × 64 KiB WRITE | 322.7 → 332.4 | 240.7 | 512.1 → 483.7 | 312.8 → 257.7 |
-| ext4, 64 × 4 KiB gapped READ | 932.6 → 906.3 | 982.5 | 16,149.5 → 14,948.5 | 1,131.8 → 986.9 |
-| ext4, 64 × 4 KiB gapped WRITE | 937.9 → 889.8 | 968.8 | 6,478.3 → 5,932.1 | 1,133.4 → 1,078.7 |
-| HP-TCP, 1 × 1 MiB READ | 631.4 → 608.6 | — | 800.2 → 865.5 | 963.6 → 925.7 |
+| tmpfs, 1 × 4 KiB READ | 33.9 → 37.1 | 62.8 → 57.5 | 67.5 → 56.6 | 37.9 → 39.5 |
+| tmpfs, 1 × 4 KiB WRITE | 117.9 → 57.3 | 59.7 → 56.3 | 196.7 → 151.9 | 130.2 → 61.5 |
+| tmpfs, 1 × 64 KiB READ | 45.6 → 44.3 | 71.4 → 69.5 | 108.7 → 131.6 | 51.1 → 48.3 |
+| tmpfs, 1 × 64 KiB WRITE | 128.1 → 70.0 | 132.9 → 127.0 | 193.9 → 166.8 | 148.6 → 73.6 |
+| ext4, 1 × 4 KiB READ | 178.1 → 122.7 | 142.0 → 143.4 | 259.5 → 252.6 | 143.0 → 68.1 |
+| ext4, 1 × 4 KiB WRITE | 200.2 → 144.9 | 197.0 → 199.7 | 275.6 → 434.3 | 182.7 → 85.1 |
+| ext4, 1 × 64 KiB READ | 193.7 → 150.1 | 208.2 → 204.4 | 239.2 → 268.0 | 148.6 → 75.9 |
+| ext4, 1 × 64 KiB WRITE | 218.6 → 193.7 | 206.9 → 205.6 | 331.0 → 544.0 | 213.4 → 102.5 |
 
-Small tmpfs READ p50 and CPU fall 67%. WRITE CPU falls 29%, but its p50
-barely changes and remains **2.30× TENT**: pending I/O still needs the existing
-worker. Rust 1.85 independently records READ p50 155.4→53.1 µs and CPU
-162.3→58.2 µs; WRITE p50 is 195.6→194.2 µs and CPU 248.5→174.7 µs.
-This is a ready-completion optimization, not removal of the asynchronous owner.
+Rust 1.85: four logical CPUs (AMD EPYC 7763), Ubuntu 24.04, Linux
+7.0.0-1017-azure, rustc 1.85.0 (4d91de4e4 2025-02-17), GCC 13.3.0.
 
-The after `strace` samples report zero thread creations and polling sleeps,
-one setup/enter and about six futex calls per small tmpfs operation. Tracing
-changes the CQE arrival race: it even makes WRITE ready on the caller. That
-is **not** evidence that ordinary WRITEs avoid the worker. The less intrusive
-1.85 CPU profile still puts 6.7% in `pthread_create` and 5.6% in
-`Batch::start_worker` for WRITE; `Batch::status` falls to 1.6%. READ instead
-spends 26.5%/12.8% in verification/pattern generation, outside the timed interval.
-The separate `perf stat` after samples observe 23/250 context switches for
-READ/WRITE, including setup and warmup, versus 139/545 in the before profile.
-Only the untraced same-VM sweeps above support the performance comparison.
+| Workload | OrbiTE p50 µs before → after | TENT p50 µs before → after | OrbiTE p99 µs before → after | OrbiTE CPU µs before → after |
+|---|---:|---:|---:|---:|
+| tmpfs, 1 × 4 KiB READ | 45.3 → 46.5 | 80.9 → 77.5 | 87.6 → 84.2 | 49.6 → 53.3 |
+| tmpfs, 1 × 4 KiB WRITE | 192.8 → 76.1 | 80.1 → 79.3 | 325.8 → 177.0 | 181.3 → 86.6 |
+| tmpfs, 1 × 64 KiB READ | 58.5 → 58.0 | 88.5 → 88.3 | 157.2 → 156.1 | 63.4 → 61.9 |
+| tmpfs, 1 × 64 KiB WRITE | 207.8 → 99.2 | 111.4 → 112.4 | 276.8 → 197.2 | 199.1 → 106.9 |
+| ext4, 1 × 4 KiB READ | 272.5 → 148.6 | 190.9 → 172.2 | 378.9 → 419.2 | 202.3 → 97.4 |
+| ext4, 1 × 4 KiB WRITE | 282.8 → 171.5 | 186.6 → 191.0 | 422.3 → 439.5 | 246.5 → 116.2 |
+| ext4, 1 × 64 KiB READ | 370.4 → 259.1 | 326.0 → 376.2 | 469.1 → 468.9 | 215.5 → 122.7 |
+| ext4, 1 × 64 KiB WRITE | 342.0 → 232.7 | 352.7 → 320.1 | 527.8 → 464.9 | 267.2 → 140.9 |
 
-Regressions remain visible, including in untouched payload paths:
+Tmpfs 4 KiB WRITE p50 falls 51% on stable and 61% on 1.85; CPU falls 53%/52%.
+After p50 is 1.02×/0.96× TENT, respectively. This removes the measured ordinary
+small-WRITE handoff gap on these runs, not every conditional handoff.
 
-- Rust 1.85 ext4 64 KiB READ/WRITE p50 rises 15.0%/17.1%, with nonoverlapping
-  trial ranges; CPU falls 15.6%/19.7%. Moving submission before the worker can
-  change completion/wakeup timing when the CQE is not ready. Its contribution
-  is not isolated: unchanged TENT READ p50 also rises 22.2%, while its WRITE
-  p50 falls 3.0%. Stable's corresponding WRITE p50 rises 3.0%. There is no
-  claim of a general direct-I/O latency improvement.
-- Stable ext4 eight-block gapped READ p99 rises 92.4%, and 64 MiB WRITE p99
-  rises 49.8%, with nonoverlapping ranges. These larger groups keep the worker
-  path; warmed file/cache and VM effects remain unresolved. Gapped 64-block
-  p99 is still 14.9/5.9 ms versus TENT's 2.2/2.6 ms. Tail diagnosis is separate.
-- Stable's unchanged memcpy WRITE control rises 9.9% in p50, and TENT's rises
-  7.1%; those controls do not execute this file owner. Rust 1.85 single TCP
-  WRITE p50 rises 49.3% with overlapping ranges. HP-TCP and SHM payloads also
-  remain unchanged. The tables flag **every** numerical regression: 130/160
-  cases on stable and 119/160 on 1.85 have at least one worse statistic;
-  95/86 of those have overlapping ranges for all four statistics. This shows
-  substantial run variation, not proof that every regression is noise. Shared
-  batch code generation and scheduling contributions are not isolated.
+Regressions remain, with every case reviewed in the linked tables:
+
+- Stable ext4 64 KiB WRITE p99 rises **331→544 µs (+64.4%)**, with separate
+  three-trial ranges (284–403→513–618 µs), while p50 and CPU fall. TENT's
+  unchanged p99 also rises 805→1322 µs (+64.4%), with overlapping ranges.
+  A CQE that misses the 200 µs window can pay that wait before worker handoff;
+  this is a bounded latency tradeoff, not a uniform p99 improvement. The
+  relative contribution of the wait and VM/device variation is not isolated.
+- Other changed-path stable regressions are ext4 4 KiB WRITE p99 +57.6%,
+  ext4 64 KiB READ p99 +12.1%, tmpfs 64 KiB READ p99 +21.0%, and tmpfs 4 KiB
+  READ p50/CPU +9.3%/+4.3%. Their ranges overlap. TENT p99 moves +8.0%,
+  +242.8% and −1.0% for the first three cases; TENT small READ p50/CPU moves
+  −8.5%/−3.4%. Those reference movements do not explain away the regressions.
+- On 1.85, ext4 4 KiB READ/WRITE p99 rises 10.6%/4.1%; tmpfs 4 KiB READ
+  p50/CPU rises 2.6%/7.5%, with throughput down 6.6%. All those ranges
+  overlap. TENT ext4 READ p99 is nearly unchanged and WRITE p99 rises 0.5%; its tmpfs READ
+  p50/CPU moves −4.2%/−4.7%. Changed wake timing remains a possible cost.
+- **101/160 stable and 95/160 1.85 cases** have at least one numerically worse
+  statistic. Only five/three are eligible caller-wait cases. Larger file
+  groups, TCP, HP-TCP, SHM, memcpy and TENT payload code is unchanged. Every
+  slower case lists its trial-range overlap and the unchanged TENT movement
+  where that baseline exists. Sequential-run cache, scheduling, VM and shared
+  code-generation effects are not causally separated. Overlap is descriptive,
+  never proof of noise or a reason to discard a row. No virtual-disk tail
+  investigation or tuning is added here.
+
+The two toolchain jobs are separate VMs and are not pooled. p99 uses only 100
+samples per trial. The timed WRITE is not a durability receipt. These results
+support only this CPU cloud runner and workload; no GPU, RNIC or physical-NVMe
+gain is claimed. A request that misses the bounded window still needs worker
+drain, and the virtual-disk tail remains a P11 hardware-batch limit.
 
 ### HP-TCP watch item recheck
 
@@ -351,7 +363,7 @@ Regressions remain visible, including in untouched payload paths:
 separately repeats all 480 checked rows before and after the TCP-pool change,
 `f0556448` → `edec7937`, with the same S26 parameters. Each pair shares one VM;
 stable uses four EPYC 9V74 logical CPUs and 1.85 uses four EPYC 9V45 logical
-CPUs. These are not the EPYC 7763 small-file pair above.
+CPUs. These are separate from the caller-wait pairs above and are not pooled.
 
 | HP-TCP 1 MiB READ | p50 µs before → after | p99 µs before → after | CPU µs before → after |
 |---|---:|---:|---:|
@@ -470,16 +482,14 @@ The proposed engine explanations can be narrowed:
   105–148 µs in the fixed paired traces, much shorter than the block wait. Removing thread creation
   cannot by itself explain or eliminate the measured millisecond tail.
 
-Small tmpfs WRITE remains a separate cost: the median sample creates a
-batch worker after caller submission, versus zero for READ and TENT. Fixed
-diagnostic WRITE medians are 137/118 µs (stable/MSRV), versus TENT's 81/59 µs;
-these are not replacements for the untraced S26 numbers. Together with the
-earlier `pthread_create`/`Batch::start_worker` stacks, this identifies the
-pending-completion handoff. A later candidate is one short, deadline-capped
-caller CQ wait for the already eligible small request, then handing the same
-owner to the worker if still pending. Expiry would remain a handoff trigger,
-never a release receipt. This needs a separate submission-latency/lifetime
-review and measurement; no wait, pool or new worker is introduced here.
+These historical traces also isolated the small tmpfs WRITE handoff: the
+median sample created a batch worker after caller submission, versus zero
+for READ and TENT. Diagnostic WRITE medians were 137/118 µs (stable/MSRV),
+versus TENT's 81/59 µs; they are not untraced S26 results. The
+[small-file paired pass](#small-file-paired-results) now measures a bounded
+caller CQ wait for the existing eligible request. Expiry still hands the
+same owner to the worker and is never a release receipt. The multi-request
+direct-I/O owner and the historical tail diagnosis remain unchanged.
 
 ### Direct-I/O issue paths and verification load
 
@@ -566,7 +576,8 @@ and Rust-workload checks, and labels affected TENT file rows `V`. TENT CPU/TCP
 rows remain noise references; changed TENT file rows do not. The clean-reset
 numbers below remain evidence for the **earlier verification regime**, not
 proof that OrbiTE issues intrinsically slower direct WRITEs. Current virtual-disk
-tails and the separate small-WRITE handoff remain limits for P11.
+tails remain a P11 limit for the installed NVMe batch. The bounded small-WRITE
+wait is measured separately above; a missed window still needs worker drain.
 
 ### Reset-only paired comparison
 

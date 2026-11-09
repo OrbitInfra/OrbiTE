@@ -159,6 +159,11 @@ if [[ ${2:-} == io-small ]]; then
     transport::io_uring::tests::inline::caller_preflight_rejects_full_sq_before_any_file_io
     transport::io_uring::tests::inline::aligned_small_file_requests_need_no_bounce_allocation
     transport::io_uring::tests::inline::pending_native_io_completes_on_worker_while_caller_only_computes
+    transport::io_uring::tests::inline::wait::late_small_cqe_waits_on_caller_without_a_worker_on_tmpfs_and_direct_ext4
+    transport::io_uring::tests::inline::wait::caller_wait_is_bounded_by_one_window_the_request_deadline_and_three_enters
+    transport::io_uring::tests::inline::wait::caller_wait_interruptions_errors_and_short_cqe_never_resubmit
+    transport::io_uring::tests::inline::wait::expired_caller_window_drop_and_engine_close_keep_the_drain_owner
+    transport::io_uring::tests::inline::wait::cancel_racing_the_late_receipt_keeps_bytes_and_retires_once
     transport::io_uring::tests::short_enter_flushes_only_the_tail_or_drains_the_accepted_prefix
     transport::io_uring::tests::group_report_counts_only_the_successful_prefix_for_concurrent_file_requests
     transport::io_uring::tests::file_io_shares_qos_queue_deadline_and_close_but_needs_no_receiver_credit
