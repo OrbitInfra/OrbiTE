@@ -19,10 +19,9 @@ do not turn this file into a second status diary.
   cross-node reuse come first; P/D is a later integration target, not a current
   qualification claim. The upstream path is an in-tree NIXL backend, described
   in the [design proposal](docs/nixl-backend.md). Follow the
-  [current work order](docs/completion-plan.md#current-focus): direct-I/O WRITE
-  tail, small-WRITE caller wait, then plugin implementation after the maintainer
-  approves the upstream design issue. Do not post that issue or open upstream
-  plugin PRs without authorization.
+  [current work order and plugin prerequisites](docs/completion-plan.md#current-focus).
+  Do not post, comment, fork or open anything upstream for this design;
+  the maintainer handles external posts.
 - Architecture, behavior and module boundaries follow Mooncake TENT as a design
   reference, frozen at `OrbitInfra/Mooncake@e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c`
   (v0.3.14), directory `mooncake-transfer-engine/tent/`. README, docs site and

@@ -5,11 +5,13 @@ buffer, endpoint and worker boundaries, implemented as Rust resource owners.
 The [product positioning](https://github.com/OrbitInfra/OrbiTE#overview) defines
 the consumer and non-goal boundary. The [NIXL backend design](nixl-backend.md)
 proposes an upstream C++ plugin over a purpose-built native boundary to these
-owners, with no second coordinator. Its release/deregistration contract needs
-upstream agreement; there is no plugin implementation or qualification yet.
-The [current work order](completion-plan.md#current-focus) puts the measured CPU
-performance fixes first. Installed GDR/NVLink qualification remains a
-prerequisite for P/D acceptance, not for reviewing the design.
+owners, with no second coordinator. It follows upstream's explicit-cancel
+direction; terminal status requires physical retirement. Permanent quarantine
+and borrowed-allocation lifetime still need upstream agreement. There is no
+plugin implementation or qualification yet.
+The [current work order](completion-plan.md#current-focus) defines the plugin
+prerequisites. Installed GPU/RDMA results on the current artifact precede the
+formal backend RFC; this local design review adds no qualification.
 The beta.1 [Rust surface review](rust-api.md#beta1-freeze-candidate) and
 [Python surface](python.md#surface-and-defaults) define the API freeze
 boundary. Public enums and field records are non-exhaustive except binary
