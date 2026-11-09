@@ -96,7 +96,7 @@ release speed guarantees.
 | Scattered 64 × 4 KiB TCP READ / WRITE | p50 **8.59 → 4.23 / 9.33 → 6.30 ms**; TENT after **6.18 / 6.07 ms**. WRITE remains 3.7% slower than TENT |
 | Single 4 KiB TCP READ | CPU **370 → 190 µs** per batch; TENT after **256 µs** |
 | 4 KiB buffered tmpfs READ / WRITE | p50 **156 → 51 / 197 → 193 µs**, or **0.61× / 2.30×** TENT after. CPU **166 → 55 / 250 → 178 µs**; WRITE latency remains a limit |
-| Gapped ext4 READ / WRITE | after p99 **14.9 / 5.9 ms**, versus **2.2 / 2.6 ms** for TENT. [Tail tracing](benchmarks.md#ext4-tail-diagnosis) locates long waits before block-device completion; their underlying cause and the between-implementation gap remain unresolved. Existing worker path retained |
+| Gapped ext4 READ / WRITE | **Old-harness** p99 **14.9 / 5.9 ms**, versus TENT **2.2 / 2.6 ms**, includes reset writeback. [Paired reset tracing](benchmarks.md#ext4-tail-diagnosis) removes that interference, but still observes long direct-I/O waits. The residual tail remains open; production owners are unchanged |
 
 The [original S26 evidence](qualification.md#cpu-benchmark-evidence) keeps its
 historical values and labels. The [TCP results](benchmarks.md#paired-results-and-regressions)
@@ -108,22 +108,25 @@ streams retire without replay, and uncertain cleanup retains its owners.
 One small host-file operation can now finish on its caller when its CQE is
 ready. Pending I/O keeps the same ring and moves to the existing worker;
 uncertain handoff retains all owners. No polling contract or ring bound changes.
-Rust 1.85's 64 KiB ext4 READ/WRITE p50 regresses 15%/17% while CPU falls
+In the **old-harness** small-file pair, Rust 1.85's 64 KiB ext4 READ/WRITE
+p50 regresses 15%/17% while CPU falls
 16%/20%; the contribution of changed wake timing versus file/VM variation is
 not isolated. Larger file groups keep their worker path. Per-sample traces
-rule out extra rings, bounce allocation and drain-loop sleeps for the aligned
-gapped case; they do not justify a production tail fix. The subsequent
-[unchanged-code control](benchmarks.md#unchanged-code-paired-control) passes
-every row but still varies substantially: stable gapped READ/WRITE p99 is
-5.42→6.54 / 2.52→4.49 ms, with TENT also moving. Small tmpfs WRITE still
-usually creates a worker after the caller sees a pending CQE; its control-pair
-p50 is 199→191 µs versus TENT's 84 µs. These are unresolved limits, not fixes.
+rule out extra rings, bounce allocation and drain-loop sleeps for aligned
+gaps. They also confirm that the old truncate/rewrite reset contaminated
+virtually every ext4 window. Both harnesses now preallocate once and finish
+in-place reset writes with `fdatasync` before timing. That removes reset
+writeback; it does not eliminate all long direct-I/O waits or establish their
+underlying cause. The earlier [unchanged-code control](benchmarks.md#unchanged-code-paired-control)
+remains labeled old-harness. Small tmpfs WRITE still usually creates a worker
+after the caller sees a pending CQE; its old control-pair p50 is 199→191 µs
+versus TENT's 84 µs. The caller-wait candidate is deferred.
 There is one exclusive direct-TCP lane per peer, without a concurrent-caller performance
 claim. The separate Rust 1.85 pair used a newer EPYC 9V45: scattered TCP
 improved, but 64 MiB READ p50/p99 regressed 2.8%/10.7% while CPU fell 4.2%.
 Blocking wakeups can trade latency for CPU; the exact contribution is not isolated.
-p99 uses only 100 samples per trial, and files were warmed
-without fsync. These results say nothing about RNIC, GPU or physical SSD
+p99 uses only 100 samples per trial. Timed WRITEs still exclude a durability
+barrier; reset synchronization is outside the interval. These results say nothing about RNIC, GPU or physical SSD
 performance.
 
 Timeout, cancellation and terminal status remain distinct from a physical

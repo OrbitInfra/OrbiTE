@@ -60,7 +60,7 @@ def window_io(requests, begin, end, submit, pid, op, payload):
                 window_other_write_bytes=sum(r['bytes'] for r in writes),
                 window_other_writes=len(writes),
                 window_carry_in_writes=sum(r['issue_ns'] < begin for r in writes),
-                window_kernel_writes=sum(r['pid'] != pid for r in writes),
+                window_other_process_writes=sum(r['pid'] != pid for r in writes),
                 window_flushes=sum(r['flush'] for r in overlap),
                 window_fua=sum(r['fua'] for r in overlap),
                 window_discards=sum(r['op'] == 'D' for r in other),
@@ -252,7 +252,7 @@ def controls():
           (45, 0, 0, 'block:block_rq_complete', '8,0 FWFS () 200 + 8 0x0 [0]'),
           (50, 0, 0, 'block:block_rq_complete', '8,0 RS () 108 + 8 0x0 [0]')]
     r = window_io(block_requests(es), 10, 60, 20, 1, 'R', 4096)
-    if (r['window_other_writes'], r['window_carry_in_writes'], r['window_kernel_writes'],
+    if (r['window_other_writes'], r['window_carry_in_writes'], r['window_other_process_writes'],
         r['window_other_write_bytes'], r['window_flushes'], r['window_fua']) != (2, 1, 1, 12288, 1, 1):
         raise ValueError('reset carry-in or kernel flush/FUA was lost')
     clean = window_io(block_requests([es[1], es[-1]]), 10, 60, 20, 1, 'R', 4096)

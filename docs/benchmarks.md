@@ -373,69 +373,91 @@ READ p50 changes of −3.6%/−17.8%, also with overlapping ranges.
 
 ## Ext4 tail diagnosis
 
-The evidence below used the **old harness**: each sample truncated and rewrote
-the file through the page cache without syncing the reset. Its ext4 timings
-include reset interference and must not be treated as isolated transfer cost.
+The **old harness** truncated and rewrote the file through the page cache
+before every sample without syncing the reset. S26, the TCP/small-file tables
+above and the unchanged-code control below therefore include reset interference
+in their ext4 timings; they do not isolate transfer cost. Both harnesses now
+preallocate once and finish an in-place `pwrite` plus `fdatasync` before each
+window. The production owners, timed operations and byte/gap/guard checks are
+unchanged. Buffered reset was chosen to keep verification simple while moving
+its writeback and allocation work outside the measured interval.
 
-[Run 42521765043](https://github.com/OrbitInfra/OrbiTE/actions/runs/42521765043)
-profiles `7e40c7b`, with production sources identical to `4f6bd35c`, against
-frozen TENT `e1ea5d31`. Each toolchain runs 1,000 byte-checked samples plus
-three warmups for twenty implementation/filesystem/direction/shape cases.
-Both four-vCPU Ubuntu 24.04 runners use Linux 7.0.0-1017-azure; stable
-(Rust 1.99.1) runs on Xeon Platinum 8573C, and Rust 1.85 on EPYC 7763.
-They are different hosts; do not pool their absolute times.
+[Paired trace run 42536940169](https://github.com/OrbitInfra/OrbiTE/actions/runs/42536940169)
+compares old harness `521861db` with fixed harness `19ec2009`; both have the
+production sources of `4f6bd35c`, against frozen TENT `e1ea5d31`. Each phase
+runs twenty implementation/filesystem/direction/shape cases, with 1,000
+byte-checked samples and three warmups each. Each old/fixed pair shares one
+four-vCPU Ubuntu 24.04 / Linux 7.0.0-1017-azure VM: stable (Rust 1.99.1) uses
+EPYC 9V74, and Rust 1.85 uses EPYC 9V45. These are different hosts; do not
+pool their absolute times.
 
 `benches/run.py --tail-profile-only` records monotonic sample windows and
-system-wide io_uring, block-I/O, thread-creation and scheduler tracepoints.
-The collector writes to tmpfs and copies evidence to ext4 only after each
-benchmark exits. An earlier exploratory recording shared the measured ext4
-device and is excluded from the figures here. Raw `perf` data, kernel event
-formats, commands and sample windows remain in `cpu-bench-*` artifacts.
-Run `python3 benches/analyze_io_tail.py "$OUT/orbite-profiles/tail"` to produce
-per-sample submit/first-CQE/last-CQE/return, worker/caller wake and block timelines.
-It rejects missing ring/CQE receipts and incomplete scheduler pairs. Block
-events have no SQE identity: the analysis pairs exact device/operation/sector/
-length receipts issued by the measured process and reports unmatched events.
-That is correlation, not an invented per-SQE block receipt.
+system-wide io_uring, block-I/O, thread-creation, `fdatasync` and scheduler
+tracepoints. The collector writes to tmpfs and copies evidence to ext4 only
+after each benchmark exits. Raw `perf` data, event formats, commands and
+windows remain in `cpu-bench-*` artifacts. Run
+`python3 benches/analyze_io_tail.py "$OUT/orbite-profiles/tail"` for per-sample
+submit/first-CQE/last-CQE/return, worker/caller wake and block timelines.
 
-The table describes **diagnostic traces**, not benchmark performance. Each
-cell is the median within the slowest ten samples of a 1,000-sample case.
-CQE timestamps are kernel publication, not userspace consumption.
-Issuer runnable time covers observed wake/preemption intervals after its first
-scheduling; initial thread creation/scheduling is included in before-first-SQE
-time and the fork/switch timeline. Block completion means the kernel event,
-not a timestamp from physical hardware.
+The analyzer pairs device/flags/sector/length receipts across the **whole
+capture**, including writes issued before a window that finish inside it.
+It counts same-device traffic from other processes too. Direct candidates
+must match the benchmark process, requested operation and synchronous block
+flags after SQE submission, and their total bytes must equal the payload.
+Missing ring/CQE or scheduler receipts and mismatched direct bytes fail the
+analysis. Block events have no SQE identity: this is correlation, not an
+invented per-SQE receipt. Extra traffic is reported without assuming that all
+of it belongs to the benchmark. Prefix-flush and FUA flags are counted
+separately; the analyzer has negative controls for both and for carry-in writes.
 
-| 64 × 4 KiB gapped | Batch µs | Longest paired block I/O µs | Issuer blocked / runnable µs | Last block completion → last CQE µs | Last CQE → return µs |
-|---|---:|---:|---:|---:|---:|
-| Stable OrbiTE READ | 6,361 | 5,758 | 5,685 / 30 | 2.8 | 266 |
-| Stable OrbiTE WRITE | 5,169 | 1,993 | 4,250 / 62 | 18.0 | 234 |
-| Stable TENT READ | 8,094 | 2,027 | 7,118 / 86 | 3.1 | 994 |
-| Stable TENT WRITE | 6,532 | 3,890 | 5,570 / 77 | 16.3 | 707 |
-| Rust 1.85 OrbiTE READ | 27,175 | 26,288 | 25,866 / 18 | 9.7 | 255 |
-| Rust 1.85 OrbiTE WRITE | 21,679 | 20,786 | 20,556 / 19 | 43.1 | 265 |
-| Rust 1.85 TENT READ | 2,657 | 1,605 | 1,559 / 90 | 13.9 | 426 |
-| Rust 1.85 TENT WRITE | 2,439 | 1,305 | 1,233 / 65 | 20.0 | 355 |
+Each row below covers 8,000 ext4 windows per phase (4,000 READ and 4,000 WRITE).
+Counts are **old → fixed**. Extra writes exclude the measured direct payload;
+carry-in means the write was already pending at window start.
 
-All 64 block issues pair with completions in every measured 64-block sample.
-The longest delays therefore precede device completion, not owner cleanup.
-For example, stable READ sample 697 lasts 8,691 µs: first SQE at +156,
-first CQE at +628, final block completion at +8,396 and final CQE 1.7 µs
-later. Worker wake-to-run never exceeds 6.6 µs; caller return follows the
-last CQE by 293 µs. On 1.85, eight-block gapped/contiguous READ slow-tail
-medians are 1,332/1,047 µs, versus TENT's 1,328/1,687 µs. These traces
-locate a storage-side wait but do not distinguish virtual-device service,
-host scheduling or buffered-reset/direct-I/O coherence as its underlying
-cause. Nor do they explain why the implementations differ on the EPYC run.
-The tail is **not declared fixed**; no production tuning is justified by this
-evidence alone.
+| Toolchain / implementation | Extra writes during READ | Extra writes during WRITE | Carry-in writes, both directions | Flushes / FUA, both phases |
+|---|---:|---:|---:|---:|
+| Stable OrbiTE | 6,001 → 1 | 6,001 → 1 | 12,000 → 1 | 0 / 0 |
+| Stable TENT | 6,001 → 1 | 6,000 → 0 | 12,000 → 0 | 0 / 0 |
+| Rust 1.85 OrbiTE | 6,000 → 0 | 6,001 → 0 | 12,000 → 0 | 0 / 0 |
+| Rust 1.85 TENT | 6,000 → 2 | 5,999 → 0 | 11,999 → 0 | 0 / 0 |
+
+The old reset overlaps 31,999 of 32,000 measured ext4 windows. After the fix,
+**no reset writeback overlaps a window**. The five remaining writes are
+4 KiB each from other processes (three stable, two MSRV); one stable write
+straddles window start. There are three discard requests per fixed phase,
+zero flush/FUA requests and zero unmatched overlapping issues. This confirms
+a measurement artifact in the old harness, but does not explain every tail.
+
+The following values are **diagnostic traces**, not benchmark p99s: each is
+the median of the slowest ten samples in its 1,000-sample case. CQE and block
+completion mean kernel events, not physical hardware timestamps. Runnable
+time covers observed wake/preemption intervals after the issuer first runs;
+initial thread creation/scheduling is in the before-first-SQE timeline.
+
+| 64 × 4 KiB gapped | Batch ms, old → fixed | Fixed longest block wait ms | Fixed issuer blocked / runnable µs | Fixed last block → last CQE µs |
+|---|---:|---:|---:|---:|
+| Stable OrbiTE READ | 30.30 → 29.11 | 28.41 | 28,185 / 61 | 17.2 |
+| Stable OrbiTE WRITE | 75.46 → 23.79 | 23.06 | 23,160 / 9 | 20.6 |
+| Stable TENT READ | 101.27 → 6.60 | 6.00 | 5,523 / 131 | 6.3 |
+| Stable TENT WRITE | 4.98 → 4.32 | 3.59 | 3,538 / 66 | 15.7 |
+| Rust 1.85 OrbiTE READ | 30.01 → 32.30 | 31.72 | 31,433 / 24 | 4.9 |
+| Rust 1.85 OrbiTE WRITE | 5.97 → 31.81 | 31.31 | 31,252 / 8 | 10.0 |
+| Rust 1.85 TENT READ | 26.22 → 24.98 | 24.13 | 23,257 / 368 | 6.1 |
+| Rust 1.85 TENT WRITE | 4.67 → 4.19 | 3.16 | 3,411 / 61 | 15.1 |
+
+In particular, the fixed MSRV OrbiTE gapped WRITE case has no extra writes,
+flushes, FUA or discards in any of its 1,000 windows, yet its long tails contain
+31 ms block waits. Thus the clean reset removes a proven confounder; it does
+**not** establish that the whole S26 tail or the implementation gap was a
+harness artifact. The residual direct-I/O tail remains open. No production
+tuning or physical-SSD claim is justified by these traces.
 
 The proposed engine explanations can be narrowed:
 
 - Every measured gapped batch uses **one ring, 64 SQEs and one submitting
-  enter** in both implementations. Stable OrbiTE adds a median five
-  zero-submission waits; 1.85 adds zero READ / one WRITE. TENT polls the mapped
-  CQ. These waits never resubmit an SQE.
+  enter** in both implementations. In the fixed slow-tail
+  samples, OrbiTE uses a median 2–4 enters including zero-submission waits;
+  TENT uses one submitting enter and polls the mapped CQ. These waits never resubmit an SQE.
 - All 64-block CQEs are published on the submitting batch worker. There is
   no caller-to-worker ring handoff in this case. Worker drain has **zero
   nanosleeps**; the benchmark caller still uses its documented status backoff.
@@ -445,12 +467,12 @@ The proposed engine explanations can be narrowed:
   guards for READ/WRITE, 8/64 blocks, contiguous/gapped, ext4/tmpfs.
 - OrbiTE creates **one batch worker** per multi-request submission; TENT
   creates none. Before-first-SQE time in OrbiTE's slow 64-block samples is
-  152–171 µs, much shorter than the device wait. Removing thread creation
+  105–148 µs in the fixed paired traces, much shorter than the block wait. Removing thread creation
   cannot by itself explain or eliminate the measured millisecond tail.
 
-Small tmpfs WRITE remains a separate cost: 994/1,000 stable and 992/1,000
-1.85 samples create a batch worker after caller submission, versus zero for
-READ and TENT. Diagnostic WRITE medians are 123/229 µs versus TENT's 58/111 µs;
+Small tmpfs WRITE remains a separate cost: the median sample creates a
+batch worker after caller submission, versus zero for READ and TENT. Fixed
+diagnostic WRITE medians are 137/118 µs (stable/MSRV), versus TENT's 81/59 µs;
 these are not replacements for the untraced S26 numbers. Together with the
 earlier `pthread_create`/`Batch::start_worker` stacks, this identifies the
 pending-completion handoff. A later candidate is one short, deadline-capped
@@ -459,10 +481,23 @@ owner to the worker if still pending. Expiry would remain a handoff trigger,
 never a release receipt. This needs a separate submission-latency/lifetime
 review and measurement; no wait, pool or new worker is introduced here.
 
+### Reset-only paired comparison
+
+The [untraced paired run](https://github.com/OrbitInfra/OrbiTE/actions/runs/42536943466)
+uses `521861db` → `19ec2009` on one VM per toolchain with the original S26
+480-row sweeps: three trials, 100 samples, three warmups, two configured
+workers, all sizes/shapes and byte checks. Production sources are identical.
+The complete old→fixed tables for both implementations, including every ext4
+row and numerical regression, are in the [PR handoff](https://github.com/OrbitInfra/OrbiTE/pull/184).
+Reproduce them with `benches/compare.py BEFORE AFTER --changed-profile none --reset-comparison`.
+That flag permits exactly the documented reset change and changed harness
+hashes; all other workload/host/CPU checks remain. Instantaneous clock readings
+are reported separately, not normalized. Raw rows remain outside Git.
+
 ### Unchanged-code paired control
 
 The [paired control run](https://github.com/OrbitInfra/OrbiTE/actions/runs/42522826931)
-uses `7e40c7b` → `23f6911` on each toolchain: identical production sources and
+uses the **old harness**, `7e40c7b` → `23f6911`, on each toolchain: identical production sources and
 workload hashes, with the ordinary S26 three trials, 100 samples and byte checks.
 All **480 rows per side passed**. The complete
 [stable](https://github.com/OrbitInfra/OrbiTE/pull/184#issuecomment-6728129888) and
