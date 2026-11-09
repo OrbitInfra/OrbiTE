@@ -54,22 +54,20 @@ pub enum TransferOp {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum Transport {
-    Tcp,
+    Tcp = 0,
     /// Persistent CPU socket lanes with request IDs and framed READ/WRITE replies.
-    HpTcp,
+    HpTcp = 1,
     /// Same-host CPU copies through source-granted shared mappings.
-    Shm,
-    Rdma,
-    /// Opt-in host RMA through libfabric.
-    Fabric,
-    Nvlink,
-    Mnnvl,
+    Shm = 2,
+    Rdma = 3,
+    Nvlink = 5,
+    Mnnvl = 6,
     /// Linux io_uring for local regular files and registered memory.
-    IoUring,
+    IoUring = 7,
     /// Local cuFile batch I/O.
-    Gds,
+    Gds = 8,
     /// Choose the first eligible transport in the matched policy.
-    Unspec,
+    Unspec = 9,
 }
 
 impl Transport {
@@ -85,7 +83,6 @@ impl Transport {
             Self::IoUring => 6,
             Self::Tcp => 7,
             Self::HpTcp => 13,
-            Self::Fabric => 16,
         }
     }
     /// Return a transport represented by a Rust owner. Installation is checked separately.
@@ -100,7 +97,6 @@ impl Transport {
             6 => Self::IoUring,
             7 => Self::Tcp,
             13 => Self::HpTcp,
-            16 => Self::Fabric,
             _ => return None,
         })
     }
@@ -372,8 +368,6 @@ pub struct EngineStats {
     pub requester_workers: usize,
     #[cfg(feature = "rdma")]
     pub rdma: Option<crate::transport::rdma::RdmaStats>,
-    #[cfg(feature = "fabric")]
-    pub fabric: Option<crate::FabricStats>,
     pub retained_regions: usize,
     pub retained_bytes: usize,
     pub active_source_operations: usize,
@@ -437,12 +431,6 @@ impl TransferEngine {
             .map(|qos| QosContractResolver::new(qos, runtime_queue.as_ref()))
             .transpose()?;
         let epoch = SourceEpoch::generate()?;
-        #[cfg(feature = "fabric")]
-        let fabric = config
-            .fabric
-            .clone()
-            .map(crate::transport::fabric::FabricTransport::new)
-            .transpose()?;
         let layout = std::sync::Arc::new(Self::qp_layout(&config)?);
         #[cfg(feature = "cuda")]
         let proxy = crate::runtime::proxy_manager::ProxyManager::new(
@@ -498,8 +486,6 @@ impl TransferEngine {
             .transpose()?;
         let mut metadata = SegmentMetadata {
             tcp_disabled: !config.tcp,
-            #[cfg(feature = "fabric")]
-            libfabric: fabric.is_some(),
             hp: hp_listener.as_ref().map(|(_, end)| Arc::new(*end)),
             shm: config.shm.enable.then(|| {
                 Arc::new(crate::transport::shm::wire::Manifest {
@@ -551,8 +537,6 @@ impl TransferEngine {
             })
             .transpose()?;
         let source = Arc::new(Source {
-            #[cfg(feature = "fabric")]
-            fabric,
             #[cfg(target_os = "linux")]
             shm,
             metadata,
@@ -913,8 +897,6 @@ impl TransferEngine {
             .lock()
             .map_err(|_| Error::Internal("batch lock poisoned"))?;
         Ok(EngineStats {
-            #[cfg(feature = "fabric")]
-            fabric: self.source.fabric.as_ref().map(|f| f.stats()),
             #[cfg(feature = "io-uring")]
             io_uring: self.io_uring.as_ref().map(|io| io.stats()),
             unresolved_policy_devices: self.selector.as_ref().map_or(0, |s| s.unresolved_devices),
@@ -1194,7 +1176,6 @@ impl TransferEngine {
             Transport::Nvlink => self.source.metadata.nvlink.is_some(),
             #[cfg(feature = "cuda")]
             Transport::Mnnvl => self.source.metadata.mnnvl.is_some(),
-            Transport::Fabric => self.source.metadata.libfabric,
             #[cfg(feature = "gds")]
             Transport::Gds => self.gds.is_some(),
             #[cfg(feature = "io-uring")]
@@ -2460,10 +2441,6 @@ impl TransferEngine {
         if let Some(hp) = &self.hp_tcp {
             hp.stop()?;
         }
-        #[cfg(feature = "fabric")]
-        if let Some(fabric) = &self.source.fabric {
-            fabric.close()?;
-        }
         #[cfg(feature = "gds")]
         self.source.registry.close_gds_buffers()?;
         #[cfg(feature = "cuda")]
@@ -2530,8 +2507,6 @@ pub(crate) fn remaining(deadline: Instant) -> Result<Duration> {
 }
 
 pub(crate) struct Source {
-    #[cfg(feature = "fabric")]
-    pub(crate) fabric: Option<Arc<crate::transport::fabric::FabricTransport>>,
     #[cfg(target_os = "linux")]
     pub(crate) shm: Option<crate::transport::shm::ShmTransport>,
     pub(crate) metadata: SegmentMetadata,

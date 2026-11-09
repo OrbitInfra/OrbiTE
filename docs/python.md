@@ -114,6 +114,11 @@ objects are not release receipts. Explicit unregister can report
 `RemoteSegment.close()` releases that handle, not the peer identity; Rust's
 per-peer retirement API remains available to Rust consumers.
 
+`Transport` contains `UNSPEC`, `TCP`, `HP_TCP`, `SHM`, `RDMA`, `NVLINK`,
+`MNNVL`, `IO_URING` and `GDS`. The removed `FABRIC` value 5 is unknown;
+remaining numeric values are unchanged. A known transport that is not built
+still reports `UnavailableError` when requested.
+
 ## Packaging and evidence
 
 The Python-only crate uses PyO3 and maturin. A CPython-specific wheel rather

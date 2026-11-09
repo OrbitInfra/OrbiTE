@@ -59,7 +59,6 @@ pub fn version_snapshot() -> Snapshot {
                 ("mnnvl", cfg!(feature = "cuda")),
                 ("cuda", cfg!(feature = "cuda")),
                 ("rdma", cfg!(feature = "rdma")),
-                ("fabric", cfg!(feature = "fabric")),
                 ("io-uring", cfg!(feature = "io-uring")),
                 ("gds", cfg!(feature = "gds")),
                 ("metrics", cfg!(feature = "metrics")),

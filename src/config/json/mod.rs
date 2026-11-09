@@ -47,7 +47,6 @@ impl EngineConfig {
                         | "hp_tcp"
                         | "shm"
                         | "rdma"
-                        | "fabric"
                         | "io_uring"
                         | "io_uring_enabled"
                         | "nvlink"
@@ -74,14 +73,6 @@ impl EngineConfig {
             match key.as_str() {
                 "tcp" => config.tcp = field(&key, value)?,
                 "hp_tcp" => config.hp_tcp = object_field(&key, value)?,
-                #[cfg(feature = "fabric")]
-                "fabric" => {
-                    config.fabric = if value.is_null() {
-                        None
-                    } else {
-                        Some(object_field(&key, value)?)
-                    }
-                }
                 #[cfg(feature = "io-uring")]
                 "io_uring" => config.io_uring = object_field(&key, value)?,
                 #[cfg(feature = "io-uring")]

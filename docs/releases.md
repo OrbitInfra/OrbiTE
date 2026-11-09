@@ -33,11 +33,13 @@ from `7cc48490`. The beta.1 version is spelled `0.1.0b1` on PyPI.
 - The S23 TENT wire interoperability profile was removed. Both peers run the
   same OrbiTE build; no autodetection or downgrade is available. The frozen v0.3.14 CPU oracle remains as a behavior baseline. See the
   [wire and consumer boundary](tent-parity.md#wire-and-consumer-boundaries).
-- Opt-in libfabric is implemented with real CPU bytes on the software TCP
-  provider. MPComm is deferred: no consumer and no available provider;
-  it has no public Python transport identity.
-- S26 adds verified size/batch sweeps against frozen TENT and 24 executable
-  CPU fault controls, including real requester kills during partial TCP and
+- FABRIC/libfabric is removed and excluded by design: NVIDIA platforms only;
+  AWS EFA is a non-goal. The host-only path could not move GPU KV directly.
+  Its Cargo feature, config/stats, Rust/Python transport and metric series are
+  removed; remaining transport values do not change. CUDA fabric handles,
+  MNNVL and EGM remain. MPComm is deferred: no consumer or available provider.
+  See the [scope and revisit condition](tent-parity.md#upstream-transport-inventory-and-selected-scope).
+- S26 adds verified size/batch sweeps against frozen TENT and CPU fault controls, including real requester kills during partial TCP and
   HP-TCP WRITEs. Raw measurements stay outside Git. No tuning is included.
 - The [product positioning](https://github.com/OrbitInfra/OrbiTE#overview)
   centers OrbitKV cache tiering and cross-node KV reuse. P/D is a later NIXL
@@ -77,11 +79,10 @@ the 480 byte-checked rows and sample counts are unchanged.
 
 ### Known limitations
 
-Every **current GPU, RDMA, GDS, MNNVL/EGM, EFA and CXL profile is unqualified**.
+Every **current GPU, RDMA, GDS, MNNVL/EGM and CXL profile is unqualified**.
 This includes GPUDirect, staging, caller-stream local copies, NVLink and Python
 CUDA exporters. Older accepted H20/RoCE artifacts do not qualify this release.
-Physical two-host TCP and physical multi-rail remain unqualified. CPU shims and
-software libfabric TCP-provider tests are not device evidence. Required installed
+Physical two-host TCP and physical multi-rail remain unqualified. CPU shim tests are not device evidence. Required installed
 gates remain in the [verification queue](qualification.md#verification-queue).
 
 The profile-guided TCP and small-file passes repeat S26 on four-vCPU EPYC 7763

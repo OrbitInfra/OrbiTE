@@ -162,7 +162,7 @@ def main():
                             print(json.dumps({k: v for k, v in record.items() if k not in ("samples_ns", "cpu_ns")}), flush=True)
                         finally:
                             path.unlink(missing_ok=True)
-    for backend in ("GPU", "RDMA", "GDS", "EFA"):
+    for backend in ("GPU", "RDMA", "GDS"):
         with (out / "results.jsonl").open("a") as f: f.write(json.dumps({"profile": backend, "status": "not run (hardware)"})+"\n")
     manifest.update(status="passed", verified_rows=len(rows), reporter_negative_controls=5, guard_negative_controls=2)
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2)+"\n")

@@ -79,11 +79,7 @@ reasons are `submit`, `poll`, `timeout` and `canceled`.
 | `orbite_stage_queue_wait_us`, `orbite_stage_dispatch_us`, `orbite_stage_transport_us` | Histogram | `transport`. Admission to dispatch, dispatch to first attempt, and execution through logical completion. |
 | `orbite_transport_attempt_latency_us` | Histogram | `transport,operation`. Elapsed time for one attempt. |
 
-Fabric uses the same logical/attempt families with the `fabric` label. Its
-short-lived exact-range MRs are sampled separately as
-`orbite_fabric_registered_bytes` and `orbite_fabric_memory_regions`; posted/retained
-slices, peer addresses, CQ errors and quarantine events also expose their real
-owners. The registration-lifetime buffer gauge does not count these grants.
+The removed FABRIC transport has no metric label or owner series.
 
 io_uring uses the published memory without registering it with the provider.
 Host memory can also take a GDS or pinned NVLink path without creating a cuFile

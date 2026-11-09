@@ -6,18 +6,12 @@ fn main() {
             cfg!(any(
                 feature = "cuda",
                 feature = "rdma",
-                feature = "io-uring",
-                feature = "fabric"
+                feature = "io-uring"
             )),
         ),
         (
             "native_dma_lease",
-            cfg!(any(
-                feature = "rdma",
-                feature = "io-uring",
-                feature = "gds",
-                feature = "fabric"
-            )),
+            cfg!(any(feature = "rdma", feature = "io-uring", feature = "gds")),
         ),
     ] {
         println!("cargo:rustc-check-cfg=cfg({name})");
@@ -30,42 +24,14 @@ fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux") {
         #[cfg(feature = "rdma")]
         build_port_shim();
-        #[cfg(feature = "fabric")]
-        build_fabric_shim();
     } else if cfg!(any(
         feature = "cuda",
         feature = "rdma",
         feature = "io-uring",
-        feature = "gds",
-        feature = "fabric"
+        feature = "gds"
     )) {
         println!("cargo:rustc-cfg=unsupported_native_target");
     }
-}
-
-#[cfg(feature = "fabric")]
-fn build_fabric_shim() {
-    const HEADER: &str = "src/transport/fabric/sys/bridge.h";
-    const SOURCE: &str = "src/transport/fabric/sys/bridge.c";
-    println!("cargo:rerun-if-changed={HEADER}");
-    println!("cargo:rerun-if-changed={SOURCE}");
-    cc::Build::new()
-        .file(SOURCE)
-        .flag("-std=c11")
-        .compile("orbite_fabric_bridge");
-    let output =
-        std::path::PathBuf::from(std::env::var_os("OUT_DIR").expect("Cargo supplies OUT_DIR"));
-    bindgen::Builder::default()
-        .header(HEADER)
-        .allowlist_function("orbite_fi_.*")
-        .allowlist_type("orbite_fi_.*")
-        .derive_default(false)
-        .layout_tests(false)
-        .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
-        .generate()
-        .expect("generate libfabric bridge ABI")
-        .write_to_file(output.join("fabric.rs"))
-        .expect("write libfabric bridge ABI");
 }
 
 // Build identity is diagnostic metadata only. Neither the wire nor feature selection uses it.

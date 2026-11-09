@@ -21,7 +21,6 @@ class Transport(_IntEnum):
     HP_TCP = 2
     SHM = 3
     RDMA = 4
-    FABRIC = 5
     NVLINK = 6
     MNNVL = 7
     IO_URING = 8

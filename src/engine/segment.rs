@@ -78,12 +78,6 @@ impl TransferEngine {
                 failure.get_or_insert(e);
             }
         }
-        #[cfg(feature = "fabric")]
-        if let Some(fabric) = &self.source.fabric {
-            if let Err(e) = fabric.close_peer(peer) {
-                failure.get_or_insert(e);
-            }
-        }
         // Shared registration MRs, contexts and worker pools belong to the
         // engine, not to this peer.
         failure.map_or(Ok(()), Err)

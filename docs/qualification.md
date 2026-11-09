@@ -114,24 +114,6 @@ RDMA bootstrap has source codec/rejection controls only and remains unavailable
 and unqualified; the native OrbiTE RDMA installed gates do not establish TENT
 wire interoperability.
 
-## Libfabric host DRAM
-
-The `CI` workflow's `fabric` and full-feature fabric rows install libfabric and
-set `FI_PROVIDER=tcp` and `ORBITE_REQUIRE_FABRIC=1` on stable and Rust 1.85.
-`two_process_provider_read_write_with_guards` moves real READ/WRITE payloads
-across child processes with unaligned and MR-straddling ranges. The native
-controls check aliases, named selection, queued cancellation, source permissions,
-peer retirement/restart and immediate reuse after successful completion.
-Fallible-table controls hold real CQEs, reject partial posts, inject CQ errors
-and make close/remove fail once; they assert retained backing and charges.
-The fabric ownership suite repeats 50 times per toolchain with the suite's
-thread count. The ignored child entry is invoked by its parent tests.
-
-Only this software TCP-provider CPU profile is covered by a passing run.
-EFA is **Implemented; installed profile unqualified**. The packaged gate is
-compiled in CI but its hardware command below is not run. No result claims
-EFA DMA, fabric performance or physical multi-rail qualification.
-
 ## Python wheels
 
 **Qualified on Linux CI for the OrbiTE CPU/TCP API**, with the exact current
@@ -249,7 +231,6 @@ external output directory; failed runs are kept.
 | Per-peer RDMA retirement | Implemented; installed profile unqualified | Build `python3 tests/hardware/build_installed.py --consumer peer-retirement --toolchain stable --output "$ART"`, install the identical artifact on both hosts, then run `python3 "$ART/peer_retirement_run.py" --artifact "$ART" --profile rdma --source-host "$SOURCE_HOST" --source-binary "$SOURCE_BINARY" --source-bind "$SOURCE_ADDR:19091" --other-bind "$SOURCE_ADDR:19092" --bind "$REQUESTER_ADDR:0" --device "$RNIC" --source-device "$SOURCE_RNIC" --output "$RUN/rdma"`. Repeat with Rust 1.85.0 and a fresh output. | Guarded READ/WRITE, matching QP retirement, unaffected second peer and same-endpoint restart; no device faults injected |
 | Per-peer NVLink IPC retirement | Implemented; installed profile unqualified | With the same packaged consumer on a reserved NVLink host: `python3 "$ART/peer_retirement_run.py" --artifact "$ART" --profile nvlink --source-bind 127.0.0.1:19091 --other-bind 127.0.0.1:19092 --bind 127.0.0.1:0 --source-gpu "$SOURCE_GPU" --gpu "$REQUESTER_GPU" --output "$RUN/nvlink"` | Import/export release and guards; shim controls supply delayed-event and failed-close evidence |
 | Per-peer MNNVL retirement | Implemented; installed profile unqualified | On a reserved fabric pair: `python3 "$ART/peer_retirement_run.py" --artifact "$ART" --profile mnnvl --source-host "$SOURCE_HOST" --source-binary "$SOURCE_BINARY" --source-bind "$SOURCE_ADDR:19091" --other-bind "$SOURCE_ADDR:19092" --bind "$REQUESTER_ADDR:0" --source-gpu "$SOURCE_GPU" --gpu "$REQUESTER_GPU" --domain "$FABRIC_DOMAIN" --output "$RUN/mnnvl"` | Native VMM import release, guarded bytes and fresh epoch; actual fabric domain comes from the platform owner |
-| EFA host DRAM (S24, B17) | Implemented; installed profile unqualified | `python3 tests/hardware/build_installed.py --consumer fabric --toolchain stable --output "$ART"`, then copy that clean artifact to the same path on both hosts and run `python3 tests/hardware/fabric_run.py --artifact "$ART" --source-ssh "$SOURCE_SSH" --source-ip "$SOURCE_IP" --requester-ip "$REQUESTER_IP" --source-domain "$SOURCE_DOMAIN" --requester-domain "$REQUESTER_DOMAIN" --source-device "$SOURCE_EFA" --requester-device "$REQUESTER_EFA" --output "$OUT/efa.json"`. Repeat with 1.85.0 and a fresh artifact. | Two EFA hosts with delivery-complete support; exact provider/domain, native EFA byte-counter deltas, guarded READ/WRITE and checked close. Written, not run. |
 | [P10 native GDS receipt faults]{#queue-p10-gds} | Written and compiled; installed profile unqualified | Build `python3 tests/hardware/build_installed.py --consumer gds-p10 --toolchain stable --output "$ART"`. For each `MODE` in `drain quarantine`, run `python3 "$ART/gds_p10_run.py" --artifact "$ART" --directory "$NVME_EXT4_DIR" --gpu "$GPU_UUID" --gpu-lock "$GPU_LOCK" --nvme-lock "$NVME_LOCK" --mode "$MODE" --output "$RUN/$MODE"`. Repeat with 1.85.0 and a fresh artifact. | Real cuFile submit with withheld status receipts; native-route counters, guarded READ, retained fd/GPU/charges. Not run. |
 | P10 RDMA posted-work faults | Prepared; installed rerun required | Use the [installed host runner](installed-host.md#in-flight-dma-interruption) with `installed-inflight-dma`, `installed-lost-completion`, `installed-cleanup-failure` and restart profile cases: `python3 tests/hardware/run.py --profile "$P10_RDMA_PROFILE" --installation "$ART/manifest.json" --binary "$ART/installed/bin/orbite-rdma-host" --output "$RUN"`. Build with `python3 tests/hardware/build_installed.py --consumer host --output "$ART"`. | Existing exact WR/CQE/retirement and byte controls; no new hardware run. |
 | P10 cooperative CUDA IPC faults | Prepared; installed profile unqualified | Build `python3 tests/hardware/build_installed.py --consumer nvlink --output "$ART"`. For each `MODE` in `batch-graceful batch-requester-exit`, run `python3 "$ART/nvlink_run.py" --binary "$ART/installed/bin/orbite-nvlink" --observer "$ART/libnvlink_observer.so" --binary-sha256 "$BIN_SHA" --observer-sha256 "$OBSERVER_SHA" --devices 0,1 --lock-root "$GPU_LOCK_ROOT" --output "$RUN/$MODE" --mode "$MODE" --memory device --payload 65536`. | Reuses native copy/event observer and grouped lifetime controls; no exporter-crash claim. Not run. |
@@ -289,7 +270,8 @@ compiler and host in external CI artifacts. [Run 42362843122](https://github.com
 completed 480 verified rows on each of stable and Rust 1.85.0 on 2026-11-07.
 Each row has three warmups and 100 checked samples; each case has three process
 trials. The raw `cpu-bench-*` artifacts retain all samples and commands.
-GPU/RDMA/GDS/EFA rows say **not run (hardware)**.
+GPU/RDMA/GDS/EFA rows in that historical artifact say **not run (hardware)**;
+current sweeps omit the excluded EFA placeholder.
 
 The selected stable results below use OrbiTE branch commit `dfe3ffd2`
 (Actions test merge `31b7112cc9e8650357ab06d2b93a44166a6b6524`) and frozen TENT

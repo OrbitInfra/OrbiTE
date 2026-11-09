@@ -19,9 +19,3 @@ io_uring	timeout	a_missing_cqe_at_the_drain_deadline_quarantines_the_submitted_s
 io_uring	cancel,close	file_io_shares_qos_queue_deadline_and_close_but_needs_no_receiver_credit	Queued cancellation posts no bytes; running cancel/close/unregister retain the fd and buffer until CQE; then charges return.
 io_uring	restart	direct_reopen_uses_the_admitted_inode_and_honors_read_only_access	Local path replacement cannot switch the admitted inode; closed segment cannot gain a new fd from its old handle.
 io_uring	peer-kill	N/A	Local files have no peer process or epoch. Killing this process destroys its address space; kernel io_uring teardown, not a network release receipt, owns that exit.
-fabric	peer-kill	peer_exit_after_post_is_not_a_release_receipt	Real tcp provider and killed child, CQ interception; missing finish retains local MR/loan/admission and guards.
-fabric	timeout,cancel,close	held_completion_cancel_and_peer_retirement_keep_owners_until_drain	Real provider with held CQE; timeout/cancel/retirement cannot release owners before consumed completion and finish.
-fabric	partial-submit	partial_post_cq_error_and_poll_error_never_replay_a_write	Fallible vtable over real tcp provider; accepted prefix and CQ error do not permit WRITE replay.
-fabric	timeout	expired_drain_quarantines_posted_slices_and_source_grant	Non-terminal provider debt quarantines slices/MRs/AV/grant charges.
-fabric	close	mr_destroy_failure_is_sticky_and_keeps_backing_and_admission	Failed fi_close pins backing and charge and is attempted only once.
-fabric	restart	loopback_permissions_peer_retirement_and_new_epoch_are_scoped	Retired epoch rejects stale work, other peers remain live, and explicit new epoch opens.

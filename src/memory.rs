@@ -701,7 +701,7 @@ impl DmaLease {
     pub(crate) fn address(&self) -> NonNull<u8> {
         self.address
     }
-    #[cfg(any(feature = "rdma", feature = "io-uring", feature = "fabric"))]
+    #[cfg(any(feature = "rdma", feature = "io-uring"))]
     pub(crate) fn len(&self) -> usize {
         self.range.len()
     }

@@ -14,7 +14,6 @@ pub(crate) fn transport(n: i32) -> Result<Transport> {
         2 => Transport::HpTcp,
         3 => Transport::Shm,
         4 => Transport::Rdma,
-        5 => Transport::Fabric,
         6 => Transport::Nvlink,
         7 => Transport::Mnnvl,
         8 => Transport::IoUring,

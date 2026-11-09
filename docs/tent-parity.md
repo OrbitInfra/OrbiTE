@@ -106,7 +106,7 @@ the behavior. Hardware qualification stays with the artifact that ran.
 | runtime/proxy_manager, remote_stage_operation | runtime/proxy_manager, CUDA staging | Charged staging chunks retained until native receipts |
 | transport/tcp, hp_tcp, shm | transport/tcp, hp_tcp, shm | Native OrbiTE bootstrap and permissions |
 | transport/rdma, nvlink, mnnvl | transport/rdma, nvlink, mnnvl; cuda | Fallible native tables; uncertain cleanup retains owners |
-| transport/io_uring, gds, fabric | transport/io_uring, gds, fabric | Bounded submissions and physical completion |
+| transport/io_uring, gds | transport/io_uring, gds | Bounded submissions and physical completion |
 | metrics | metrics | OrbiTE names with the reference's types, labels and buckets |
 | common/config, python/pybind | config/json, orbite-python | Own strict JSON and Rust-shaped Python API; no compatibility layer |
 
@@ -123,7 +123,7 @@ design provenance belongs here, not in a public configuration contract:
 | NVLink and MNNVL mappings | `transport/nvlink/*`, `transport/mnnvl/*`, caller-sync event handling | Retained imports and producer events; MNNVL's threshold is recorded but does not change asynchronous dispatch |
 | Registration lookup, file segments and notifications | `runtime/transfer_engine_impl.cpp`, `segment_manager*`, `segment_tracker*` | Ordered containing-range lookup, file-relative offsets and separate deliberate notification deliveries |
 | Peer retirement | `closeSegment` and segment invalidation | Stronger membership fence and physical drain, rather than reversible handle invalidation |
-| io_uring and libfabric settings | `transport/io_uring/*`, `transport/fabric/*` | Single-issuer file rings and bounded per-domain RMA owners; no silent provider fallback |
+| io_uring settings | `transport/io_uring/*` | Single-issuer file rings and bounded drain; no silent provider fallback |
 | Metrics | `metrics/tent_metrics.cpp` | Reference types, labels and bucket boundaries; names, HELP text and reporter logs identify OrbiTE |
 
 Module layout, transfer behavior and documentation style follow the reference.
@@ -180,7 +180,7 @@ recompute: the frozen engine installs an empty local-decode suggestion hook.
 
 ## Upstream transport inventory and selected scope
 
-All 18 upstream types are accounted for; only the 10 marked core or optional
+All 18 upstream types are accounted for; only the eight marked core
 are implementation targets. Capability bits and compiled providers constrain
 supported transfer directions. Do not infer GPU support for a transport from
 another transport's platform support. Every selected row requires normal bytes,
@@ -204,8 +204,15 @@ negative cases, teardown and installed-artifact gates.
 | B14 `MLU` | Host-device copy/staging, allocation and process ownership | Cambricon MLU runtime/devices | Excluded accelerator |
 | B15 `MPCOMM` | Deferred: no consumer; provider unavailable | No public identity or provider | Deferred P8.1 / S25 |
 | B16 `HYLINK` | HIP-backed host/device directions, endpoint and registered-region lifecycle | HIP devices and compatible Hylink provider | Excluded accelerator |
-| B17 `FABRIC` | Frozen host-DRAM libfabric path, provider attributes/capabilities, endpoint/progress and completion ownership | Compatible libfabric provider on two hosts; qualify EFA on EFA hardware | Implemented, P8.2; real software TCP-provider controls, EFA installed profile unqualified. See [libfabric](fabric.md) |
+| B17 `FABRIC` | Host-only libfabric transport; no GPU FI_HMEM path | NVIDIA platforms only; AWS EFA is a non-goal | Excluded by design; P8.2 / S24 removed |
 | B18 `MEMFABRIC` | Ascend-backed host/device directions, dynamically loaded provider ABI, memory allocator and completion lifecycle | Ascend ACL and compatible MemFabric provider | Excluded accelerator |
+
+B17 FABRIC/libfabric is excluded by design. Its host-only path cannot carry GPU
+KV directly. RDMA covers InfiniBand/RoCE/Spectrum-X; NVLink and MNNVL cover
+NVIDIA peer fabrics. AWS consumers using NIXL can select NIXL's own LIBFABRIC
+backend. Revisit only when a consumer deploys OrbiTE directly on AWS, with GPU
+memory (FI_HMEM) supported from the start. CUDA fabric handles are unrelated
+and remain in scope.
 
 B15 MPComm is deferred because no consumer uses it and no libmpcomm provider
 is available; fake-provider controls would not establish a usable path. MPComm
@@ -295,6 +302,12 @@ at `0.1.0`, as defined in the [release ladder](completion-plan.md#release-ladder
 RDMA peers using endpoint QP pools must also share the same ordered pool layout,
 width and link-layer settings.
 The control-plane magic keeps its historical spelling, `ORBITTE\0`.
+
+The removed FABRIC request opcodes 23 and 24 remain reserved forever and decode
+as `Error::Protocol`; its native transport tag 16 is unknown. The removed
+segment capability byte is reserved zero. Remaining field offsets, CUDA fabric
+capabilities and transport tags are unchanged. The wire stays at VERSION = 1
+under the same-build rule above; there is no compatibility downgrade.
 
 Rust is the primary API; Python mirrors the Rust owners with PEP 8 names.
 Configuration and metric names are OrbiTE's own. The [NIXL design](nixl-backend.md)

@@ -16,7 +16,7 @@ jobs:
       fail-fast: false
       matrix:
         toolchain: [stable, '1.85.0']
-        features: ['', rdma, cuda, 'rdma,cuda', io-uring, 'cuda,io-uring', 'rdma,cuda,io-uring', gds, 'gds,io-uring', 'rdma,cuda,io-uring,gds', metrics, 'rdma,cuda,io-uring,gds,metrics', rdma-adaptive, 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive', fabric, 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive,fabric']
+        features: ['', rdma, cuda, 'rdma,cuda', io-uring, 'cuda,io-uring', 'rdma,cuda,io-uring', gds, 'gds,io-uring', 'rdma,cuda,io-uring,gds', metrics, 'rdma,cuda,io-uring,gds,metrics', rdma-adaptive, 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive']
     env:
       RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}
       ORBITE_FEATURES: ${{ matrix.features }}
@@ -32,13 +32,6 @@ jobs:
         if: contains(matrix.features, 'rdma')
         timeout-minutes: 10
         run: .github/scripts/install-native-deps.sh g++ cmake pkg-config clang-18 libclang-18-dev libibverbs-dev
-      - name: Install the required real libfabric TCP provider
-        if: contains(matrix.features, 'fabric')
-        run: |
-          .github/scripts/install-native-deps.sh g++ clang-18 libclang-18-dev libfabric-dev libfabric-bin
-          echo "FI_PROVIDER=tcp" >> "$GITHUB_ENV"
-          echo "ORBITE_REQUIRE_FABRIC=1" >> "$GITHUB_ENV"
-          FI_PROVIDER=tcp fi_info -p 'tcp;ofi_rxm' -t FI_EP_RDM
       - name: Verify the shipped local-copy PTX with the generating compiler
         if: matrix.toolchain == 'stable' && matrix.features == 'cuda'
         run: |
@@ -56,7 +49,7 @@ jobs:
           target=aarch64-apple-darwin
           rustup target add "$target"
           cargo check --locked --target "$target" --no-default-features
-          for features in rdma cuda rdma,cuda io-uring cuda,io-uring rdma,cuda,io-uring gds gds,io-uring rdma,cuda,io-uring,gds rdma-adaptive fabric; do
+          for features in rdma cuda rdma,cuda io-uring cuda,io-uring rdma,cuda,io-uring gds gds,io-uring rdma,cuda,io-uring,gds rdma-adaptive; do
             log="$RUNNER_TEMP/non-linux-$features.log"
             if cargo check --locked --target "$target" --features "$features" >"$log" 2>&1; then
               echo "unexpected success for $target with $features"
@@ -95,12 +88,12 @@ jobs:
       - name: Clippy
         run: cargo clippy --workspace --locked --features "$ORBITE_FEATURES" --all-targets -- -D warnings
       - name: Audit the Rust freeze candidate documentation
-        if: matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive,fabric'
+        if: matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive'
         run: |
           set -o pipefail
           cargo rustdoc --locked --lib --features "$ORBITE_FEATURES" -- -W missing-docs -D rustdoc::broken_intra_doc_links -D rustdoc::invalid_html_tags 2>&1 | tee "$RUNNER_TEMP/rust-api-audit.log"
       - name: Preserve Rust documentation review findings
-        if: always() && matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive,fabric'
+        if: always() && matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive'
         uses: actions/upload-artifact@v7.0.2
         with:
           name: rust-api-audit-${{ matrix.toolchain }}
@@ -112,25 +105,17 @@ jobs:
       - name: Test CPU TCP and ownership
         run: cargo test --workspace --locked --features "$ORBITE_FEATURES"
       - name: P10 CPU fault matrix and real peer kills
-        if: matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive,fabric'
+        if: matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive'
         run: |
           binary=$(cargo test --locked --features "$ORBITE_FEATURES" --lib --no-run --message-format=json |
             jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
           python3 tests/faults/run.py --binary "$binary" --output "$RUNNER_TEMP/p10-cpu" --kill-repeats 50
       - name: Preserve P10 CPU fault evidence
-        if: always() && matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive,fabric'
+        if: always() && matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive'
         uses: actions/upload-artifact@v7.0.2
         with:
           name: p10-cpu-${{ matrix.toolchain }}
           path: ${{ runner.temp }}/p10-cpu/
-      - name: Repeat fabric ownership and real-process controls
-        if: matrix.features == 'fabric'
-        run: |
-          binary=$(cargo test --locked --features "$ORBITE_FEATURES" --lib --no-run --message-format=json |
-            jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
-          bash .github/scripts/repeat-fabric.sh "$binary" "$RUNNER_TEMP/fabric-repeats"
-          if ldd "$binary" | grep -F libfabric; then exit 1; fi
-          python3 tests/hardware/build_installed.py --consumer fabric --toolchain "$RUSTUP_TOOLCHAIN" --output "$RUNNER_TEMP/fabric-installed"
       - name: Repeat guarded restart port ownership at suite parallelism
         if: matrix.features == ''
         run: |
@@ -190,7 +175,7 @@ jobs:
             grep -F "test result: ok. $count passed; 0 failed;" "$RUNNER_TEMP/r1b.log"
           done
       - name: Repeat TCP stream and retirement controls 50 times
-        if: matrix.features == '' || matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive,fabric'
+        if: matrix.features == '' || matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive'
         run: |
           binary=$(cargo test --locked --features "$ORBITE_FEATURES" --lib --no-run --message-format=json |
             jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
@@ -205,7 +190,7 @@ jobs:
         if: matrix.features == 'rdma,cuda'
         run: python3 tests/hardware/build_installed.py --consumer peer-retirement --toolchain "$RUSTUP_TOOLCHAIN" --output "$RUNNER_TEMP/peer-retirement-installed"
       - name: Repeat small file handoff and drain controls 50 times
-        if: matrix.features == 'io-uring' || matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive,fabric'
+        if: matrix.features == 'io-uring' || matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive'
         run: |
           binary=$(cargo test --locked --features "$ORBITE_FEATURES" --lib --no-run --message-format=json |
             jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')

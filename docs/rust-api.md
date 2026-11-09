@@ -36,7 +36,7 @@ compatibility surfaces are out of scope.
 | Unstable `rdma-adaptive` (excluded from freeze) | `transport::rdma::adaptive_congestion_control`: `Config`, `Mode`, `PathState`, `Snapshot`, `Signals`, `DomainState`, `AdmissionDomain`, `Decision`, `Reason`, `Rejection`, `PathHandle`, `Permit`, `Classification`, `FailureScope`, `Outcome`, `classify_completion`, `classify_async_event`; hidden callable core, not a live worker policy |
 | `cuda` | `cuda::{CudaMemory, RetainedResources, allocate_pinned_host, retained_resources}`, root `StagingLocation`, `StagingStats`, `NvlinkStats`; device/fabric/EGM allocation, external ownership, producer readiness, staging trim and IPC cache flush |
 | `cuda::local_copy` | `PinnedHostRegistration`, `CopyDirection`, `LocalCopyBackend`, `LocalCopyConfig`, `LocalCopyDesc`, `ProducerEvent`, `LocalCopyEngine`, `LocalCopyStats`, `LocalCopyCompletion`; caller stream, descriptors, submit, event progress/wait and close |
-| File and network features | `io-uring`: `IoUringConfig`, `IoUringStats`; `gds`: `GdsMode`, `GdsStats`; `fabric`: `FabricConfig`, `FabricProvider`, `FabricStats` |
+| Storage features | `io-uring`: `IoUringConfig`, `IoUringStats`; `gds`: `GdsMode`, `GdsStats` |
 | `metrics` | `metrics::{MetricsConfig, Metrics}`; engine metrics/status, enable toggle, JSON/Prometheus snapshots and writers |
 | Offline diagnostics | `diagnostics::{BUILD_VERSION, BUILD_COMMIT, SCHEMA_VERSION, Outcome, Check, BuildInfo, Snapshot, version_snapshot}`; text/JSON rendering and exit code; `orbite diagnostics version` CLI |
 
@@ -94,7 +94,11 @@ order.
 default) and owns requester and source admission. Configuration is immutable per
 engine. `engine.config()` borrows its effective settings.
 
-### Configuration loading
+#`Transport::Fabric` and the provider config/stats exports are removed. All
+remaining Rust discriminants are unchanged; `Transport` stays non-exhaustive.
+CUDA fabric allocations, MNNVL and EGM are unaffected.
+
+## Configuration loading
 
 ```rust
 use orbite::{EngineConfig, TransferEngine};
@@ -133,7 +137,7 @@ Unknown keys, duplicate keys, wrong types, malformed roots and out-of-range
 values fail before an engine starts. Documents are bounded to 1 MiB and files
 must be regular files. Removed metadata keys and legacy aliases are unknown
 fields. Legacy environment variables have no effect; provider-runtime variables
-such as `FI_PROVIDER` remain the provider's responsibility. Native fields require
+such as `CUDA_VISIBLE_DEVICES` remain the provider's responsibility. Native fields require
 their build feature. Typed Rust construction stays the primary interface.
 
 | API | Contract |
