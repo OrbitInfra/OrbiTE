@@ -288,6 +288,18 @@ jobs:
           binary=$(cargo test --locked --features "$ORBITE_FEATURES" --lib --no-run --message-format=json |
             jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
           .github/scripts/repeat-runtime-controls.sh "$binary" rdma-priority
+      - name: Repeat dma-buf isolation 1000 times under load and the full lib suite twice more
+        if: matrix.features == 'rdma,cuda' || matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive'
+        run: |
+          binary=$(cargo test --locked --features "$ORBITE_FEATURES" --lib --no-run --message-format=json |
+            jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
+          .github/scripts/repeat-runtime-controls.sh "$binary" dmabuf
+          # Together with the regular test step, three complete parallel lib runs.
+          for iteration in 2 3; do
+            "$binary" --test-threads="$(nproc)" > "$RUNNER_TEMP/dmabuf-suite-$iteration.log" 2>&1 || { cat "$RUNNER_TEMP/dmabuf-suite-$iteration.log"; exit 1; }
+            tail -n 2 "$RUNNER_TEMP/dmabuf-suite-$iteration.log"
+          done
+          echo "dma-buf controls passed 1000 times under CPU load; full lib suite passed three times at $(nproc) threads." >> "$GITHUB_STEP_SUMMARY"
       - name: Repeat GDS reservation release at suite parallelism
         if: matrix.features == 'rdma,cuda,io-uring,gds'
         run: |
