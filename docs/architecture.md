@@ -2,7 +2,7 @@
 
 OrbiTE follows frozen Mooncake TENT's engine, transport, context, registered
 buffer, endpoint and worker boundaries, implemented as Rust resource owners.
-The [consumer scope](tent-parity.md#wire-and-consumer-boundaries) defines
+The [consumer scope](architecture.md#scope-and-non-goals) defines
 the consumer and non-goal boundary. The [NIXL backend design](nixl-backend.md)
 proposes an upstream C++ plugin over a purpose-built native boundary to these
 owners, with no second coordinator. It follows upstream's explicit-cancel
@@ -30,6 +30,16 @@ Architectural alignment alone establishes no behavior or performance result. See
 :alt: OrbiTE network transports and the implemented DRAM and GPU paths to local SSD
 :class: dark-light
 :::
+
+## Scope and non-goals
+
+OrbiTE is a transfer engine for LLM inference on NVIDIA.
+
+- Cluster discovery and metadata, which belong to the consumer.
+- Collectives.
+- Non-NVIDIA accelerators.
+- TENT wire interoperability.
+- General-purpose RPC.
 
 ## Python boundary
 
