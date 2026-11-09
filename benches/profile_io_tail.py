@@ -51,13 +51,19 @@ def record(out, executables, args, env, tent_env):
               ("tmpfs", 1, "contiguous")]
     shapes = [(*s, 0) for s in shapes] + [("ext4", 64, layout, 10000)
                                          for layout in ("gapped", "contiguous")]
+    shapes = [(*s, False) for s in shapes] + [("ext4", 64, layout, 0, True)
+                                             for layout in ("gapped", "contiguous")]
     samples = max(args.samples, 1000)
-    for filesystem, batch, layout, settle_us in shapes:
+    for filesystem, batch, layout, settle_us, bulk_verify in shapes:
         for op in ("read", "write"):
             for implementation, exe in executables:
+                if bulk_verify and implementation != "tent":
+                    continue  # OrbiTE already verifies with a whole-file read.
                 name = f"{implementation}-{filesystem}-{op}-{batch}-{layout}"
                 if settle_us:
                     name += "-settled"
+                if bulk_verify:
+                    name += "-bulk"
                 directory = args.ext4 if filesystem == "ext4" else args.tmpfs
                 path = directory.resolve() / ("orbite-tail-" + name)
                 if path.exists():
@@ -72,6 +78,8 @@ def record(out, executables, args, env, tent_env):
                 data = temporary / (name + ".perf")
                 overrides = {**(tent_env if implementation == "tent" else {}), "ORBITE_BENCH_TAIL_TRACE": "1",
                              "ORBITE_BENCH_RESET_SETTLE_US": str(settle_us)}
+                if bulk_verify:
+                    overrides["ORBITE_BENCH_BULK_VERIFY"] = "1"
                 command = ["sudo", perf, "record", "-q", "-a", "--clockid", "mono", "-m", "256", "-o", data]
                 for event in events:
                     command += ["-e", event]
@@ -104,7 +112,7 @@ def record(out, executables, args, env, tent_env):
                     shutil.copyfile(data, root / (name + ".perf"))
                     if "lost" in (root / (name + "-events.stderr")).read_text().lower():
                         raise ValueError("lost trace events; timeline is incomplete")
-                    records.append(dict(name=name, samples=samples, warmup=args.warmup, settle_us=settle_us,
+                    records.append(dict(name=name, samples=samples, warmup=args.warmup, settle_us=settle_us, bulk_verify=bulk_verify,
                                         verified=True, timings="diagnostic only"))
                     (root / "summary.json").write_text(json.dumps(records, indent=2) + "\n")
                     print(json.dumps(records[-1]), flush=True)

@@ -191,7 +191,7 @@ def analyze(root):
                        issuer_sleeps=sum(e[2] == issuer and e[3] == 'syscalls:sys_enter_clock_nanosleep' for e in own),
                        async_work=sum(e[3] == 'io_uring:io_uring_queue_async_work' for e in io))
             row.update(blocks(es, pid))
-            _, filesystem, direction, count, _ = name.removesuffix('-settled').split('-')
+            _, filesystem, direction, count, _ = name.removesuffix('-settled').removesuffix('-bulk').split('-')
             row.update(window_io(active, begin, end, sq[0][0], pid,
                                  'R' if direction == 'read' else 'W', 4096 * int(count)))
             if filesystem == 'ext4' and not row['window_direct_blocks']:
