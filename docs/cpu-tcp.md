@@ -178,7 +178,9 @@ Segment capability bit 7 requires the RDMA capability and identifies a source
 whose immutable RDMA policy directly registers published GPU ranges. Classic
 scatter checks it before admitting a remote GPU fragment.
 
-In each region's HP-TCP flag byte, bit 0 marks HP-TCP registration. Bit 7
+In each region's flag byte, bit 0 marks HP-TCP registration. Bits 1 and 2
+record observed dma-buf and peermem registrations respectively, only for a CUDA
+region on an RDMA-capable source. Unknown bits are rejected. Bit 7
 marks a registration with a scoped transport or known device/NUMA ordinal.
 All fixed records precede the optional five-byte entries, in flagged record
 order. Each entry contains a TENT transport ID (one byte) and a big-endian

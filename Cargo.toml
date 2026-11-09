@@ -153,3 +153,8 @@ harness = false
 name = "gds_p10"
 path = "tests/hardware/gds_p10.rs"
 required-features = ["gds"]
+
+[[example]]
+name = "gdr_dmabuf"
+path = "tests/hardware/gdr_dmabuf.rs"
+required-features = ["rdma", "cuda"]

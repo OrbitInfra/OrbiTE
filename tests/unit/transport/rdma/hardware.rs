@@ -55,6 +55,8 @@ unsafe extern "C" fn gated_post(
 }
 
 static VERBS: sys::Verbs = sys::Verbs {
+    #[cfg(feature = "cuda")]
+    gpu_registration: sys::REAL.gpu_registration,
     gpu_keys: sys::REAL.gpu_keys,
     asynchronous: sys::REAL.asynchronous,
     completion: sys::REAL.completion,

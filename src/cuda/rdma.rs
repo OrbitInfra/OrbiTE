@@ -3,6 +3,45 @@
 use std::ops::Range;
 
 use super::*;
+use crate::transport::rdma::{GpuDirectRegistration, GpuRegistrationVerbs, MemoryHandles};
+
+/// A CUDA-exported descriptor, retained by the actual MR owner. Linux close
+/// consumes the descriptor even on an error; never retry it.
+pub(crate) struct DmaBuf {
+    pub(crate) fd: i32,
+    pub(crate) base: u64,
+    pub(crate) length: usize,
+    context: Arc<Context>,
+    closed: bool,
+    failure: i32,
+}
+impl DmaBuf {
+    pub(crate) fn close(&mut self) -> std::result::Result<(), (&'static str, i32)> {
+        if !self.closed {
+            self.closed = true;
+            // SAFETY: this export owns the fd exclusively and closes it exactly once.
+            if unsafe { (self.context.driver.close_fd)(self.fd) } != 0 {
+                self.failure = std::io::Error::last_os_error()
+                    .raw_os_error()
+                    .filter(|code| *code != 0)
+                    .unwrap_or(libc::EIO);
+            }
+        }
+        if self.failure == 0 {
+            Ok(())
+        } else {
+            Err(("close CUDA dma-buf", self.failure))
+        }
+    }
+}
+impl Drop for DmaBuf {
+    fn drop(&mut self) {
+        if let Err((operation, code)) = self.close() {
+            log::error!("{operation} failed ({code}); retaining CUDA context");
+            std::mem::forget(self.context.clone());
+        }
+    }
+}
 
 pub(super) enum Ordering {
     Device,
@@ -54,6 +93,99 @@ impl DeviceAllocation {
 }
 
 impl CudaMemory {
+    pub(crate) fn with_rdma_registration<T>(
+        &self,
+        handles: &mut MemoryHandles,
+        policy: GpuDirectRegistration,
+        verbs: &GpuRegistrationVerbs,
+        operation: impl FnOnce(&mut MemoryHandles) -> Result<T>,
+    ) -> Result<T> {
+        let mut allocation = self
+            .allocation
+            .lock()
+            .map_err(|_| Error::Internal("CUDA memory lock poisoned"))?;
+        if allocation.uncertain {
+            return Err(Error::Unquiesced {
+                operation: "CUDA prior DMA",
+                code: -1,
+            });
+        }
+        allocation.prepare_rdma()?;
+        let context = &allocation.context;
+        context.current(|| {
+            // A cached parent MR already has a route and its own native lifetime.
+            if handles.mr.is_null() && handles.gpu_route == 0 {
+                let verb = (verbs.dmabuf)();
+                let mut supported = 0;
+                if policy != GpuDirectRegistration::Peermem && verb.is_some()
+                    && context.driver.dmabuf_export.is_some() {
+                    // SAFETY: live retained CUDA device and a writable attribute output.
+                    let rc = unsafe { (context.driver.device_attribute)(
+                        &mut supported, sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_DMA_BUF_SUPPORTED,
+                        context.device,
+                    ) };
+                    match rc {
+                        SUCCESS => (),
+                        sys::CUresult::CUDA_ERROR_INVALID_VALUE | sys::CUresult::CUDA_ERROR_NOT_SUPPORTED => supported = 0,
+                        rc => check("cuDeviceGetAttribute DMA_BUF_SUPPORTED", rc)?,
+                    }
+                }
+                if supported != 0 && policy != GpuDirectRegistration::Peermem {
+                    let export = context.driver.dmabuf_export
+                        .ok_or(Error::Unavailable("CUDA dma-buf export symbol"))?;
+                    // SAFETY: sysconf has no pointer arguments and its result is checked.
+                    let page = unsafe { libc::sysconf(libc::_SC_PAGESIZE) };
+                    let page = usize::try_from(page).ok().filter(|p| p.is_power_of_two())
+                        .ok_or(Error::Unavailable("host page size for CUDA dma-buf"))?;
+                    let (base, size) = if let Some(mapping) = &allocation.fabric {
+                        (mapping.address, mapping.size)
+                    } else {
+                        let mut base = 0;
+                        let mut size = 0;
+                        // SAFETY: this allocation is retained; query its actual native extent.
+                        check("cuMemGetAddressRange dma-buf", unsafe {
+                            (context.driver.address_range)(&mut base, &mut size, allocation.address)
+                        })?;
+                        (base, size)
+                    };
+                    if base == 0 || size == 0 || base % page as u64 != 0  {
+                        return Err(Error::Unavailable("CUDA dma-buf allocation extent is not host-page aligned"));
+                    }
+                    let offset = usize::try_from(self.base_address().checked_sub(base).ok_or(Error::InvalidRange)?)
+                        .map_err(|_| Error::InvalidRange)?;
+                    checked_range(offset, self.len(), size)?;
+                    // Legacy allocations are exported in whole host pages, as in NCCL.
+                    // VMM mappings already cover whole allocation-granularity pages.
+                    let size = size.checked_add(page - 1).ok_or(Error::InvalidRange)? & !(page - 1);
+                    base.checked_add(size as u64).ok_or(Error::InvalidRange)?;
+                    // NCCL forces PCIe mapping only with a classified C2C/PCI path.
+                    // Without that topology evidence, retain CUDA's default mapping.
+                    let flags = 0;
+                    let mut fd = -1;
+                    // SAFETY: the containing native allocation is fully mapped, retained and
+                    // host-page aligned. The output is an owned Linux dma-buf descriptor.
+                    let rc = unsafe { export((&mut fd as *mut i32).cast(), base, size,
+                        sys::CUmemRangeHandleType::CU_MEM_RANGE_HANDLE_TYPE_DMA_BUF_FD, flags) };
+                    if fd >= 0 {
+                        handles.dmabuf = Some(DmaBuf { fd, base, length: size, context: context.clone(), closed: false, failure: 0 });
+                    }
+                    check("cuMemGetHandleForAddressRange dma-buf", rc)?;
+                    if handles.dmabuf.is_none() {
+                        return Err(Error::Backend { operation: "CUDA dma-buf returned no fd", code: libc::EBADF });
+                    }
+                    handles.dmabuf_verb = verb;
+                    handles.gpu_route = 1;
+                } else if policy != GpuDirectRegistration::Dmabuf && (verbs.peermem)() {
+                    handles.gpu_route = 2;
+                } else {
+                    return Err(Error::Unavailable("GPU Direct registration route unavailable: require CUDA dma-buf and ibv_reg_dmabuf_mr, or nvidia_peermem/nv_peer_mem"));
+                }
+            }
+            operation(handles)
+        })
+    }
+
+    #[cfg(test)]
     pub(crate) fn with_rdma_context<T>(&self, operation: impl FnOnce() -> Result<T>) -> Result<T> {
         let mut allocation = self
             .allocation

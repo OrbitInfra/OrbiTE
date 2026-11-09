@@ -106,6 +106,7 @@ and open rails. The scrape carries no peer identity, raw addresses or keys.
 
 | OrbiTE owner series | Type and unit |
 | --- | --- |
+| `orbite_rdma_dmabuf_registrations_total`, `orbite_rdma_peermem_registrations_total` | Successful native CUDA MRs by registration route (counters), sampled from the existing RDMA owner; neither a live-MR gauge nor a retirement receipt |
 | `orbite_rdma_inflight_bytes`, `orbite_rdma_allocated_bytes_total` | Live smart-selection bytes (gauge) and lifetime assigned slice bytes (counter), including paused NICs |
 | `orbite_receiver_credit_available_{bytes,requests,staging_slots,consumer_slots}`, `orbite_receiver_credit_consumed_{bytes,requests,staging_slots,consumer_slots}` | Sender balances across retained bindings (gauges) |
 | `orbite_receiver_active_senders`, `orbite_receiver_retired_senders_total` | Receiver sessions (live gauge and retired counter) |

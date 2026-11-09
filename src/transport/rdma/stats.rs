@@ -14,6 +14,10 @@ pub struct QpReadDepths {
 #[derive(Clone, Copy, Debug, Default)]
 #[non_exhaustive]
 pub struct RdmaStats {
+    /// Native CUDA MRs successfully created through each route (including private
+    /// source PDs). Cumulative evidence; a counter is not a retirement receipt.
+    pub dmabuf_registrations: u64,
+    pub peermem_registrations: u64,
     pub last_connected_qp: Option<QpReadDepths>,
     /// Pair-level failures, trial admissions and confirmed recoveries.
     pub rail_errors: u64,

@@ -17,7 +17,13 @@ mod cq;
 mod device;
 #[cfg(feature = "cuda")]
 mod gpu_key;
+#[cfg(feature = "cuda")]
+mod gpu_registration;
 mod memory;
+#[cfg(feature = "cuda")]
+pub(crate) use gpu_registration::GpuRegistrationVerbs;
+#[cfg(all(test, feature = "cuda"))]
+pub(super) use gpu_registration::peermem_at;
 mod port;
 mod qp;
 
@@ -27,6 +33,8 @@ use cq::{
 };
 pub(super) use device::devices;
 use device::{ack_async_event, get_async_event, open_device, query_address};
+#[cfg(all(test, feature = "cuda"))]
+pub(super) use memory::register_on_pd;
 use memory::{allocate_window, dealloc_window, prepare_grant, register_memory, window};
 use qp::{connect, open, post, post_receive, send_completion};
 
@@ -164,7 +172,13 @@ pub(super) struct GpuKeyVerbs {
 }
 
 #[repr(C)]
-pub(super) struct MemoryHandles {
+pub(crate) struct MemoryHandles {
+    #[cfg(feature = "cuda")]
+    pub(crate) dmabuf: Option<crate::cuda::rdma::DmaBuf>,
+    #[cfg(feature = "cuda")]
+    pub(crate) dmabuf_verb: Option<gpu_registration::DmabufVerb>,
+    pub(crate) gpu_route: u8,
+    pub(super) deregister_failure: c_int,
     pub mr: *mut c_void,
     pub mw: *mut c_void,
     pub window_key: u32,
@@ -177,6 +191,12 @@ pub(super) struct MemoryHandles {
 impl Default for MemoryHandles {
     fn default() -> Self {
         Self {
+            #[cfg(feature = "cuda")]
+            dmabuf: None,
+            #[cfg(feature = "cuda")]
+            dmabuf_verb: None,
+            gpu_route: 0,
+            deregister_failure: 0,
             mr: std::ptr::null_mut(),
             mw: std::ptr::null_mut(),
             window_key: 0,
@@ -189,6 +209,24 @@ impl Default for MemoryHandles {
 }
 
 impl MemoryHandles {
+    pub(super) fn retire(&mut self, verbs: &Verbs) -> std::result::Result<(), (&'static str, i32)> {
+        if self.deregister_failure == 0 {
+            // SAFETY: the caller retains the MR and its backing through this receipt.
+            self.deregister_failure = unsafe { (verbs.deregister)(self) };
+        }
+        if self.deregister_failure != 0 {
+            return Err(("ibv_dereg_mr", self.deregister_failure));
+        }
+        #[cfg(feature = "cuda")]
+        if let Some(fd) = &mut self.dmabuf {
+            fd.close()?;
+        }
+        #[cfg(feature = "cuda")]
+        {
+            self.dmabuf = None;
+        }
+        Ok(())
+    }
     pub(super) fn destroy_gpu_key(
         &mut self,
         verbs: &Verbs,
@@ -276,25 +314,28 @@ type QueryPortSpeed = unsafe fn(*const DeviceHandles, u8) -> Result<Option<u64>>
 type Discover = fn(&RdmaConfig) -> Result<(Topology, Vec<RdmaAddress>)>;
 type CloseConnection = unsafe extern "C" fn(*mut ConnectionHandles) -> c_int;
 type CloseMemory = unsafe extern "C" fn(*mut MemoryHandles) -> c_int;
-pub(super) struct Verbs {
-    pub gpu_keys: Option<GpuKeyVerbs>,
-    pub asynchronous: Option<AsyncVerbs>,
-    pub completion: Option<CqEventVerbs>,
-    pub discover: Discover,
-    pub query_address:
+pub(crate) struct Verbs {
+    #[cfg(feature = "cuda")]
+    pub(crate) gpu_registration: GpuRegistrationVerbs,
+    pub(in crate::transport::rdma) gpu_keys: Option<GpuKeyVerbs>,
+    pub(in crate::transport::rdma) asynchronous: Option<AsyncVerbs>,
+    pub(in crate::transport::rdma) completion: Option<CqEventVerbs>,
+    pub(in crate::transport::rdma) discover: Discover,
+    pub(in crate::transport::rdma) query_address:
         unsafe fn(*const DeviceHandles, &RdmaAddress, Option<u8>) -> Result<RdmaAddress>,
-    pub query_port_speed: Option<QueryPortSpeed>,
-    pub open_device: unsafe extern "C" fn(*mut DeviceHandles, *const c_char) -> c_int,
-    pub create_cq:
+    pub(in crate::transport::rdma) query_port_speed: Option<QueryPortSpeed>,
+    pub(in crate::transport::rdma) open_device:
+        unsafe extern "C" fn(*mut DeviceHandles, *const c_char) -> c_int,
+    pub(in crate::transport::rdma) create_cq:
         unsafe extern "C" fn(*mut CqHandles, *const DeviceHandles, u32, *mut c_void) -> c_int,
-    pub register_memory: unsafe extern "C" fn(
+    pub(in crate::transport::rdma) register_memory: unsafe extern "C" fn(
         *mut MemoryHandles,
         *const DeviceHandles,
         *mut c_void,
         usize,
         bool,
     ) -> c_int,
-    pub prepare_grant: unsafe extern "C" fn(
+    pub(in crate::transport::rdma) prepare_grant: unsafe extern "C" fn(
         *mut ConnectionHandles,
         *mut MemoryHandles,
         *const DeviceHandles,
@@ -302,7 +343,7 @@ pub(super) struct Verbs {
         usize,
         u32,
     ) -> c_int,
-    pub open: unsafe extern "C" fn(
+    pub(in crate::transport::rdma) open: unsafe extern "C" fn(
         *mut ConnectionHandles,
         *mut MemoryHandles,
         *const DeviceHandles,
@@ -317,7 +358,7 @@ pub(super) struct Verbs {
         u32,
         *mut Descriptor,
     ) -> c_int,
-    pub connect: unsafe extern "C" fn(
+    pub(in crate::transport::rdma) connect: unsafe extern "C" fn(
         *mut ConnectionHandles,
         *const Descriptor,
         *const Descriptor,
@@ -327,7 +368,7 @@ pub(super) struct Verbs {
         u8,
         u8,
     ) -> c_int,
-    pub post: unsafe extern "C" fn(
+    pub(in crate::transport::rdma) post: unsafe extern "C" fn(
         *mut ConnectionHandles,
         *const MemoryHandles,
         *const WorkRequest,
@@ -339,7 +380,7 @@ pub(super) struct Verbs {
         c_int,
         *mut PostResult,
     ) -> c_int,
-    pub window: unsafe extern "C" fn(
+    pub(in crate::transport::rdma) window: unsafe extern "C" fn(
         *mut ConnectionHandles,
         *mut MemoryHandles,
         u64,
@@ -349,7 +390,7 @@ pub(super) struct Verbs {
         bool,
         *mut PostResult,
     ) -> c_int,
-    pub post_receive: unsafe extern "C" fn(
+    pub(in crate::transport::rdma) post_receive: unsafe extern "C" fn(
         *mut ConnectionHandles,
         *const MemoryHandles,
         u64,
@@ -357,7 +398,7 @@ pub(super) struct Verbs {
         usize,
         *mut PostResult,
     ) -> c_int,
-    pub send_completion: unsafe extern "C" fn(
+    pub(in crate::transport::rdma) send_completion: unsafe extern "C" fn(
         *mut ConnectionHandles,
         *const MemoryHandles,
         u64,
@@ -367,14 +408,16 @@ pub(super) struct Verbs {
         bool,
         *mut PostResult,
     ) -> c_int,
-    pub allocate_window: unsafe extern "C" fn(*mut MemoryHandles, *const DeviceHandles) -> c_int,
-    pub dealloc_window: CloseMemory,
-    pub poll: unsafe extern "C" fn(*mut ConnectionHandles, *mut Completion) -> c_int,
-    pub destroy_qp: CloseConnection,
-    pub deregister: CloseMemory,
-    pub destroy_cq: unsafe extern "C" fn(*mut CqHandles) -> c_int,
-    pub dealloc_pd: unsafe extern "C" fn(*mut DeviceHandles) -> c_int,
-    pub close_device: unsafe extern "C" fn(*mut DeviceHandles) -> c_int,
+    pub(in crate::transport::rdma) allocate_window:
+        unsafe extern "C" fn(*mut MemoryHandles, *const DeviceHandles) -> c_int,
+    pub(in crate::transport::rdma) dealloc_window: CloseMemory,
+    pub(in crate::transport::rdma) poll:
+        unsafe extern "C" fn(*mut ConnectionHandles, *mut Completion) -> c_int,
+    pub(in crate::transport::rdma) destroy_qp: CloseConnection,
+    pub(in crate::transport::rdma) deregister: CloseMemory,
+    pub(in crate::transport::rdma) destroy_cq: unsafe extern "C" fn(*mut CqHandles) -> c_int,
+    pub(in crate::transport::rdma) dealloc_pd: unsafe extern "C" fn(*mut DeviceHandles) -> c_int,
+    pub(in crate::transport::rdma) close_device: unsafe extern "C" fn(*mut DeviceHandles) -> c_int,
 }
 
 // The opaque handles belong to Resources, not to a wrapper's infallible Drop.
@@ -419,6 +462,8 @@ destroy!(dealloc_pd, DeviceHandles, pd, ibv_dealloc_pd);
 destroy!(close_device, DeviceHandles, context, ibv_close_device);
 
 pub(super) static REAL: Verbs = Verbs {
+    #[cfg(feature = "cuda")]
+    gpu_registration: gpu_registration::REAL,
     #[cfg(feature = "cuda")]
     gpu_keys: Some(GpuKeyVerbs {
         create: gpu_key::create,

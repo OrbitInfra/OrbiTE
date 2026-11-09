@@ -2,6 +2,42 @@
 
 use super::*;
 
+// All native CUDA MRs, including private-PD grants, pass this boundary.
+pub(in crate::transport::rdma) unsafe fn register_on_pd(
+    memory: &MemoryHandles,
+    pd: *mut c_void,
+    buffer: *mut c_void,
+    length: usize,
+    access: c_int,
+) -> *mut c_void {
+    #[cfg(feature = "cuda")]
+    if let Some(export) = &memory.dmabuf {
+        let Some(verb) = memory.dmabuf_verb else {
+            return std::ptr::null_mut();
+        };
+        let Some(offset) = (buffer as u64).checked_sub(export.base) else {
+            return std::ptr::null_mut();
+        };
+        if offset
+            .checked_add(length as u64)
+            .is_none_or(|end| end > export.length as u64)
+        {
+            return std::ptr::null_mut();
+        }
+        // SAFETY: the CUDA owner verified the containing allocation; the grant retains
+        // its exact subrange, descriptor and PD until deregistration succeeds.
+        return unsafe { verb(pd, offset, length, buffer as u64, export.fd, access) };
+    }
+    #[cfg(feature = "cuda")]
+    if memory.gpu_route == 1 {
+        return std::ptr::null_mut();
+    }
+    let _ = memory;
+    // SAFETY: host backing or a positively selected peermem route is retained by
+    // the registration owner. Export errors never reach this branch.
+    unsafe { ffi::ibv_reg_mr(pd.cast(), buffer, length, access).cast() }
+}
+
 pub(super) unsafe extern "C" fn register_memory(
     handles: *mut MemoryHandles,
     device: *const DeviceHandles,
@@ -12,8 +48,9 @@ pub(super) unsafe extern "C" fn register_memory(
     // SAFETY: the MR owner retains the device and entire host registration.
     // Window-bind capability never grants access through the parent MR rkey.
     unsafe {
-        (*handles).mr = ffi::ibv_reg_mr(
-            (*device).pd.cast(),
+        (*handles).mr = register_on_pd(
+            &*handles,
+            (*device).pd,
             buffer,
             length,
             (ffi::ibv_access_flags::IBV_ACCESS_LOCAL_WRITE.0
@@ -81,8 +118,9 @@ pub(super) unsafe extern "C" fn prepare_grant(
             if permission & 2 != 0 {
                 access |= ffi::ibv_access_flags::IBV_ACCESS_REMOTE_WRITE.0;
             }
-            memory.mr = ffi::ibv_reg_mr(
-                (*handles).private_pd.cast(),
+            memory.mr = register_on_pd(
+                memory,
+                (*handles).private_pd,
                 buffer,
                 length,
                 access as c_int,
@@ -101,7 +139,7 @@ pub(super) unsafe extern "C" fn prepare_grant(
                 0
             };
         if memory.mr.is_null() {
-            memory.mr = ffi::ibv_reg_mr(device.pd.cast(), buffer, length, access as c_int).cast();
+            memory.mr = register_on_pd(memory, device.pd, buffer, length, access as c_int);
             if memory.mr.is_null() {
                 return failure();
             }

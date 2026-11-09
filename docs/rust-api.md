@@ -24,7 +24,7 @@ compatibility surfaces are out of scope.
 | Construction | `TransferEngine`, `EngineConfig`, `RuntimeQueueConfig`; typed `new`, explicit `from_env/json/file`, config and stats queries |
 | Requests and outcomes | `TransferRequest`, `TransferOp`, `Transport`, `Priority`, `FileIoElement`, `BatchReport`, `TransferFailure`, `RemoteEffect`, `Error`, `Result` |
 | Registered backing | `HostMemory`, `MemoryBacking`, `RegisteredMemory`, `Permission`, `MemoryType`, `MemoryLocation`, `RangeLocation`; owned/external and range-batch registration, address resolution, unregister, guarded reads/writes |
-| Peer and file authority | `SourceEpoch`, `RemoteSegment`, `RemoteRegion`, `TransferTarget`, `FileSegment`, `FileSegmentInfo`; endpoint/epoch discovery, open/refresh/close, file offset resolution and info |
+| Peer and file authority | `SourceEpoch`, `RemoteSegment`, `RemoteRegion`, `GpuDirectRoutes`, `TransferTarget`, `FileSegment`, `FileSegmentInfo`; endpoint/epoch discovery, open/refresh/close, file offset resolution and info |
 | Async work | `Batch`, `BatchId`, `TaskState`, `TaskStatus`, `BatchState`, `BatchStatus`, `SubmissionStatus`; allocate, append/groups, seal, observe/progress, cancel, wait, drain and free; `next_poll_delay`, `wait_before_next_poll` |
 | Notifications | `Notification`, `NotificationEffect`, `NotificationFailure`, `NotificationStatus`; attached, local and remote send, receive and delivery status |
 | Selection | `IntentType`, `PolicyName`, `SegmentType`, `SelectionPolicy`, `TransportSelectorConfig`, `QpPool`; compiled policies and named-policy resolution |
@@ -32,7 +32,7 @@ compatibility surfaces are out of scope.
 | Credits and accounting | `CreditResource`, `CreditBalance`, `CreditAmount`, `CreditUpdateDisposition`, `ReceiverCreditUpdateV1`, `ReceiverCreditConfig`, `ReceiverCreditStats`, `ReceiverCreditIssuerStats`, `EngineStats`, `RuntimeQueueStats`; manual and automatic credit lifecycle |
 | CPU providers | `HpTcpConfig`, `ShmConfig`, `MnnvlConfig`, `MnnvlHandleType`; SHM allocation/free (MNNVL settings exist without an active CUDA provider) |
 | Linux topology | `Topology`, `NicEntry`, `NicType`, `MemEntry`, `TopologyMemoryKind`, `DEVICE_PRIORITY_RANKS`; local/discovered topology snapshots |
-| `rdma` | `transport::rdma::{RdmaConfig, RdmaHostMemory, RdmaCudaMemory, RdmaProgressMode, SchedulingParams, NicLoadStats, QpReadDepths, RdmaStats}`; NIC load queries |
+| `rdma` | `transport::rdma::{RdmaConfig, GpuDirectRegistration, RdmaHostMemory, RdmaCudaMemory, RdmaProgressMode, SchedulingParams, NicLoadStats, QpReadDepths, RdmaStats}`; NIC load queries |
 | Unstable `rdma-adaptive` (excluded from freeze) | `transport::rdma::adaptive_congestion_control`: `Config`, `Mode`, `PathState`, `Snapshot`, `Signals`, `DomainState`, `AdmissionDomain`, `Decision`, `Reason`, `Rejection`, `PathHandle`, `Permit`, `Classification`, `FailureScope`, `Outcome`, `classify_completion`, `classify_async_event`; hidden callable core, not a live worker policy |
 | `cuda` | `cuda::{CudaMemory, RetainedResources, allocate_pinned_host, retained_resources}`, root `StagingLocation`, `StagingStats`, `NvlinkStats`; device/fabric/EGM allocation, external ownership, producer readiness, staging trim and IPC cache flush |
 | `cuda::local_copy` | `PinnedHostRegistration`, `CopyDirection`, `LocalCopyBackend`, `LocalCopyConfig`, `LocalCopyDesc`, `ProducerEvent`, `LocalCopyEngine`, `LocalCopyStats`, `LocalCopyCompletion`; caller stream, descriptors, submit, event progress/wait and close |
@@ -118,6 +118,9 @@ The root uses the typed `EngineConfig` field names. Transport fields may instead
 be grouped under `transports`; a field cannot appear in both places. Provider
 records use their typed field names and defaults. An optional provider object
 opts in; `null` disables it. `hp_tcp.enable` and `shm.enable` remain explicit.
+The RDMA record adds `gpu_direct_registration: "auto"` (default), `"dmabuf"`
+or `"peermem"`; it is compiled once and affects CUDA Direct registrations only.
+See [route selection and lifetime](rdma-cuda.md#gpu-direct-registration-routes).
 Duration fields have an `_us` suffix and take integer microseconds; fields already
 naming a unit, such as `connect_timeout_ms`, retain that unit. Other sizes are
 bytes except explicitly named KiB settings. MNNVL `fabric_domain` uses the

@@ -45,6 +45,7 @@ fn address_resolution_uses_tent_containment_order_and_rejects_cross_region_range
         fabric: None,
         hp_registered: false,
         profile: Default::default(),
+        gpu_direct_routes: Default::default(),
         ipc_exportable: false,
         epoch,
         id,

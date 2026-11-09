@@ -83,6 +83,7 @@ impl Relay {
                 fabric: None,
                 hp_registered: false,
                 profile: Default::default(),
+                gpu_direct_routes: Default::default(),
                 ipc_exportable: true,
                 epoch,
                 id: memory.id(),

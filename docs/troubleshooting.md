@@ -70,7 +70,15 @@ device identity, error and cleanup evidence for diagnosis.
 
 ## CUDA allocation works but direct GPU RDMA does not
 
-NVIDIA allocation and synchronized host staging are the current source paths.
-Direct GPU registration, GPUDirect RDMA, IPC and NVLink transfer require separate
-implementation and hardware qualification. A successful small CUDA compute
-probe does not establish those transport paths.
+Check `rdma.gpu_direct_registration` and the [registration-route prerequisites](rdma-cuda.md#gpu-direct-registration-routes).
+Dma-buf needs CUDA device support, its export symbol and the optional
+`ibv_reg_dmabuf_mr` symbol. Peermem needs one of these version paths:
+`/sys/kernel/mm/memory_peers/nv_mem/version`,
+`/sys/kernel/mm/memory_peers/nv_mem_nc/version` or
+`/sys/module/nvidia_peermem/version`. A module directory alone is insufficient;
+both MLNX_OFED `nv_peer_mem` and NVIDIA `nvidia_peermem` are recognized.
+`auto` selects an available route before registration; an export/native error
+never falls back within that registration. Use the debug route diagnostic,
+Describe evidence and RDMA route counters. Explicit Direct errors do not
+silently select staging; choose the staged memory policy when needed. A
+successful CUDA compute probe does not qualify GPUDirect or its mapping route.

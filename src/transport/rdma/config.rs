@@ -30,6 +30,18 @@ pub enum RdmaCudaMemory {
     Direct,
 }
 
+/// Native CUDA MR route. Auto prefers dma-buf, then a loaded NVIDIA/MLNX_OFED peermem
+/// module. A failed native export/registration never retries the other route.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Deserialize)]
+#[non_exhaustive]
+#[serde(rename_all = "lowercase")]
+pub enum GpuDirectRegistration {
+    #[default]
+    Auto,
+    Dmabuf,
+    Peermem,
+}
+
 /// Shared completion-queue progress policy. Polling is the default; both modes
 /// keep posted work owned until completion or a physical retirement receipt.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -139,6 +151,9 @@ pub struct RdmaConfig {
     pub max_staging_bytes: usize,
     pub host_memory: RdmaHostMemory,
     pub cuda_memory: RdmaCudaMemory,
+    /// Registration route for Direct CUDA memory; Auto by default. This does not
+    /// enable Direct mode or change the staged-memory policy.
+    pub gpu_direct_registration: GpuDirectRegistration,
     /// Probe exact-range, revocable provider keys for one-sided GPU source reuse.
     /// Disabled by default. Direct GPU sources use isolated per-grant PDs unless opted in.
     pub gpu_source_reuse: bool,
@@ -204,6 +219,7 @@ impl Default for RdmaConfig {
             max_staging_bytes: 64 << 20,
             host_memory: RdmaHostMemory::Direct,
             cuda_memory: RdmaCudaMemory::Staged,
+            gpu_direct_registration: GpuDirectRegistration::Auto,
             gpu_source_reuse: false,
             disable_gpu_direct_rdma: false,
             log_slice_affinity: false,

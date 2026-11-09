@@ -543,6 +543,7 @@ impl<'a> StagingTask<'a> {
                 fabric: None,
                 profile: Default::default(),
                 hp_registered: false,
+                gpu_direct_routes: Default::default(),
                 ipc_exportable: false,
             },
             remote_offset: 0,

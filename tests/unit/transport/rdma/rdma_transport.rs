@@ -277,6 +277,7 @@ fn requester_checks_source_offer_and_each_bound_phase_before_data_or_read_copyba
                 fabric: None,
                 hp_registered: false,
                 profile: Default::default(),
+                gpu_direct_routes: Default::default(),
                 ipc_exportable: false,
                 epoch,
                 id: 1,

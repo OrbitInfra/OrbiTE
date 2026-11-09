@@ -37,6 +37,63 @@ TCP and staged RDMA share the [CUDA staging pool](staging.md), and
 [remote staging](staging.md#serial-remote-staging) adds Pin/Delegate/Unpin over
 the same control channel.
 
+## GPU Direct registration routes
+
+With `cuda_memory: "direct"`, set `rdma.gpu_direct_registration` to `auto`
+(default), `dmabuf` or `peermem`. The typed field takes
+`GpuDirectRegistration::{Auto, Dmabuf, Peermem}`. `auto` prefers dma-buf when
+CUDA advertises `DMA_BUF_SUPPORTED` and both export and verbs symbols exist;
+otherwise it uses peermem only when a supported kernel module is loaded. An explicit
+route with missing prerequisites returns `Unavailable`. The default CUDA memory
+policy remains `staged`; a failed explicit Direct registration does not change
+that policy or retry a device pointer as host memory. An attempted export or
+native registration failure is returned without trying another route.
+
+Peermem detection follows [NCCL's module probe](https://github.com/NVIDIA/nccl/blob/3e46c089f4ae4732722a419eb6096aead7e47a30/src/transport/net_ib/gdr.cc):
+any one of `/sys/kernel/mm/memory_peers/nv_mem/version`,
+`/sys/kernel/mm/memory_peers/nv_mem_nc/version` or
+`/sys/module/nvidia_peermem/version` must exist. This covers MLNX_OFED's
+`nv_peer_mem` and NVIDIA's `nvidia_peermem`; a module directory alone is not
+evidence of support.
+
+`cuMemGetHandleForAddressRange` exports the containing allocation. Its base and
+export size are host-page aligned; a legacy allocation's length rounds up to a
+host page. VMM uses the owned, fully mapped extent and keeps its existing
+`gpuDirectRDMACapable` flag. The MR retains the exact requested length, with
+`offset = address - allocation_base` and `iova = address`. This meets the
+[CUDA export contract](https://docs.nvidia.com/cuda/archive/13.0.0/cuda-driver-api/group__CUDA__MEM.html)
+and the [verbs offset/IOVA rule](https://github.com/linux-rdma/rdma-core/blob/v59.0/libibverbs/man/ibv_reg_mr.3).
+It follows [NCCL's host-page registration geometry](https://github.com/NVIDIA/nccl/blob/3e46c089f4ae4732722a419eb6096aead7e47a30/src/transport/net_ib/reg.cc),
+while keeping OrbiTE's exact-range grant authority.
+
+Export flags are zero on every driver and platform, preserving CUDA's default
+mapping. [NCCL's mapping flag](https://github.com/NVIDIA/nccl/blob/3e46c089f4ae4732722a419eb6096aead7e47a30/src/transport/net.cc)
+forces PCIe only for its `ncclTopoGdrModePci` mode:
+[topology selection](https://github.com/NVIDIA/nccl/blob/3e46c089f4ae4732722a419eb6096aead7e47a30/src/graph/paths.cc)
+requires a local GPU→CPU `PATH_C2C` and a GPU→NIC distance other than `PATH_P2C`.
+x86 PCIe and Grace CPU-attached NIC paths use zero. OrbiTE lacks this C2C/PCI
+classification, so forced PCIe mapping is **not implemented**. Grace mapping
+and route verification remain an installed-gate limit; an export error fails
+closed rather than trying peermem.
+
+The optional `ibv_reg_dmabuf_mr` symbol is resolved from loaded libibverbs;
+older rdma-core needs no new link-time symbol. Linux
+[takes its own dma-buf reference](https://github.com/torvalds/linux/blob/v6.17/drivers/infiniband/core/umem_dmabuf.c)
+for the MR. OrbiTE conservatively retains the fd too, under the existing bounded
+MR/grant budgets, until deregistration succeeds. It then closes the fd exactly
+once. A failed deregistration keeps the MR, fd, allocation, context and charges;
+a failed fd close is sticky and retains the remaining owners. Neither destroy
+is retried. Shared MRs, private grant PDs and opt-in GPU-source reuse all use
+this same registration boundary.
+
+Debug diagnostics report registration ID, length and route, without keys or
+addresses. `RdmaStats::{dmabuf_registrations, peermem_registrations}` counts
+successful native registrations. `RemoteRegion::gpu_direct_routes()` reports
+routes observed for that published region through Describe; it is evidence,
+not a release receipt or proof that a future route is usable. The optional
+metrics exporter exposes both counters. Both [installed route gates](qualification.md#verification-queue)
+remain **Implemented; installed profile unqualified**.
+
 ## Device, port, GID and memory topology discovery
 
 Set `EngineConfig.rdma` to an `RdmaConfig`:

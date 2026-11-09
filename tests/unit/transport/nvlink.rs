@@ -244,6 +244,7 @@ pub(crate) fn requester_case(
             fabric: None,
             hp_registered: false,
             profile: Default::default(),
+            gpu_direct_routes: Default::default(),
             ipc_exportable: true,
             epoch,
             id: 7,

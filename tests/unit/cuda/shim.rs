@@ -33,6 +33,8 @@ impl std::ops::Deref for Pin {
 }
 
 pub(super) struct Device {
+    #[cfg(feature = "rdma")]
+    pub(super) dmabuf: Mutex<super::dmabuf::State>,
     pub(super) copy_gate: Mutex<Gate>,
     pub(super) event_gate: Mutex<
         Option<(
@@ -117,18 +119,18 @@ unsafe impl Sync for Device {}
 thread_local! { pub(super) static STACK: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) }; }
 static DEVICES: OnceLock<Mutex<BTreeMap<u64, Weak<Device>>>> = OnceLock::new();
 static STREAM_CONTEXTS: OnceLock<Mutex<BTreeMap<usize, usize>>> = OnceLock::new();
-fn device_at(address: u64) -> Arc<Device> {
+pub(super) fn device_at(address: u64) -> Arc<Device> {
+    // Interior addresses may sort after stale keys from a freed, smaller box.
+    // Live allocations cannot overlap; skip dead Weak entries before choosing.
     DEVICES
         .get()
         .unwrap()
         .lock()
         .unwrap()
         .range(..=address)
-        .next_back()
-        .unwrap()
-        .1
-        .upgrade()
-        .unwrap()
+        .rev()
+        .find_map(|(_, owner)| owner.upgrade())
+        .expect("live CUDA shim allocation")
 }
 pub(super) fn current() -> &'static Device {
     let pointer = STACK.with(|stack| *stack.borrow().last().unwrap());
@@ -627,6 +629,10 @@ unsafe extern "C" fn range(base: *mut u64, length: *mut usize, address: u64) -> 
 }
 pub(super) fn driver() -> Arc<Driver> {
     Arc::new(Driver {
+        #[cfg(feature = "rdma")]
+        dmabuf_export: None,
+        #[cfg(feature = "rdma")]
+        close_fd: libc::close,
         _library: None,
         vmm: None,
         local: Default::default(),
@@ -678,6 +684,8 @@ pub(super) fn driver() -> Arc<Driver> {
 }
 pub(super) fn allocation(bytes: &[u8]) -> Arc<Device> {
     let device = Arc::new(Device {
+        #[cfg(feature = "rdma")]
+        dmabuf: Mutex::default(),
         copy_gate: Mutex::new(None),
         scratch: Default::default(),
         event_gate: Mutex::new(None),
@@ -772,6 +780,9 @@ unsafe extern "C" fn device_attribute(
         }
         sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_GPU_DIRECT_RDMA_FLUSH_WRITES_OPTIONS => {
             device.rdma_flush_options.load(Ordering::Acquire)
+        }
+        sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_DMA_BUF_SUPPORTED => {
+            device.dmabuf.lock().unwrap().supported
         }
         _ => return Status::CUDA_ERROR_INVALID_VALUE,
     };
@@ -1094,4 +1105,20 @@ unsafe extern "C" fn pci_bus_id(
         std::ptr::copy_nonoverlapping(id.as_ptr(), out.cast(), id.len());
     }
     SUCCESS
+}
+
+#[test]
+fn interior_pointer_lookup_ignores_dead_allocation_keys() {
+    let owner = allocation(&[0; 32]);
+    // SAFETY: the retained boxed allocation is stable for this control.
+    let base = unsafe { &*owner.bytes.get() }.as_ptr() as u64;
+    let stale = base + 7;
+    DEVICES
+        .get()
+        .unwrap()
+        .lock()
+        .unwrap()
+        .insert(stale, Weak::new());
+    assert!(Arc::ptr_eq(&device_at(base + 15), &owner));
+    DEVICES.get().unwrap().lock().unwrap().remove(&stale);
 }

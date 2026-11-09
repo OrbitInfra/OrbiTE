@@ -259,6 +259,15 @@ unsafe extern "C" fn register_memory(
     } else {
         "register_local"
     });
+    #[cfg(feature = "cuda")]
+    // SAFETY: the shim owns the same live handle slots and calls the production
+    // routing boundary before constructing its stand-in provider MR.
+    if unsafe {
+        (*h).dmabuf.is_some()
+            && sys::register_on_pd(&*h, (*handles).pd, address, length, 1).is_null()
+    } {
+        return libc::EIO;
+    }
     device.mrs.fetch_add(1, Ordering::SeqCst);
     // SAFETY: The device or connection owner keeps the supplied PD handle storage live throughout
     // this call.
@@ -387,6 +396,21 @@ unsafe extern "C" fn prepare_grant(
     // callback.
     unsafe {
         if (*memory).mr.is_null() {
+            #[cfg(feature = "cuda")]
+            if (*memory).dmabuf.is_some() {
+                let pd = if (*h).private_pd.is_null() {
+                    (*handles).pd
+                } else {
+                    (*h).private_pd
+                };
+                let access = 1
+                    | if permission & 1 != 0 { 4 } else { 0 }
+                    | if permission & 2 != 0 { 2 } else { 0 };
+                if sys::register_on_pd(&*memory, pd, bytes, length, access).is_null() {
+                    return libc::EIO;
+                }
+            }
+
             if !(*h).private_pd.is_null() {
                 (*(*h).private_pd.cast::<FakePd>())
                     .mrs
@@ -1643,6 +1667,11 @@ unsafe fn query_address(
 }
 
 pub(super) static VERBS: sys::Verbs = sys::Verbs {
+    #[cfg(feature = "cuda")]
+    gpu_registration: sys::GpuRegistrationVerbs {
+        dmabuf: || None,
+        peermem: || true,
+    },
     gpu_keys: Some(gpu_keys::VERBS),
     query_port_speed: None,
     discover,
@@ -2653,4 +2682,60 @@ fn typed_rdma_switches_reject_a_conflicting_direct_cuda_mode() {
     assert!(
         matches!(config.validate(), Err(crate::Error::InvalidConfig(reason)) if reason.contains("disable_gpu_direct_rdma"))
     );
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) fn dmabuf_runtime(
+    mode: &str,
+    policy: GpuDirectRegistration,
+    verb: bool,
+    peermem: bool,
+    reuse: bool,
+) -> RdmaTransport {
+    use crate::cuda::tests::dmabuf::register_dmabuf;
+    static BOTH: sys::Verbs = sys::Verbs {
+        gpu_registration: sys::GpuRegistrationVerbs {
+            dmabuf: || Some(register_dmabuf),
+            peermem: || true,
+        },
+        ..VERBS
+    };
+    static DMA: sys::Verbs = sys::Verbs {
+        gpu_registration: sys::GpuRegistrationVerbs {
+            dmabuf: || Some(register_dmabuf),
+            peermem: || false,
+        },
+        ..VERBS
+    };
+    static NONE: sys::Verbs = sys::Verbs {
+        gpu_registration: sys::GpuRegistrationVerbs {
+            dmabuf: || None,
+            peermem: || false,
+        },
+        ..VERBS
+    };
+    let mut r = gpu_runtime_with_key_reuse(mode, reuse);
+    r.config.gpu_direct_registration = policy;
+    r.verbs = match (verb, peermem) {
+        (true, true) => &BOTH,
+        (true, false) => &DMA,
+        (false, true) => &VERBS,
+        (false, false) => &NONE,
+    };
+    // Constructors retain the table selected for this test before any native owner exists.
+    r
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) fn dmabuf_runtime_with_peermem_root(policy: GpuDirectRegistration) -> RdmaTransport {
+    static PATHS: sys::Verbs = sys::Verbs {
+        gpu_registration: sys::GpuRegistrationVerbs {
+            dmabuf: || None,
+            peermem: || sys::peermem_at(&crate::cuda::tests::dmabuf::peermem_root()),
+        },
+        ..VERBS
+    };
+    let mut runtime = dmabuf_runtime("direct:copy", policy, false, false, false);
+    runtime.verbs = &PATHS;
+    runtime
 }

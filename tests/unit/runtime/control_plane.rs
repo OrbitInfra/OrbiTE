@@ -333,6 +333,7 @@ fn fault_peer() -> (TcpListener, RemoteSegment) {
             fabric: None,
             hp_registered: false,
             profile: Default::default(),
+            gpu_direct_routes: Default::default(),
             ipc_exportable: false,
             epoch,
             id: 1,
@@ -546,7 +547,7 @@ fn external_owner_survives_unregister_until_the_handler_really_exits() {
 
 #[test]
 fn descriptor_decoder_rejects_bad_addresses_versions_and_ambiguous_ids() {
-    for case in 0..13 {
+    for case in 0..16 {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let endpoint = listener.local_addr().unwrap();
         let epoch = SourceEpoch::generate().unwrap();
@@ -582,6 +583,12 @@ fn descriptor_decoder_rejects_bad_addresses_versions_and_ambiguous_ids() {
                 11 => payload[8] = 1, // Boot bytes require an advertised placement identity.
                 // A pre-selector peer can send the same header with the old Describe layout.
                 12 => drop(payload.drain(4..DESCRIPTOR_HEADER)),
+                13 => entry[27] = 2, // Host regions cannot claim a CUDA registration route.
+                14 => {
+                    entry[25] = 1;
+                    entry[27] = 4;
+                } // A route requires segment RDMA capability.
+                15 => entry[27] = 8, // Unknown region capability bits fail closed.
                 _ => {}
             }
             let mut reply = Reply {

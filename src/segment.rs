@@ -76,9 +76,31 @@ impl FromStr for SourceEpoch {
     }
 }
 
+/// Observed native CUDA registration routes; neither availability nor a drain receipt.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
+pub struct GpuDirectRoutes {
+    /// At least one native MR for this registration used an exported dma-buf.
+    pub dmabuf: bool,
+    /// At least one native MR for this registration used NVIDIA/MLNX_OFED peermem.
+    pub peermem: bool,
+}
+impl GpuDirectRoutes {
+    pub(crate) fn bits(self) -> u8 {
+        u8::from(self.dmabuf) | (u8::from(self.peermem) << 1)
+    }
+    pub(crate) fn from_bits(bits: u8) -> Self {
+        Self {
+            dmabuf: bits & 1 != 0,
+            peermem: bits & 2 != 0,
+        }
+    }
+}
+
 /// A source-owned registration ID and bounds, fenced to one source instance.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RemoteRegion {
+    pub(crate) gpu_direct_routes: GpuDirectRoutes,
     pub(crate) epoch: SourceEpoch,
     pub(crate) id: u64,
     pub(crate) address: u64,
@@ -128,6 +150,11 @@ impl RegionProfile {
 }
 
 impl RemoteRegion {
+    /// Native registration evidence at Describe time, not a liveness or release
+    /// receipt. Re-read the descriptor after additional registrations to refresh it.
+    pub fn gpu_direct_routes(&self) -> GpuDirectRoutes {
+        self.gpu_direct_routes
+    }
     /// Buffer location as published by its allocation owner.
     pub fn location_name(&self) -> String {
         match (self.memory_type, self.profile.node) {
