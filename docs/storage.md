@@ -137,9 +137,16 @@ publishing any SQE it validates every request, acquires exclusive host ranges,
 allocates aligned bounce buffers and checks SQ space. An overlapping host
 loan fails the group before I/O. An idle asynchronous batch can submit one
 contiguous host request of at most 64 KiB on its caller, when runtime queuing,
-background progress and route fallback do not apply. One nonblocking CQ check
-can finish it without creating a worker. Otherwise the existing batch worker
-takes the same ring and drains it; it never resubmits the request. A failed
+background progress and route fallback do not apply. After one nonblocking CQ
+check, it may block for a CQE for at most 200 µs or the remaining request deadline,
+whichever is shorter. The wait uses the ring’s timed `GETEVENTS` enter (or
+ring-fd readiness on older kernels), with zero submissions. At most three
+interrupted/unready waits share that one window; there is no spin. A CQE finishes
+through the normal prefix and admission owners without creating a worker. On
+expiry or an enter error, the existing batch worker takes the same ring and
+drains it; it never resubmits the request. This bounded caller wait deliberately
+differs from frozen TENT’s nonblocking caller status polling, so an abandoned
+batch still has an independent drain owner. A failed
 worker start retains the submitted I/O and reports `Unquiesced`. CUDA, pinned
 producer waits, vectors and larger groups keep their existing worker path.
 The synchronous report counts only the

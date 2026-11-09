@@ -236,9 +236,18 @@ An idle engine retains no storage thread or ring after the setup probe.
 For DRAM/file payloads the caller or existing batch worker owns the io_uring,
 iovecs, host range loans and bounce storage through CQE drain. File and peer
 targets share admission and batch progress. One small contiguous host-file
-request can submit and observe one ready CQE on an idle batch's caller. Unlike
-TENT's caller-driven polling, a pending receipt transfers the existing ring to
-the batch worker. Queued, background-progress, fallback and CUDA paths keep
+request can submit on an idle batch's caller, peek once, then block for a CQE
+for up to 200 µs, capped by its request deadline. At most three EINTR/EAGAIN
+attempts share the same window. Unlike TENT's nonblocking caller status polling,
+this brief wait can finish a late CQE without a thread handoff. A timeout or
+enter error transfers the unchanged ring to the batch worker.
+`late_small_cqe_waits_on_caller_without_a_worker_on_tmpfs_and_direct_ext4` holds
+a real CQE past the initial peek and counts zero worker starts.
+`caller_wait_interruptions_errors_and_short_cqe_never_resubmit` checks the shared
+window, bounded retries and exact short prefix;
+`expired_caller_window_drop_and_engine_close_keep_the_drain_owner` checks that
+expiry, drop and close leave charges and loans retained until the actual CQE.
+Queued, background-progress, fallback and CUDA paths keep
 their original worker. `pending_small_file_handoff_keeps_loans_through_cancel_timeout_and_close`
 holds a real CQE across cancellation, timeout, unregister and close;
 `failed_worker_handoff_quarantines_the_accepted_sqe_without_replay` proves that

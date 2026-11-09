@@ -89,14 +89,16 @@ after each:
 3. **dma-buf GPUDirect RDMA registration — done at source level.** Auto/explicit route
    policy, fd/MR ownership and route evidence have CPU shim controls. The
    [two installed profiles](qualification.md#verification-queue) remain unqualified.
-4. **Local-copy kernel SM budget and intent-aware Auto — implemented.**
+4. **Local-copy kernel SM budget and intent-aware Auto — done at source level.**
    A bind-validated CTA cap, typed submission options and cached per-class
    diagnostics preserve event-retained owners. The [calibration gate](qualification.md#caller-stream-local-cuda-copy)
    is written for PCIe Hopper and Grace C2C, not run. Keep existing defaults
-   until those results exist; stop for review before the next item.
-5. **Small-WRITE caller CQ wait.** Measure and remove the remaining worker
-   handoff only with a bounded completion/drain proof. Keep all retention,
-   cancellation, partial-submit and exact-prefix controls.
+   until those results exist.
+5. **Small-WRITE caller CQ wait — implemented.** The eligible contiguous host
+   request peeks once and waits up to 200 µs, capped by its deadline. A missed
+   window hands the same ring to the existing drain worker. Retention, cancel,
+   partial-submit and exact-prefix controls remain. Stop for review; next are
+   the separate HP-TCP fixture flake fix and release preparation.
 6. **NIXL plugin implementation.** Requires the upstream explicit-cancel API
    and the outcome of #1958, plus the hardware batch before the formal backend
    RFC: installed GPU/RDMA results for the current artifact and `nixlbench`

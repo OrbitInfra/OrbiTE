@@ -13,8 +13,10 @@ use crate::{
 
 thread_local! {
     static FAIL_WORKER_START: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static WORKER_STARTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 pub(crate) fn check_worker_start() -> Result<()> {
+    WORKER_STARTS.with(|n| n.set(n.get() + 1));
     if FAIL_WORKER_START.with(|f| f.replace(false)) {
         Err(std::io::Error::from_raw_os_error(libc::EAGAIN).into())
     } else {
@@ -678,6 +680,7 @@ struct HoldReap {
     started: mpsc::SyncSender<ReapWait>,
     release: Arc<Mutex<mpsc::Receiver<()>>>,
     lifetime: Arc<()>,
+    caller: std::thread::ThreadId,
 }
 
 struct ReapWait {
@@ -702,6 +705,11 @@ impl Ring for HoldReap {
         Ok(None) // Withhold the receipt from both caller and worker observations.
     }
     fn reap(&mut self, until: Instant) -> io::Result<(u64, i32)> {
+        if std::thread::current().id() == self.caller {
+            // The test releases only the drain worker. A caller window expiry
+            // cannot consume its receipt or block test setup on that release.
+            return Err(io::Error::from_raw_os_error(libc::ETIME));
+        }
         self.started
             .send(ReapWait {
                 until,
@@ -732,6 +740,7 @@ fn held_file(
     let (started, starting) = mpsc::sync_channel(1);
     let (release, releasing) = mpsc::sync_channel(1);
     let releasing = Arc::new(Mutex::new(releasing));
+    let caller = std::thread::current().id();
     let pool = engine
         .io_uring
         .as_ref()
@@ -748,6 +757,7 @@ fn held_file(
                 started: started.clone(),
                 release: Arc::clone(&releasing),
                 lifetime: Arc::new(()),
+                caller,
             }))
         }),
     });

@@ -251,9 +251,10 @@ pub(crate) struct Submitted {
 unsafe impl Send for Submitted {}
 
 impl Submitted {
-    /// One nonblocking CQ observation for the single-request caller path.
-    /// A missing receipt hands the unchanged owner to the existing batch worker.
-    pub(crate) fn poll_one(
+    /// Peek, then briefly wait for the single-request caller's completion.
+    /// Expiry or an enter error hands the unchanged owner to the drain worker;
+    /// neither is a release receipt or permission to submit the SQE again.
+    pub(crate) fn complete_small(
         mut self,
         operation: TransferOp,
         progress: Option<(&FileAttempts<'_>, usize)>,
@@ -262,7 +263,12 @@ impl Submitted {
             return Ok(self.report(operation, progress));
         }
         if self.drain.consumed == 1 {
-            if let Ok(Some((id, result))) = self.live.ring.peek() {
+            let receipt = match self.live.ring.peek() {
+                Ok(Some(cqe)) => Some(cqe),
+                Ok(None) => self.wait_small(),
+                Err(_) => None,
+            };
+            if let Some((id, result)) = receipt {
                 if id != 0
                     || !observe(
                         &mut self.live.tasks,
@@ -279,6 +285,23 @@ impl Submitted {
             }
         }
         Err(self)
+    }
+
+    fn wait_small(&mut self) -> Option<(u64, i32)> {
+        // A blocked enter yields the CPU. Keep both the time and interruption
+        // budget fixed, independent of the destruction window used by drain.
+        let until = (Instant::now() + SMALL_WAIT).min(self.deadline);
+        for _ in 0..3 {
+            if Instant::now() >= until {
+                break;
+            }
+            match self.live.ring.reap(until) {
+                Ok(cqe) => return Some(cqe),
+                Err(e) if matches!(e.raw_os_error(), Some(libc::EINTR | libc::EAGAIN)) => {}
+                Err(_) => break,
+            }
+        }
+        None
     }
 
     pub(crate) fn finish(
@@ -368,6 +391,8 @@ impl Submitted {
         report
     }
 }
+
+const SMALL_WAIT: std::time::Duration = std::time::Duration::from_micros(200);
 
 fn observe(
     tasks: &mut [Task],
