@@ -2,7 +2,7 @@
 
 OrbiTE follows frozen Mooncake TENT's engine, transport, context, registered
 buffer, endpoint and worker boundaries, implemented as Rust resource owners.
-The [product positioning](https://github.com/OrbitInfra/OrbiTE#overview) defines
+The [consumer scope](tent-parity.md#wire-and-consumer-boundaries) defines
 the consumer and non-goal boundary. The [NIXL backend design](nixl-backend.md)
 proposes an upstream C++ plugin over a purpose-built native boundary to these
 owners, with no second coordinator. It follows upstream's explicit-cancel

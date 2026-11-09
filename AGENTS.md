@@ -14,7 +14,7 @@ do not turn this file into a second status diary.
 
 ## 1. What OrbiTE is
 
-- Follow the [product positioning and non-goals](README.md#overview): OrbiTE is
+- Follow the [product positioning and non-goals](docs/architecture.md): OrbiTE is
   the KV data plane for LLM inference on NVIDIA. OrbitKV cache tiering and
   cross-node reuse come first; P/D is a later integration target, not a current
   qualification claim. The upstream path is an in-tree NIXL backend, described
