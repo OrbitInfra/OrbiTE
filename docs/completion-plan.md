@@ -79,16 +79,16 @@ required profiles and evidence for each milestone.
 
 ## Current focus
 
-Review the docs-only [NIXL backend design](nixl-backend.md), including its
-unposted upstream issue draft and the registration/release lifetime gaps.
-After that review, work in this order, one coherent PR at a time:
+The [NIXL backend design](nixl-backend.md) is reviewed; its upstream issue is
+still unposted and requires maintainer approval. Work in this order, one
+coherent PR at a time:
 
-1. **Clean-harness direct-I/O WRITE tail.** Compare OrbiTE and frozen TENT per
-   request at the block layer: offsets, sizes, queue depth at issue, merges,
-   io-wq offload, fd open flags and page-cache invalidation after the buffered
-   reset. Find the implementation difference and fix only what the evidence
-   proves. The [reset-isolated results](benchmarks.md#ext4-tail-diagnosis) make
-   this the first performance item, not a noise dismissal.
+1. **Direct-I/O WRITE comparison review.** The [block-layer controls](benchmarks.md#direct-io-issue-paths-and-verification-load)
+   find identical measured WRITE geometry and a verification/load-dependent
+   gap: unchanged TENT reproduces the long tail with bulk verification. Both
+   harnesses now use bulk verification; no production owner change is justified
+   by these traces. Keep virtual-disk tails as a P11 limit and review the full
+   paired rows before proceeding.
 2. **Small-WRITE caller CQ wait.** Measure and remove the remaining worker
    handoff only with a bounded completion/drain proof. Keep all retention,
    cancellation, partial-submit and exact-prefix controls.
@@ -433,7 +433,11 @@ completion. The [ext4 reset comparison](benchmarks.md#ext4-tail-diagnosis)
 removes harness writeback from the timed window and exposes a real direct-I/O
 WRITE gap: gapped 64×4 KiB p99 is 33.0/26.0 ms versus TENT 1.8/1.8 ms;
 contiguous p99 is 14.1/18.0 ms versus 4.0/6.2 ms (stable/Rust 1.85).
-The underlying cause and small-WRITE handoff remain open in the
+The [block-layer comparison](benchmarks.md#direct-io-issue-paths-and-verification-load)
+reproduces the gapped tail in unchanged TENT by matching verification reads.
+Both harnesses now use bulk verification; the earlier numbers describe the
+prior verification regime. No production tuning is claimed. Virtual-disk
+load-dependent tails remain for P11; the small-WRITE handoff follows in the
 [ordered performance work](#current-focus). These scoped runs make no general
 performance claim. Add NIXL UCX and Mooncake plugin comparisons during the
 hardware pass; the [design proposal](nixl-backend.md) adds no NIXL dependency.

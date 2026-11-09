@@ -481,6 +481,93 @@ owner to the worker if still pending. Expiry would remain a handoff trigger,
 never a release receipt. This needs a separate submission-latency/lifetime
 review and measurement; no wait, pool or new worker is introduced here.
 
+### Direct-I/O issue paths and verification load
+
+The [block-layer comparison](https://github.com/OrbitInfra/OrbiTE/actions/runs/42562245093)
+uses production `82cf6cef` with diagnostic harness `2fba491d`. The
+[counterfactual run](https://github.com/OrbitInfra/OrbiTE/actions/runs/42563852934)
+uses `dca107d`, with the **same production tree**, against frozen TENT
+`e1ea5d31`. Each diagnostic case has three warmups and 1,000 byte-checked
+samples. The latter run uses four-vCPU Ubuntu 24.04 / Linux
+7.0.0-1017-azure VMs: stable Rust 1.99.1 on EPYC 9V45, Rust 1.85 on
+EPYC 7763. The initial MSRV trace and stable counterfactual expose
+`MSFT NVMe Accelerator v1.0`, with a 256 KiB request limit; the counterfactual
+MSRV job exposes `Msft Virtual Disk` (`sda`), with a 2 MiB limit. Both report
+512-byte logical / 4 KiB physical sectors and the `none` scheduler. Each
+within-job engine comparison shares its device; the jobs are distinct virtual
+disks, not installed NVMe qualification.
+
+Both implementations open the payload descriptor with `O_RDWR|O_DIRECT`,
+without `O_DSYNC` or `O_SYNC`; OrbiTE also uses `O_CLOEXEC`. The separate
+OrbiTE buffered descriptor's `O_NONBLOCK` is absent from the direct descriptor.
+`strace` records opens and subsequent `fcntl` calls. Plain ring setup, SQEs,
+file offsets and device requests agree. For each gapped 64-block WRITE:
+
+| Boundary | OrbiTE | Frozen TENT |
+| --- | --- | --- |
+| SQE submission | Existing batch worker, one enter | Caller, one enter |
+| Ring / SQEs | One / 64 `WRITEV` | One / 64 `WRITEV` |
+| File offsets / lengths | 4 KiB + request index × 8 KiB / 4 KiB | Same |
+| Kernel issue | 64 NOWAIT direct attempts, then 64 io-wq direct issues | Same |
+| Bios / alignment | 64 × 4 KiB, 4 KiB-aligned sectors, stride 16 sectors | Same |
+| Merges / unplug width | Zero merges; 64 unplugs of one request | Same |
+| Median of per-batch maximum driver-issue depth, initial MSRV run | 9 | 10 |
+| Cached folios invalidated after reset | 49: orders 0–2 | 14: orders 0–5 |
+| Untimed verification reads, per sample | 32 × 4 KiB plus one large read | 5 × 4 KiB plus five larger reads |
+
+The first repeatable divergence is **verification before the next sample**.
+Rust reads the whole file; the earlier C++ harness used an `istreambuf_iterator`
+with small buffered reads. Their readahead and cached-folio layouts differ even
+though both reset in place and finish `fdatasync`. In the initial MSRV trace,
+median between-window time is 1.72 / 2.81 ms (OrbiTE / TENT). All measured
+WRITEs are issued before the long waits: OrbiTE's slowest-1% median last issue
+is 0.82 ms, while the longest block wait is 29.68 ms. No delayed submit,
+extra SQE, bounce allocation, flush/FUA or ownership wait explains that gap.
+The trace's queue depth is this batch's outstanding driver requests, not
+hardware-wide queue depth. Physical disk service is not visible to the guest.
+
+Two controls leave production and the timed operation unchanged. A bulk-read
+C++ verifier preserves every byte/guard check and reproduces the long tail in
+TENT. An additional **untimed 10 ms pause after reset** reduces offered load.
+Numbers below are medians of the slowest ten traced samples, in milliseconds;
+they are **not** untraced benchmark p99s. Stable / Rust 1.85 stay separate.
+
+| 64 × 4 KiB WRITE | Original verifier | TENT bulk verifier only | Untimed pause only |
+| --- | ---: | ---: | ---: |
+| OrbiTE gapped | 30.78 / 34.16 | — | 1.54 / 2.58 |
+| TENT gapped | 3.15 / 3.35 | 29.83 / 28.79 | 2.83 / 3.29 |
+| OrbiTE contiguous | 26.58 / 19.71 | — | 17.41 / 3.00 |
+| TENT contiguous | 25.61 / 12.89 | 25.01 / 17.48 | 1.88 / 2.77 |
+
+A [reversed-order run](https://github.com/OrbitInfra/OrbiTE/actions/runs/42567993578)
+on source `fc3c2a5` runs bulk verification first and the legacy verifier later.
+TENT gapped tail medians are 27.03 / 30.12 ms with bulk and 3.28 / 3.39 ms
+with legacy verification. The effect persists in both orders.
+
+The original TENT bulk-control longest block waits are 28.45 / 27.48 ms. Thus an
+unchanged TENT owner exhibits the purported OrbiTE-specific gapped tail when
+only verification changes. Lower offered load reduces it without replacing
+OrbiTE's worker, ring or drain; it does **not** eliminate every outlier (notably
+stable contiguous OrbiTE). Periodic stalls after driver issue are consistent
+with virtual-disk rate limiting, but the host's quota/controller is not exposed:
+that mechanism is an inference, not a measured throttle receipt. The evidence
+supports a verification/load-dependent comparison and a limit below guest
+issue, not a production ownership fix or a general storage speed claim.
+
+Both normal harnesses now verify files with a bulk read. The legacy C++
+verifier and pacing are diagnostic controls only; `benches/run.py` strips all
+inherited `ORBITE_BENCH_*` settings and records explicit diagnostic overrides.
+No pacing is added to the normal S26 sweep. The
+[complete paired report](https://github.com/OrbitInfra/OrbiTE/pull/186) records
+every row with the original trials, samples, warmup and byte checks. Use
+`benches/compare.py BEFORE AFTER --changed-profile none --verification-comparison`:
+the explicit mode permits the C++ verification transition only, keeps reset
+and Rust-workload checks, and labels affected TENT file rows `V`. TENT CPU/TCP
+rows remain noise references; changed TENT file rows do not. The clean-reset
+numbers below remain evidence for the **earlier verification regime**, not
+proof that OrbiTE issues intrinsically slower direct WRITEs. Current virtual-disk
+tails and the separate small-WRITE handoff remain limits for P11.
+
 ### Reset-only paired comparison
 
 The [untraced paired run](https://github.com/OrbitInfra/OrbiTE/actions/runs/42536943466)

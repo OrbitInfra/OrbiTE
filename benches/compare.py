@@ -33,6 +33,20 @@ def match_reset(before, after, reset_comparison):
         raise ValueError("unmatched file_state")
 
 
+def match_verification(before, after, enabled):
+    if enabled:
+        if (before, after) != (None, "whole-file bulk read in both harnesses"):
+            raise ValueError("unexpected verification comparison")
+    elif before != after:
+        raise ValueError("unmatched verification_io")
+
+
+def match_harness(before, after, reset, verification):
+    for key in ("tent.cpp", "transfer.rs"):
+        if before[key] != after[key] and not reset and not (verification and key == "tent.cpp"):
+            raise ValueError(f"changed workload {key}")
+
+
 def controls():
     cpu = "Model name: example\nCPU(s): 4\nCPU max MHz: 2600\nCPU(s) scaling MHz: 116%\n"
     changed = cpu.replace("116%", "154%")
@@ -50,6 +64,21 @@ def controls():
         except ValueError:
             continue
         raise ValueError("unknown reset regime was accepted")
+    match_verification(None, "whole-file bulk read in both harnesses", True)
+    for enabled in (False, True):
+        try:
+            match_verification(None, "unknown", enabled)
+        except ValueError:
+            continue
+        raise ValueError("unknown verification regime was accepted")
+    old = {"tent.cpp": "a", "transfer.rs": "b"}
+    match_harness(old, old | {"tent.cpp": "c"}, False, True)
+    try:
+        match_harness(old, old | {"transfer.rs": "c"}, False, True)
+    except ValueError:
+        pass
+    else:
+        raise ValueError("verification comparison accepted a changed Rust workload")
 
 
 def load(path):
@@ -80,7 +109,9 @@ def main():
     parser.add_argument("before", type=Path)
     parser.add_argument("after", type=Path)
     parser.add_argument("--changed-profile", action="append", help="OrbiTE profile changed by this pair; repeat for several (default: tcp)")
-    parser.add_argument("--reset-comparison", action="store_true", help="explicit old truncate/reset versus preallocated pwrite/fdatasync harness comparison")
+    regimes = parser.add_mutually_exclusive_group()
+    regimes.add_argument("--reset-comparison", action="store_true", help="explicit old truncate/reset versus preallocated pwrite/fdatasync harness comparison")
+    regimes.add_argument("--verification-comparison", action="store_true", help="explicit C++ stream-iterator versus bulk file verification; reset and timed operations unchanged")
     args = parser.parse_args()
     changed = args.changed_profile or ["tcp"]
     before, before_ids, old = load(args.before)
@@ -89,15 +120,14 @@ def main():
         raise ValueError("different workload rows")
     clock_observation = match_cpu(before["cpu"], after["cpu"])
     match_reset(before["file_state"], after["file_state"], args.reset_comparison)
+    match_verification(before.get("verification_io"), after.get("verification_io"), args.verification_comparison)
     for key in ("host", "kernel", "affinity", "rustc", "cxx", "tent_revision", "caller_threads", "workers_per_engine", "tent_rpc_pools", "merge", "engine_max_failover_attempts", "tent_tcp_local_retry", "poll", "metrics", "timing", "checks", "builds"):
         if before[key] != after[key]:
             raise ValueError(f"unmatched {key}")
     for key in ("samples", "warmup", "workers", "trials", "sizes", "batches", "ext4", "tmpfs"):
         if before["parameters"][key] != after["parameters"][key]:
             raise ValueError(f"unmatched parameter {key}")
-    for key in ("tent.cpp", "transfer.rs"):
-        if before["harness_sha256"][key] != after["harness_sha256"][key] and not args.reset_comparison:
-            raise ValueError(f"changed workload {key}")
+    match_harness(before["harness_sha256"], after["harness_sha256"], args.reset_comparison, args.verification_comparison)
     print(f"Before `{before['orbite_revision'][:8]}`; after `{after['orbite_revision'][:8]}`; "
           f"host `{after['host']}`; {len(after_ids)} verified rows on each side.")
     if clock_observation:
@@ -105,6 +135,8 @@ def main():
               "All other lscpu fields match. Frequency was not locked; timings are not frequency-normalized.")
     if args.reset_comparison:
         print("\nIntentional harness change in both implementations: truncate/buffered reset → preallocated in-place pwrite/fdatasync before timing. H marks those file rows; timed operations and byte checks are unchanged.")
+    if args.verification_comparison:
+        print("\nIntentional C++ harness change: file verification uses a whole-file bulk read, matching Rust. V marks those TENT file rows; production, reset, timed operations and byte checks are unchanged. Diagnostic pacing is disabled.")
     print("\nCells are before → after, median of the three trial statistics. All cases are included. "
           "R marks any numerical regression (p50/p99/CPU up or throughput down), not statistical significance; "
           "O means all four trial-statistic ranges overlap. U means the payload implementation is unchanged "
@@ -124,6 +156,8 @@ def main():
         labels = (["R"] if regress else []) + (["O"] if overlap else [])
         if args.reset_comparison and profile.startswith('io_uring-'):
             labels.append("H")
+        if args.verification_comparison and impl == 'tent' and profile.startswith('io_uring-'):
+            labels.append("V")
         if profile not in changed or impl != "orbite":
             labels.append("U")
         print(f"| {profile} | {impl} | {op} | {block // 1024} KiB × {batch}, {layout} | "

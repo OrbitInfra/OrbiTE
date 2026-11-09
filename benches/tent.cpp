@@ -43,7 +43,16 @@ void file_write(int fd, const std::vector<unsigned char>& bytes) {
 }
 std::vector<unsigned char> file_read(const std::string& path) {
     std::ifstream f(path, std::ios::binary); check(f.good(), "file verification failed");
-    return {std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>()};
+    if (std::getenv("ORBITE_BENCH_LEGACY_VERIFY")) {
+        check(std::getenv("ORBITE_BENCH_TAIL_TRACE")!=nullptr, "diagnostic verification requires tracing");
+        return {std::istreambuf_iterator<char>(f), std::istreambuf_iterator<char>()};
+    }
+    // Match the Rust harness's bulk verification read. Small stream-buffer
+    // reads otherwise change readahead, cached folios and the next sample's I/O.
+    std::vector<unsigned char> bytes(std::filesystem::file_size(path));
+    f.read(reinterpret_cast<char*>(bytes.data()), bytes.size());
+    check(f.good() && size_t(f.gcount())==bytes.size(), "short file verification");
+    return bytes;
 }
 void array(const std::vector<uint64_t>& samples) { std::cout << '['; for (size_t i=0;i<samples.size();++i) std::cout << (i ? "," : "") << samples[i]; std::cout << ']'; }
 }
@@ -103,12 +112,17 @@ int main(int argc, char** argv) {
     }
     std::vector<uint64_t> times, cpus;
     const bool trace=std::getenv("ORBITE_BENCH_TAIL_TRACE")!=nullptr;
+    const auto* settle_env=std::getenv("ORBITE_BENCH_RESET_SETTLE_US");
+    const auto settle_us=settle_env ? number(settle_env) : 0;
+    check(settle_us<=100000 && (trace || settle_us==0), "diagnostic pacing requires tracing");
     for (size_t i=0;i<warmup+samples;++i) {
         std::vector<unsigned char> image(extent, 0xa5);
         for(size_t b=0;b<batch;++b) for(size_t j=0;j<block;++j) image[b*stride+j]=(j*17+b*37+i*13)%251;
         std::memset(local, 0xa5, capacity); std::memset(remote, 0xa5, capacity);
         std::memcpy((op=="write" || cpu ? local : remote)+page, image.data(), extent);
         if(file) { std::vector<unsigned char> bytes(extent+2*page, 0xa5); if(op=="read") std::copy(image.begin(), image.end(), bytes.begin()+page); file_write(reset_fd, bytes); }
+        // Diagnostic offered-load control only, outside the measured window.
+        if(settle_us) std::this_thread::sleep_for(std::chrono::microseconds(settle_us));
         const auto window_start=trace ? monotonic_ns() : 0;
         const auto c=cpu_ns(); const auto start=Clock::now();
         if(cpu) { for(size_t b=0;b<batch;++b) std::memcpy(remote+page+b*stride, local+page+b*stride, block); }

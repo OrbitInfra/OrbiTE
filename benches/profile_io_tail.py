@@ -25,7 +25,12 @@ def record(out, executables, args, env, tent_env):
 
     # Keep the kernel's field definitions with the evidence: names/layouts vary
     # across kernels. All-CPU recording includes io-wq and interrupt completions.
-    run("formats", ["sudo", "sh", "-c", "cat /sys/kernel/tracing/events/io_uring/*/format"])
+    run("formats", ["sudo", "sh", "-c", "cat " + " ".join(
+        f"/sys/kernel/tracing/events/{group}/*/format" for group in ("io_uring", "block", "iomap", "filemap"))])
+    run("devices", ["lsblk", "-O", "-J"])
+    run("queues", ["sh", "-c", "for q in /sys/block/*/queue; do echo \"$q\"; "
+                  "for k in scheduler nr_requests max_sectors_kb rotational wbt_lat_usec; "
+                  "do test ! -r \"$q/$k\" || { echo \"$k\"; cat \"$q/$k\"; }; done; done"])
     events = ["io_uring:*", "sched:sched_switch", "sched:sched_wakeup",
               "sched:sched_process_fork", "sched:sched_process_exit",
               "syscalls:sys_enter_io_uring_setup", "syscalls:sys_exit_io_uring_setup",
@@ -35,15 +40,30 @@ def record(out, executables, args, env, tent_env):
               "syscalls:sys_enter_munmap", "syscalls:sys_exit_munmap",
               "syscalls:sys_enter_futex", "syscalls:sys_exit_futex",
               "syscalls:sys_enter_fdatasync", "syscalls:sys_exit_fdatasync",
-              "block:block_rq_issue", "block:block_rq_complete"]
-    shapes = [("ext4", 64, "gapped"), ("ext4", 8, "gapped"),
+              "block:block_rq_issue", "block:block_rq_complete", "block:block_rq_insert",
+              "block:block_bio_queue", "block:block_bio_backmerge", "block:block_bio_frontmerge",
+              "block:block_split", "block:block_plug", "block:block_unplug",
+              "iomap:iomap_dio_rw_begin", "iomap:iomap_dio_complete",
+              "iomap:iomap_iter", "iomap:iomap_iter_dstmap",
+              "filemap:mm_filemap_delete_from_page_cache"]
+    shapes = [("ext4", 64, "gapped"), ("ext4", 64, "contiguous"), ("ext4", 8, "gapped"),
               ("ext4", 8, "contiguous"), ("ext4", 1, "contiguous"),
               ("tmpfs", 1, "contiguous")]
+    shapes = [(*s, 0) for s in shapes] + [("ext4", 64, layout, 10000)
+                                         for layout in ("gapped", "contiguous")]
+    shapes = [(*s, False) for s in shapes] + [("ext4", 64, layout, 0, True)
+                                             for layout in ("gapped", "contiguous")]
     samples = max(args.samples, 1000)
-    for filesystem, batch, layout in shapes:
+    for filesystem, batch, layout, settle_us, legacy_verify in shapes:
         for op in ("read", "write"):
             for implementation, exe in executables:
+                if legacy_verify and implementation != "tent":
+                    continue  # Diagnostic reconstruction of the earlier C++ harness.
                 name = f"{implementation}-{filesystem}-{op}-{batch}-{layout}"
+                if settle_us:
+                    name += "-settled"
+                if legacy_verify:
+                    name += "-legacy"
                 directory = args.ext4 if filesystem == "ext4" else args.tmpfs
                 path = directory.resolve() / ("orbite-tail-" + name)
                 if path.exists():
@@ -56,7 +76,10 @@ def record(out, executables, args, env, tent_env):
                 scratch = tempfile.TemporaryDirectory(prefix="orbite-tail-", dir=args.tmpfs)
                 temporary = Path(scratch.name)
                 data = temporary / (name + ".perf")
-                overrides = {**(tent_env if implementation == "tent" else {}), "ORBITE_BENCH_TAIL_TRACE": "1"}
+                overrides = {**(tent_env if implementation == "tent" else {}), "ORBITE_BENCH_TAIL_TRACE": "1",
+                             "ORBITE_BENCH_RESET_SETTLE_US": str(settle_us)}
+                if legacy_verify:
+                    overrides["ORBITE_BENCH_LEGACY_VERIFY"] = "1"
                 command = ["sudo", perf, "record", "-q", "-a", "--clockid", "mono", "-m", "256", "-o", data]
                 for event in events:
                     command += ["-e", event]
@@ -89,13 +112,22 @@ def record(out, executables, args, env, tent_env):
                     shutil.copyfile(data, root / (name + ".perf"))
                     if "lost" in (root / (name + "-events.stderr")).read_text().lower():
                         raise ValueError("lost trace events; timeline is incomplete")
-                    records.append(dict(name=name, samples=samples, warmup=args.warmup,
+                    records.append(dict(name=name, samples=samples, warmup=args.warmup, settle_us=settle_us, legacy_verify=legacy_verify,
                                         verified=True, timings="diagnostic only"))
                     (root / "summary.json").write_text(json.dumps(records, indent=2) + "\n")
                     print(json.dumps(records[-1]), flush=True)
                 finally:
                     subprocess.run(["sudo", "rm", "-f", path], check=True)
                     scratch.cleanup()
+                # Separate, short syscall run: confirm the actual descriptor flags,
+                # not just the source spelling. Never use ptrace timings as rows.
+                run(name + "-fds", ["strace", "-f", "-yy", "-ttt", "-o", root / (name + ".strace"),
+                                     "-e", "trace=openat,fcntl,io_uring_setup,io_uring_enter,fdatasync",
+                                     "env", *[f"{k}={v}" for k, v in overrides.items()], exe,
+                                     "io_uring", op, 4096, batch, layout, args.warmup, 3, args.workers, path])
+                path.unlink()
+                if json.loads((root / (name + "-fds.stdout")).read_text()).get("verified") is not True:
+                    raise ValueError("descriptor trace failed byte checks")
     from analyze_io_tail import analyze, controls
     controls()
     analyze(root)
