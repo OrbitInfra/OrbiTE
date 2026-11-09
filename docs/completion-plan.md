@@ -1,7 +1,7 @@
 # OrbiTE completion plan
 
-Follow the [product positioning and non-goals](https://github.com/OrbitInfra/OrbiTE#overview):
-OrbiTE is the KV data plane for LLM inference on NVIDIA, with OrbitKV cache
+Follow the [product positioning and non-goals](architecture.md#scope-and-non-goals):
+OrbiTE is a transfer engine for LLM inference on NVIDIA, with OrbitKV cache
 tiering and cross-node reuse as its first use case. This plan delivers the
 [frozen TENT design](tent-parity.md) through Rust and Python, and records the
 evidence for each owner and profile. The upstream path is the proposed

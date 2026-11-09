@@ -41,7 +41,7 @@ from `7cc48490`. The beta.1 version is spelled `0.1.0b1` on PyPI.
   See the [scope and revisit condition](tent-parity.md#upstream-transport-inventory-and-selected-scope).
 - S26 adds verified size/batch sweeps against frozen TENT and CPU fault controls, including real requester kills during partial TCP and
   HP-TCP WRITEs. Raw measurements stay outside Git. No tuning is included.
-- The [product positioning](https://github.com/OrbitInfra/OrbiTE#overview)
+- The [product positioning](architecture.md#scope-and-non-goals)
   centers OrbitKV cache tiering and cross-node KV reuse. P/D is a later NIXL
   integration design, after installed GDR/NVLink qualification; no custom
   connector or NIXL dependency is added.
