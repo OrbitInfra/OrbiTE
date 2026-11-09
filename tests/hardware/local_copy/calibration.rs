@@ -29,7 +29,7 @@ impl Compute {
         if !(1..=65535).contains(&blocks) {
             return Err("invalid compute grid".into());
         }
-        let output = stream.alloc_zeros::<u32>(blocks as usize * 256)?;
+        let output = ManuallyDrop::new(stream.alloc_zeros::<u32>(blocks as usize * 256)?);
         // SAFETY: static NUL-terminated PTX, loaded in the retained caller context.
         let module = unsafe {
             result::module::load_data(concat!(include_str!("compute.ptx"), "\0").as_ptr().cast())
@@ -44,7 +44,7 @@ impl Compute {
             stream,
             function,
             module,
-            output,
+            output: ManuallyDrop::into_inner(output),
             blocks,
             start,
             end,

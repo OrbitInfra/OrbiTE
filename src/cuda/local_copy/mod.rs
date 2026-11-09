@@ -251,11 +251,15 @@ impl LocalCopyEngine {
         if !(1..=65536).contains(&config.max_descriptors)
             || !(1..=64).contains(&config.max_inflight)
             || config.kernel_threshold == 0
-            || config.kernel_threshold_background <= config.kernel_threshold
             || config.max_bytes == 0
         {
             return Err(Error::InvalidConfig(
                 "invalid local copy descriptor, slot, threshold or byte limit",
+            ));
+        }
+        if config.kernel_threshold_background <= config.kernel_threshold {
+            return Err(Error::InvalidConfig(
+                "kernel_threshold_background must exceed kernel_threshold",
             ));
         }
         let (gpu, _) = device.cuda_range(0, device.len())?;
