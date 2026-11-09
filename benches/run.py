@@ -63,7 +63,7 @@ def main():
     if any(n < 4096 or n > 64 << 20 or n % 4096 for n in a.sizes) or any(n < 1 or n > 64 for n in a.batches):
         p.error("invalid sweep bounds")
     out.mkdir(parents=True, exist_ok=False)
-    env = {k: v for k, v in os.environ.items() if not k.startswith(("MC_", "TENT_", "MOONCAKE_")) and k not in ("LD_PRELOAD", "LD_LIBRARY_PATH", "ORBITE_BENCH_CORRUPT_BYTE")}
+    env = {k: v for k, v in os.environ.items() if not k.startswith(("MC_", "TENT_", "MOONCAKE_")) and k not in ("LD_PRELOAD", "LD_LIBRARY_PATH", "ORBITE_BENCH_CORRUPT_BYTE", "ORBITE_BENCH_RESET_SETTLE_US")}
     commands = []
     tent_env = {"MC_RPC_CLIENT_IO_THREADS": str(a.workers), "MC_TE_RPC_CLIENT_IO_THREADS": str(a.workers)}
 

@@ -103,12 +103,17 @@ int main(int argc, char** argv) {
     }
     std::vector<uint64_t> times, cpus;
     const bool trace=std::getenv("ORBITE_BENCH_TAIL_TRACE")!=nullptr;
+    const auto* settle_env=std::getenv("ORBITE_BENCH_RESET_SETTLE_US");
+    const auto settle_us=settle_env ? number(settle_env) : 0;
+    check(settle_us<=100000 && (trace || settle_us==0), "diagnostic pacing requires tracing");
     for (size_t i=0;i<warmup+samples;++i) {
         std::vector<unsigned char> image(extent, 0xa5);
         for(size_t b=0;b<batch;++b) for(size_t j=0;j<block;++j) image[b*stride+j]=(j*17+b*37+i*13)%251;
         std::memset(local, 0xa5, capacity); std::memset(remote, 0xa5, capacity);
         std::memcpy((op=="write" || cpu ? local : remote)+page, image.data(), extent);
         if(file) { std::vector<unsigned char> bytes(extent+2*page, 0xa5); if(op=="read") std::copy(image.begin(), image.end(), bytes.begin()+page); file_write(reset_fd, bytes); }
+        // Diagnostic offered-load control only, outside the measured window.
+        if(settle_us) std::this_thread::sleep_for(std::chrono::microseconds(settle_us));
         const auto window_start=trace ? monotonic_ns() : 0;
         const auto c=cpu_ns(); const auto start=Clock::now();
         if(cpu) { for(size_t b=0;b<batch;++b) std::memcpy(remote+page+b*stride, local+page+b*stride, block); }

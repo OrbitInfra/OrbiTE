@@ -311,6 +311,16 @@ fn run(p: &Parameters) -> Result<()> {
     let mut cpus = Vec::new();
     let mut owners = 0;
     let trace = std::env::var_os("ORBITE_BENCH_TAIL_TRACE").is_some();
+    let settle_us = std::env::var("ORBITE_BENCH_RESET_SETTLE_US")
+        .ok()
+        .map(|s| s.parse::<u64>())
+        .transpose()
+        .map_err(|_| Error::InvalidRange)?
+        .unwrap_or(0);
+    check(
+        settle_us <= 100_000 && (trace || settle_us == 0),
+        "diagnostic pacing requires tracing",
+    )?;
     for i in 0..p.warmup + p.samples {
         let image = p.image(i);
         local.write(0, &vec![0xa5; local.len()])?;
@@ -329,6 +339,10 @@ fn run(p: &Parameters) -> Result<()> {
             // finishes its writeback before timing the direct-I/O operation.
             file.write_all_at(&bytes, 0)?;
             file.sync_data()?;
+        }
+        // Diagnostic offered-load control only, outside the measured window.
+        if settle_us != 0 {
+            std::thread::sleep(Duration::from_micros(settle_us));
         }
         // Diagnostic windows use perf's monotonic clock and surround the timed
         // region. Disabled in matched sweeps; no core instrumentation or API.

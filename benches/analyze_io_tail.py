@@ -17,7 +17,7 @@ def block_requests(events):
     """Pair across sample boundaries, including reset writeback and kernel workers."""
     pending = collections.defaultdict(collections.deque)
     requests = []
-    for at, pid, _, name, body in events:
+    for at, pid, tid, name, body in events:
         if name not in ('block:block_rq_issue', 'block:block_rq_complete'):
             continue
         m = BLOCK.fullmatch(body)
@@ -29,7 +29,7 @@ def block_requests(events):
             # blk_fill_rwbs: prefix F is preflush, suffix F is FUA.
             prefix = flags.startswith('F') and len(flags) > 1 and flags[1] in 'RWDN'
             op, suffix = (flags[1], flags[2:]) if prefix else (flags[0], flags[1:])
-            request = dict(issue_ns=at, complete_ns=None, pid=pid, device=device,
+            request = dict(issue_ns=at, complete_ns=None, pid=pid, tid=tid, device=device,
                            flags=flags, op=op, bytes=int(length) * 512,
                            sector=int(sector), flush=prefix or op == 'F', fua='F' in suffix)
             pending[key].append(request)
@@ -46,6 +46,14 @@ def window_io(requests, begin, end, submit, pid, op, payload):
         return (r['pid'] == pid and submit <= r['issue_ns'] <= end
                 and r['flags'] == op + 'S')
     candidates = [r for r in requests if direct(r)]
+    # Depth of this sample's data at the driver issue boundary, separately for
+    # each device. This is not device-wide depth or the number of queued SQEs.
+    timeline = []
+    for r in candidates:
+        depth = sum(p['device'] == r['device'] and p['issue_ns'] <= r['issue_ns']
+                    and (p['complete_ns'] is None or p['complete_ns'] > r['issue_ns'])
+                    for p in candidates)
+        timeline.append(dict(r, batch_depth_at_issue=depth))
     devices = {r['device'] for r in candidates}
     for device in devices:
         if sum(r['bytes'] for r in candidates if r['device'] == device) != payload:
@@ -65,7 +73,9 @@ def window_io(requests, begin, end, submit, pid, op, payload):
                 window_fua=sum(r['fua'] for r in overlap),
                 window_discards=sum(r['op'] == 'D' for r in other),
                 window_unpaired=sum(r['complete_ns'] is None for r in overlap),
-                window_devices=sorted(devices), other_io_timeline=other)
+                window_devices=sorted(devices), other_io_timeline=other,
+                direct_io_timeline=timeline,
+                max_batch_depth=max((r['batch_depth_at_issue'] for r in timeline), default=0))
 
 
 def blocks(events, pid):
@@ -181,13 +191,21 @@ def analyze(root):
                        issuer_sleeps=sum(e[2] == issuer and e[3] == 'syscalls:sys_enter_clock_nanosleep' for e in own),
                        async_work=sum(e[3] == 'io_uring:io_uring_queue_async_work' for e in io))
             row.update(blocks(es, pid))
-            _, filesystem, direction, count, _ = name.split('-')
+            _, filesystem, direction, count, _ = name.removesuffix('-settled').split('-')
             row.update(window_io(active, begin, end, sq[0][0], pid,
                                  'R' if direction == 'read' else 'W', 4096 * int(count)))
             if filesystem == 'ext4' and not row['window_direct_blocks']:
                 raise ValueError('missing ext4 direct block evidence')
             row['last_block_to_cqe_us'] = ((cq[-1][0] - row['last_block_complete_ns']) / 1000
                                          if row['last_block_complete_ns'] else 0)
+            # Preserve the exact kernel fields alongside per-sample correlation.
+            # iomap records file offsets/length/flags; block bios record device
+            # sectors; filemap records invalidated inode/page ranges. They are
+            # different address spaces, never interchangeable offsets.
+            row['issue_path_timeline'] = [dict(at_ns=e[0], tid=e[2], event=e[3], detail=e[4])
+                                         for e in own if e[3].startswith(('iomap:', 'filemap:', 'block:'))]
+            row['async_timeline'] = [dict(at_ns=e[0], tid=e[2], event=e[3], detail=e[4])
+                                     for e in io if e[3] == 'io_uring:io_uring_queue_async_work']
             row['caller_forks'] = sum(e[3] == 'sched:sched_process_fork' and e[2] == pid for e in own)
             row['fork_timeline'] = [dict(at_ns=e[0], detail=e[4]) for e in own if e[3] == 'sched:sched_process_fork']
             row['wake_timeline'] = [dict(at_ns=e[0], event=e[3], detail=e[4]) for e in es
@@ -258,6 +276,19 @@ def controls():
     clean = window_io(block_requests([es[1], es[-1]]), 10, 60, 20, 1, 'R', 4096)
     if clean['window_other_blocks'] or clean['window_unpaired']:
         raise ValueError('clean reset invented extra I/O')
+    # Overlapping issue-to-completion intervals, not submission count or the
+    # foreign write, determine this batch's depth. A completed request is gone.
+    depth_events = [
+        (10, 1, 2, 'block:block_rq_issue', '8,0 WS 4096 () 8 + 8 0x0 [worker]'),
+        (20, 1, 3, 'block:block_rq_issue', '8,0 WS 4096 () 24 + 8 0x0 [worker]'),
+        (30, 0, 0, 'block:block_rq_complete', '8,0 WS () 8 + 8 0x0 [0]'),
+        (40, 1, 4, 'block:block_rq_issue', '8,0 WS 4096 () 40 + 8 0x0 [worker]'),
+        (50, 0, 0, 'block:block_rq_complete', '8,0 WS () 24 + 8 0x0 [0]'),
+        (60, 0, 0, 'block:block_rq_complete', '8,0 WS () 40 + 8 0x0 [0]')]
+    depth = window_io(block_requests(depth_events), 0, 70, 10, 1, 'W', 12288)
+    if [(r['sector'], r['bytes'], r['tid'], r['batch_depth_at_issue'])
+        for r in depth['direct_io_timeline']] != [(8, 4096, 2, 1), (24, 4096, 3, 2), (40, 4096, 4, 2)]:
+        raise ValueError('block geometry or per-batch issue depth was misattributed')
     try:
         window_io(block_requests(es), 10, 60, 20, 1, 'R', 2048)
     except ValueError:

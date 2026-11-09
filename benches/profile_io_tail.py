@@ -49,11 +49,15 @@ def record(out, executables, args, env, tent_env):
     shapes = [("ext4", 64, "gapped"), ("ext4", 64, "contiguous"), ("ext4", 8, "gapped"),
               ("ext4", 8, "contiguous"), ("ext4", 1, "contiguous"),
               ("tmpfs", 1, "contiguous")]
+    shapes = [(*s, 0) for s in shapes] + [("ext4", 64, layout, 10000)
+                                         for layout in ("gapped", "contiguous")]
     samples = max(args.samples, 1000)
-    for filesystem, batch, layout in shapes:
+    for filesystem, batch, layout, settle_us in shapes:
         for op in ("read", "write"):
             for implementation, exe in executables:
                 name = f"{implementation}-{filesystem}-{op}-{batch}-{layout}"
+                if settle_us:
+                    name += "-settled"
                 directory = args.ext4 if filesystem == "ext4" else args.tmpfs
                 path = directory.resolve() / ("orbite-tail-" + name)
                 if path.exists():
@@ -66,7 +70,8 @@ def record(out, executables, args, env, tent_env):
                 scratch = tempfile.TemporaryDirectory(prefix="orbite-tail-", dir=args.tmpfs)
                 temporary = Path(scratch.name)
                 data = temporary / (name + ".perf")
-                overrides = {**(tent_env if implementation == "tent" else {}), "ORBITE_BENCH_TAIL_TRACE": "1"}
+                overrides = {**(tent_env if implementation == "tent" else {}), "ORBITE_BENCH_TAIL_TRACE": "1",
+                             "ORBITE_BENCH_RESET_SETTLE_US": str(settle_us)}
                 command = ["sudo", perf, "record", "-q", "-a", "--clockid", "mono", "-m", "256", "-o", data]
                 for event in events:
                     command += ["-e", event]
@@ -99,7 +104,7 @@ def record(out, executables, args, env, tent_env):
                     shutil.copyfile(data, root / (name + ".perf"))
                     if "lost" in (root / (name + "-events.stderr")).read_text().lower():
                         raise ValueError("lost trace events; timeline is incomplete")
-                    records.append(dict(name=name, samples=samples, warmup=args.warmup,
+                    records.append(dict(name=name, samples=samples, warmup=args.warmup, settle_us=settle_us,
                                         verified=True, timings="diagnostic only"))
                     (root / "summary.json").write_text(json.dumps(records, indent=2) + "\n")
                     print(json.dumps(records[-1]), flush=True)
