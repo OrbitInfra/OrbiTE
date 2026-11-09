@@ -126,6 +126,15 @@ if [[ ${2:-} == rdma-priority ]]; then
     transport::rdma::workers::tests::priority::shared_worker_dispatches_priority_then_optional_deadline_across_contexts
     transport::rdma::workers::tests::priority::pausing_one_lane_cannot_include_a_registration_after_another_lanes_snapshot
   )
+fi
+if [[ ${2:-} == dmabuf ]]; then
+  iterations=1000
+  mapfile -t controls < <("$binary" cuda::tests::dmabuf:: --list | sed -n 's/: test$//p')
+  expected=11
+  if [[ ,${ORBITE_FEATURES:-}, == *,metrics,* ]]; then expected=12; fi
+  test "${#controls[@]}" -eq "$expected"
+fi
+if [[ ${2:-} == rdma-priority || ${2:-} == dmabuf ]]; then
   # Exercise the snapshot boundary under CPU contention, with bounded load.
   load_count=$(nproc)
   if ((load_count > 8)); then load_count=8; fi
@@ -139,7 +148,7 @@ if [[ ${2:-} == rdma-priority ]]; then
     yes > /dev/null &
     load_pids+=("$!")
   done
-  echo "RDMA priority controls: $load_count CPU-load processes on $(nproc) CPUs"
+  echo "${2} controls: $load_count CPU-load processes on $(nproc) CPUs"
 fi
 if [[ ${2:-} == io-small ]]; then
   controls=(

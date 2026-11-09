@@ -13,6 +13,7 @@ pub(super) struct State {
     pub supported: i32,
     export_error: bool,
     partial_export_error: bool,
+    native_extent: Option<(u64, usize)>,
     extent_trim: usize,
     unaligned_base: bool,
     register_error: bool,
@@ -28,15 +29,15 @@ fn fds() -> &'static Mutex<BTreeMap<i32, Weak<shim::Device>>> {
     FDS.get_or_init(Default::default)
 }
 unsafe extern "C" fn range(base: *mut u64, size: *mut usize, addr: u64) -> driver::Status {
-    let owner = shim::device_at(addr);
-    // SAFETY: the shim owns the boxed storage and never relocates it.
-    let bytes = unsafe { &*owner.bytes.get() };
-    let first = (bytes.as_ptr() as u64 + 4095) & !4095;
-    let length = ((bytes.as_ptr() as u64 + bytes.len() as u64 - first) & !4095) as usize;
+    // The retained CUDA context selects this fixture's native allocation, not
+    // spare alignment storage or another test's address-map entries.
+    let state = shim::current().dmabuf.lock().unwrap();
+    let (first, length) = state.native_extent.unwrap();
+    assert!((first..first + length as u64).contains(&addr));
     // SAFETY: CUDA supplies writable native extent outputs.
     unsafe {
-        *base = first + u64::from(owner.dmabuf.lock().unwrap().unaligned_base);
-        *size = length - owner.dmabuf.lock().unwrap().extent_trim;
+        *base = first + u64::from(state.unaligned_base);
+        *size = length - state.extent_trim;
     }
     SUCCESS
 }
@@ -63,6 +64,7 @@ unsafe extern "C" fn export(
     assert_eq!(base % 4096, 0);
     assert_eq!(length % 4096, 0);
     let owner = shim::device_at(base);
+    assert!(std::ptr::eq(shim::current(), Arc::as_ptr(&owner)));
     let mut state = owner.dmabuf.lock().unwrap();
     if flags != 0 && state.version < 12080 {
         return driver::Status::CUDA_ERROR_INVALID_VALUE;
@@ -71,7 +73,13 @@ unsafe extern "C" fn export(
         return driver::Status::CUDA_ERROR_UNKNOWN;
     }
     let fd = std::fs::File::open("/dev/null").unwrap().into_raw_fd();
-    fds().lock().unwrap().insert(fd, Arc::downgrade(&owner));
+    assert!(
+        fds()
+            .lock()
+            .unwrap()
+            .insert(fd, Arc::downgrade(&owner))
+            .is_none()
+    );
     state.exports.push((base, length, flags, fd));
     // SAFETY: CUDA supplies one writable fd output.
     unsafe {
@@ -106,6 +114,7 @@ pub(crate) unsafe extern "C" fn register_dmabuf(
     access: c_int,
 ) -> *mut c_void {
     let owner = fds().lock().unwrap().get(&fd).unwrap().upgrade().unwrap();
+    assert!(std::ptr::eq(shim::current(), Arc::as_ptr(&owner)));
     let mut state = owner.dmabuf.lock().unwrap();
     let &(base, extent, _, _) = state.exports.iter().find(|e| e.3 == fd).unwrap();
     assert_eq!(offset, iova - base);
@@ -123,19 +132,27 @@ fn backing() -> (Arc<shim::Device>, Arc<CudaMemory>) {
     backing_with_export(true)
 }
 fn backing_with_export(available: bool) -> (Arc<shim::Device>, Arc<CudaMemory>) {
-    let owner = allocation(&vec![0x5a; 4096 * 3]);
+    backing_with_storage(available, 4096 * 3)
+}
+fn backing_with_storage(available: bool, bytes: usize) -> (Arc<shim::Device>, Arc<CudaMemory>) {
+    let owner = allocation(&vec![0x5a; bytes]);
+    // SAFETY: the boxed allocation is retained and never relocated by the fixture.
+    let storage = unsafe { &*owner.bytes.get() };
+    let address = (storage.as_ptr() as u64 + 4095) & !4095;
+    assert!(address + 8192 <= storage.as_ptr() as u64 + storage.len() as u64);
     {
         let mut s = owner.dmabuf.lock().unwrap();
         s.supported = 1;
         s.version = 13000;
+        // Report exactly the retained handle's two pages. A page-aligned malloc
+        // must not turn the third padding page into native allocation extent.
+        s.native_extent = Some((address, 8192));
     }
     let mut d = Arc::try_unwrap(driver()).ok().unwrap();
     d.dmabuf_export = available.then_some(export);
     d.address_range = range;
     d.close_fd = close;
     let d = Arc::new(d);
-    // SAFETY: the boxed allocation remains owned and fixed in the shim Device.
-    let address = (unsafe { &*owner.bytes.get() }.as_ptr() as u64 + 4095) & !4095;
     let memory = Arc::new(CudaMemory::register(address, 8192, owner.clone(), d).unwrap());
     (owner, memory)
 }
@@ -535,8 +552,7 @@ fn dmabuf_rounds_the_export_but_never_widens_the_registered_view() {
     d.dmabuf_export = Some(export);
     d.address_range = range;
     d.close_fd = close;
-    // SAFETY: retained boxed shim storage; the entire shorter native extent is owned.
-    let address = (unsafe { &*owner.bytes.get() }.as_ptr() as u64 + 4095) & !4095;
+    let address = owner.dmabuf.lock().unwrap().native_extent.unwrap().0;
     let memory = Arc::new(CudaMemory::register(address, 8191, owner.clone(), Arc::new(d)).unwrap());
     let m = e
         .register_cuda_memory_batch(&[(memory, 31, 55)], Permission::LocalOnly)
@@ -548,6 +564,46 @@ fn dmabuf_rounds_the_export_but_never_widens_the_registered_view() {
     assert_eq!(s.exports[0].1, 8192);
     assert_eq!((s.calls[0].1, s.calls[0].2), (31, 55));
     assert_eq!(s.closed.len(), 1);
+}
+
+#[test]
+fn dmabuf_padding_and_concurrent_owners_do_not_change_the_native_extent() {
+    // Force at least three whole pages after alignment, just as the old
+    // three-page box did when malloc happened to return a page-aligned base.
+    let (owner, memory) = backing_with_storage(true, 4096 * 4);
+    owner.dmabuf.lock().unwrap().extent_trim = 1;
+    let e = engine("direct:copy", Policy::Dmabuf, true, false, false);
+    let (ready_tx, ready_rx) = std::sync::mpsc::sync_channel(1);
+    let (done_tx, done_rx) = std::sync::mpsc::sync_channel(1);
+    let result = std::thread::scope(|scope| {
+        let other = scope.spawn(move || {
+            let (other_owner, other_memory) = backing();
+            let other_engine = engine("direct:copy", Policy::Dmabuf, true, false, false);
+            let view = other_engine
+                .register_cuda_memory_batch(&[(other_memory, 31, 55)], Permission::LocalOnly)
+                .unwrap()
+                .remove(0);
+            ready_tx.send(()).unwrap();
+            done_rx.recv_timeout(EVENTUAL_PROGRESS).unwrap();
+            other_engine.unregister_memory(&view).unwrap();
+            other_engine.close(EVENTUAL_PROGRESS).unwrap();
+            let state = other_owner.dmabuf.lock().unwrap();
+            assert_eq!(state.exports.len(), 1);
+            assert_eq!(state.closed.len(), 1);
+            assert_eq!((state.calls[0].1, state.calls[0].2), (31, 55));
+        });
+        ready_rx.recv_timeout(EVENTUAL_PROGRESS).unwrap();
+        let result = e.register_cuda_memory_batch(&[(memory, 0, 8)], Permission::LocalOnly);
+        done_tx.send(()).unwrap();
+        other.join().unwrap();
+        result
+    });
+    e.close(EVENTUAL_PROGRESS).unwrap();
+    assert!(matches!(result, Err(Error::InvalidRange)), "{result:?}");
+    let state = owner.dmabuf.lock().unwrap();
+    assert!(state.exports.is_empty());
+    assert!(state.calls.is_empty());
+    assert!(state.closed.is_empty());
 }
 
 #[cfg(feature = "metrics")]
