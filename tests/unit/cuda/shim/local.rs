@@ -4,7 +4,12 @@ use super::*;
 const MAPPING: usize = 1 << 62;
 pub(super) enum Command {
     Wait(usize, usize),
-    Kernel { triples: usize, count: usize },
+    Kernel {
+        triples: usize,
+        count: usize,
+        grid: usize,
+        ctas: usize,
+    },
 }
 pub(super) fn drain_prefix(
     streams: &mut BTreeMap<usize, Vec<PendingCopy>>,
@@ -16,19 +21,48 @@ pub(super) fn drain_prefix(
     for p in pending.drain(..n).collect::<Vec<_>>() {
         match p.local {
             Some(Command::Wait(source, marker)) => drain_prefix(streams, source, marker),
-            Some(Command::Kernel { triples, count }) => {
+            Some(Command::Kernel {
+                triples,
+                count,
+                grid,
+                ctas,
+            }) => {
                 // SAFETY: the kernel slot owns the uploaded triples and the flight owns every payload.
                 let descs =
                     unsafe { std::slice::from_raw_parts(triples as *const [u64; 3], count) };
-                for &[dst, src, len] in descs {
-                    assert_ne!(dst as usize & MAPPING, src as usize & MAPPING);
-                    // SAFETY: the mapping bit is the shim's translated pinned alias; all ranges remain loaned.
-                    unsafe {
-                        std::ptr::copy(
-                            (src as usize & !MAPPING) as *const u8,
-                            (dst as usize & !MAPPING) as *mut u8,
+                // Model the checked-in kernel's grid-strided descriptor/shard loop,
+                // including vector copies and the byte tail. A cap smaller than n
+                // must not silently hide unvisited descriptors in this shim.
+                for block in 0..grid {
+                    for work in (block..count * ctas).step_by(grid) {
+                        let [dst, src, len] = descs[work / ctas];
+                        assert_ne!(dst as usize & MAPPING, src as usize & MAPPING);
+                        let (dst, src, len) = (
+                            dst as usize & !MAPPING,
+                            src as usize & !MAPPING,
                             len as usize,
-                        )
+                        );
+                        for tid in 0..256 {
+                            let start = work % ctas * 256 + tid;
+                            let stride = 256 * ctas;
+                            let unit = if (dst | src) & 15 == 0 { 16 } else { 1 };
+                            for j in (start..len / unit).step_by(stride) {
+                                // SAFETY: this shard owns these bytes of the retained mapped ranges.
+                                unsafe {
+                                    std::ptr::copy(
+                                        (src + j * unit) as *const u8,
+                                        (dst + j * unit) as *mut u8,
+                                        unit,
+                                    )
+                                };
+                            }
+                            for j in (len / unit * unit + start..len).step_by(stride) {
+                                // SAFETY: tail bytes are disjoint from vector copies and remain loaned.
+                                unsafe {
+                                    std::ptr::copy((src + j) as *const u8, (dst + j) as *mut u8, 1)
+                                };
+                            }
+                        }
                     }
                 }
             }
@@ -76,6 +110,9 @@ unsafe extern "C" fn attr(out: *mut i32, key: sys::CUdevice_attribute, _: i32) -
         *out = match key {
             sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MULTIPROCESSOR_COUNT => 16,
             sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MAX_PITCH => 1 << 20,
+            sys::CUdevice_attribute::CU_DEVICE_ATTRIBUTE_MAX_GRID_DIM_X => {
+                current().local_max_grid.load(Ordering::Acquire)
+            }
             _ => return status(1),
         }
     }
@@ -195,13 +232,20 @@ unsafe extern "C" fn launch(
     };
     assert!((1..=16).contains(&ctas));
     assert!(n > 0);
-    assert_eq!(x, (n as u32 * ctas as u32).min(65535));
+    assert!((1..=(n as u32 * ctas as u32).min(65535)).contains(&x));
+    current()
+        .local_launches
+        .lock()
+        .unwrap()
+        .push((x, n as usize, ctas as usize));
     event("kernel-launch");
     command(
         stream,
         Command::Kernel {
             triples: ptr as usize,
             count: n as usize,
+            grid: x as usize,
+            ctas: ctas as usize,
         },
     );
     SUCCESS

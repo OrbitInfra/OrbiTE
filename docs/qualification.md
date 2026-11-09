@@ -206,7 +206,7 @@ external output directory; failed runs are kept.
 | --- | --- | --- | --- |
 | [NIXL plugin: VRAM GDR/NVLink, FILE GDS and optional MNNVL]{#queue-nixl-plugin} | Design only; plugin and installed gates not implemented, no qualification | Follow the [prerequisites](completion-plan.md#current-focus): upstream explicit cancel and the #1958 outcome; current-artifact installed GPU/RDMA results and `nixlbench` UCX/Mooncake baselines in the hardware batch before the formal backend RFC. After design agreement, write packaged plugin drivers and exact commands for the [planned controls](nixl-backend.md#acceptance-controls) with implementation, including cancel, terminal retirement, deferred deregistration, metadata and plugin unload. Reuse native [GDR](#queue-gpudirect), [NVLink](#queue-nvlink-grouped), [GDS](#queue-native-gds) and [MNNVL](#multi-node-nvlink-fabric) prerequisites, then compare the implemented plugin on the same hardware. | None; native transport or shim evidence does not qualify a plugin |
 | [Python retained CUDA exporters]{#queue-python-cuda} | Implemented; installed profile unqualified | Build with a wheel-compatible Python and maturin: `python3 tests/hardware/build_installed.py --consumer python-cuda --toolchain stable --output "$ART"`. With CUDA PyTorch installed for that interpreter, run `python3 "$ART/python_cuda_run.py" --artifact "$ART" --python "$PYTHON" --gpu "$GPU_UUID" --gpu-lock "$GPU_LOCK" --output "$RUN"`. Repeat the build with 1.85.0 in a fresh directory. | CAI/DLPack, guarded GPU↔host TCP in both requester/source roles, exporter release; CI driver-shim controls only |
-| [Caller-stream local CUDA copy]{#queue-local-cuda-copy} | Implemented; installed profile unqualified | [Packaged comparison on one GPU](#caller-stream-local-cuda-copy) | Linux CUDA shim, byte guards, planning and event retention |
+| [Caller-stream local CUDA copy]{#queue-local-cuda-copy} | Implemented; installed profile unqualified | [Packaged comparison and separate PCIe Hopper / Grace C2C calibration commands](#caller-stream-local-cuda-copy) | Linux CUDA shim, byte guards, capped grids, selection matrix and event retention; hardware calibration unrun |
 | CPU-only requester to peer GPU over ordinary TCP | Implemented; installed profile unqualified | Build `python3 tests/hardware/build_installed.py --consumer peer-gpu-source --output "$ART/source"` and `python3 tests/hardware/build_installed.py --consumer peer-gpu-requester --output "$ART/requester"`. Run `python3 "$ART/source/peer_gpu_tcp_run.py" --source "$ART/source/installed/bin/orbite-peer-gpu-source" --requester "$ART/requester/installed/bin/orbite-peer-gpu-requester" --gpu "$GPU_UUID"`. | Separate CPU-only requester and CUDA-shim source processes in CI |
 | Remote staging source controls and Pin capacity (F19/F07) | Implemented; installed profile unqualified | `python3 tests/hardware/build_installed.py --consumer staging-control --toolchain stable --output "$ART"`, then `python3 "$ART/staging_control_run.py" --binary "$ART/installed/bin/orbite-staging-control" --gpu "$GPU_UUID"`. For RNIC loopback run `python3 "$ART/staging_control_run.py" --binary "$ART/installed/bin/orbite-staging-control" --gpu "$GPU_UUID" --rdma "$RNIC" "$GID_INDEX"`. Repeat on 1.85.0 using a fresh output directory. | One GPU, loopback TCP and optional RNIC loopback. Hold a real Pin reply while Describe and a competing Pin complete, then verify guarded WRITE/READ and drain. The two-host RDMA pipeline gate remains queued below. |
 | [Remote CUDA staging on the current build: requester ring, CROSS windows, shared shards, event loop, concurrent RDMA CROSS, Delegate queries, socket/connection/setup/finish progress, MR publication, QP retirement, host staging location]{#queue-remote-staging} | Implemented; source-accepted | [Pipeline validation](staging.md#installed-pipeline-validation) with `remote_staging: true` | [Pipeline](#bounded-remote-cuda-pipeline), [serial](#serial-remote-cuda-staging) |
@@ -264,6 +264,41 @@ byte and guard for H2D and D2H. Four matched reverse-order layouts cover
 1, 16, 257 and 1,024 fragments. After five warmups the driver records 30
 submit-to-drain wall times per direction and backend and their medians. The
 unrun gate reserves qualification and timing claims for the named GPU.
+
+For CTA/threshold calibration, use the same packaged consumer and build both
+toolchains in separate artifact directories. Reserve a **PCIe H100/H20** and a
+**Grace C2C GH200/GB200** separately. Create an operator-verified topology JSON
+outside Git for each: `cuda_device_uuid`, `platform` (`pcie-hopper` or
+`grace-c2c`) and `verified_link` (`pcie` or `c2c`). The driver records this
+attestation together with `nvidia-smi topo -m`, GPU identity and `lscpu`; a
+GPU name alone does not prove its host link.
+
+```bash
+python3 "$ART/local_copy_run.py" --artifact "$ART" --gpu "$HOPPER_UUID" --gpu-lock "$HOPPER_LOCK" --calibrate --interference --platform pcie-hopper --topology-evidence "$HOPPER_TOPOLOGY_JSON" --output "$RUN/hopper"
+python3 "$ART/local_copy_run.py" --artifact "$ART" --gpu "$GRACE_UUID" --gpu-lock "$GRACE_LOCK" --calibrate --interference --platform grace-c2c --topology-evidence "$GRACE_TOPOLOGY_JSON" --output "$RUN/grace"
+```
+
+Both commands are **Implemented; installed profile unqualified**. The full
+sweep uses powers of two from 4 KiB to 2 MiB and 1 to 8,192 reverse-ordered
+fragments, both directions, DMA on the legacy stream, batch DMA on a
+nonblocking stream, and kernels with limits `None`, 1, 4, 16 and 64. A single
+fragment cannot form a native DMA batch; larger batch rows require the actual
+batch-call counter. Each combination has five warmups and 30 measured
+submissions, with a fresh destination and full source/payload/guard checks
+after every flight. The largest payload needs just over 16 GiB of GPU and
+pinned host memory each; verification scratch is bounded independently.
+
+Interference runs launch a fixed two-million-iteration integer-ALU kernel
+on another nonblocking stream, compare its CUDA-event duration with a paired
+standalone run, verify its output and require it to remain active through
+copy enqueue. This is a reproducible interference probe, not a model or an
+ITL benchmark. The report retains raw copy times, throughput, launched CTAs
+and compute slowdown. Per-size/direction candidates require a kernel to beat
+both DMA modes with at most 5% compute slowdown; background candidates must
+have a strictly higher fragment count. A missing qualifying row proposes no
+change. Review the complete curves on both GPU classes before selecting any
+defaults: normal threshold 128 and the uncapped default remain unchanged,
+and background Auto stays on DMA unless explicitly configured.
 
 ## CPU benchmark evidence
 

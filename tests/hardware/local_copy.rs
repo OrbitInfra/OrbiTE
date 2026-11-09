@@ -4,6 +4,7 @@ use orbite::cuda::{
     CudaMemory, allocate_pinned_host,
     local_copy::{
         CopyDirection, LocalCopyBackend, LocalCopyConfig, LocalCopyDesc, LocalCopyEngine,
+        LocalCopyOptions,
     },
 };
 use orbite::{EngineConfig, Permission, TransferEngine};
@@ -13,6 +14,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 const GUARD: usize = 32;
+#[path = "local_copy/calibration.rs"]
+mod calibration;
 type GateResult<T> = Result<T, Box<dyn Error>>;
 fn trial(
     worker: &LocalCopyEngine,
@@ -21,7 +24,7 @@ fn trial(
     backend: LocalCopyBackend,
 ) -> GateResult<f64> {
     let start = Instant::now();
-    let flight = worker.submit(dir, rows, None)?;
+    let flight = worker.submit(dir, rows, LocalCopyOptions::default())?;
     if flight.backend() != backend {
         return Err("wrong executing backend".into());
     }
@@ -41,6 +44,9 @@ fn main() -> GateResult<()> {
     if args == ["--protocol"] {
         println!("orbite-installed-local-copy");
         return Ok(());
+    }
+    if args.first().map(String::as_str) == Some("--calibrate") {
+        return calibration::run(&args[1..]);
     }
     let [blocks, width, samples] = args.as_slice() else {
         return Err("expected BLOCKS FRAGMENT_BYTES SAMPLES".into());

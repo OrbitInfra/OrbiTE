@@ -15,8 +15,9 @@ A per-thread default stream also requires submission on the originating thread.
 
 ```rust
 use orbite::cuda::local_copy::{
-    CopyDirection, LocalCopyConfig, LocalCopyDesc, LocalCopyEngine,
+    CopyDirection, LocalCopyConfig, LocalCopyDesc, LocalCopyEngine, LocalCopyOptions,
 };
+use orbite::{IntentType, Priority};
 
 // SAFETY: stream owns this noncapturing stream in gpu's context. The caller
 // coordinates its other GPU work and retains each external allocation.
@@ -28,7 +29,10 @@ let layers = [
     LocalCopyDesc::new(&gpu, 128, &host, 64, 32),
     LocalCopyDesc::new(&gpu, 512, &host, 128, 16).strided(4, 64, 32),
 ];
-let done = worker.submit(CopyDirection::HostToDevice, &layers, None)?;
+let mut options = LocalCopyOptions::default();
+options.intent = IntentType::ForegroundGet;
+options.priority = Priority::High;
+let done = worker.submit(CopyDirection::HostToDevice, &layers, options)?;
 // Further work may be queued on the same stream immediately.
 done.wait(std::time::Duration::from_secs(5))?;
 ```
@@ -38,7 +42,8 @@ registered views. Each explicit row must fit both views. `strided` takes the
 row count, device pitch and host pitch in bytes. Empty batches still get a
 stream marker. Allocation-level producer events become `cuStreamWaitEvent`
 dependencies. To pass a caller-recorded event, construct
-`unsafe { ProducerEvent::from_raw(event, owner)? }` and pass `Some(&ready)`.
+`unsafe { ProducerEvent::from_raw(event, owner)? }` and set
+`options.ready = Some(ready)`.
 The owner keeps the event generation and producer inputs alive. Stream capture
 is rejected. Submission restores the exact previous context, including an
 empty binding.
@@ -79,11 +84,28 @@ CUDA 12.8 entry with its failure-index argument. Missing optional entries
 leave the directional asynchronous calls available. Overlapping destinations
 use ordered DMA. Forced kernel submission rejects such a batch.
 
-`LocalCopyConfig::default()` selects `Auto`. At 128 or more compiled DMA
-operations, independent fragments are eligible for the mapped-memory kernel.
-Set `kernel_threshold` to change the crossover, or set `backend` to `Dma`
-or `Kernel`. Auto can choose DMA before upload if the image or mapped alias
-is unavailable. The kernel resolves the actual device alias for each physical
+`LocalCopyConfig::default()` selects `Auto`. Bind compiles the typed direction
+and intent policy once; submit performs no configuration parsing. Thresholds
+count DMA operations **after** contiguous/strided coalescing, not input rows.
+
+| Submission | Auto kernel eligibility |
+| --- | --- |
+| HostToDevice, any intent | At least `kernel_threshold` compiled operations |
+| DeviceToHost, `Checkpoint`, `Migration`, `BackgroundPrefetch` | At least `kernel_threshold_background` compiled operations |
+| DeviceToHost, other intents (including `ForegroundGet`) | At least `kernel_threshold` compiled operations |
+
+The normal threshold remains 128. The background threshold must be strictly
+higher; its default `usize::MAX` keeps background write-back on DMA until a
+consumer explicitly chooses a calibrated finite value. Default options are
+`IntentType::Unspec`, `Priority::High`, with no explicit producer event, so
+existing default selection is unchanged. Priority labels the submission for
+diagnostics; it does not reorder or reprioritize the caller's CUDA stream.
+Forced `Dma` and `Kernel` retain their existing behavior, including rejection
+of overlapping destinations for a forced kernel. Auto always uses ordered DMA
+for overlap, and can choose DMA before upload if the image, mapped alias or
+descriptor budget is unavailable. A failed enqueue never triggers a replay.
+
+The kernel resolves the actual device alias for each physical
 host pin, uploads one descriptor array and launches a grid-strided copy with
 an aligned vector path and byte tails. The crate ships embedded PTX generated
 from the included CUDA source. The driver loads the module during bind.
@@ -99,6 +121,18 @@ occupied slot owns one completion event and all of its source and destination
 loans. Descriptor and slot limits also bound CPU planning memory. Exhaustion
 returns `Error::ResourceExhausted`.
 
+`kernel_cta_limit: Option<NonZeroU32>` caps the total number of blocks in each
+kernel launch. The name describes the controlled quantity: it is not an SM
+reservation or a guarantee of a particular occupancy. Bind rejects a cap above
+the smaller of 65,535 and the device's
+[`MAX_GRID_DIM_X`](https://docs.nvidia.com/cuda/cuda-driver-api/cuda_driver_api/group__CUDA__TYPES.html)
+before loading a module or allocating descriptor slots. `None` preserves the
+existing four-times-SM budget and per-descriptor clamp exactly. A finite cap
+also limits that budget and the final grid, including when it is smaller than
+the descriptor count. The unchanged grid-strided kernel still covers every
+descriptor, vector and byte tail. For example, set
+`config.kernel_cta_limit = std::num::NonZeroU32::new(4)` before bind.
+
 `poll()` queries the completion. `wait(timeout)` bounds the CPU wait.
 Dropping a handle leaves its slot owned by the worker. Subsequent submission
 or `progress()` polls abandoned slots. `close(timeout)` stops admission and
@@ -107,10 +141,24 @@ already have scheduled a subset. Its marker must complete before the handle
 reports the enqueue error. An uncertain record, query, destroy or context
 restoration returns `Error::Unquiesced` from the completion, progress and
 subsequent submission on this stream. Other pending markers can still drain.
-`stats()` inspects the charges without calling CUDA. The worker retains its
+`stats()` inspects the charges without calling CUDA. Its `classes` snapshot
+contains cumulative DMA/kernel decisions, successful batch-DMA calls and
+launched CTAs for each observed direction × intent × priority (at most 42
+classes). `last_backend`, `last_kernel_ctas` and `last_fallback` describe that
+class's latest admitted submission. Auto fallback reasons distinguish the
+threshold, background intent, overlap, missing image, missing mapping and
+descriptor budget. Launch counters are not completion receipts. These fixed
+counters survive retirement and close; recording them allocates no memory.
+The worker retains its
 loans, stream, scratch and charges. Final drop bounds its drain and retains
 unconfirmed owners for process lifetime.
 
 The installed comparison checks both directions against OrbitKV on the same
-GPU. The local copy profile is implemented and awaits that hardware run.
+GPU. The calibration sweep also measures DMA, batch DMA and several CTA caps
+with a fixed compute kernel on another nonblocking stream. Run it separately
+on PCIe H100/H20 and Grace C2C GH200/GB200; CPU shims cannot calibrate the
+trade-off. Candidate thresholds and caps are evidence for a later review,
+not an automatic configuration change. The existing 128-operation threshold
+and uncapped default stay unchanged until those results exist. The local copy
+profile is **Implemented; installed profile unqualified**.
 [Verification queue](qualification.md#caller-stream-local-cuda-copy)
