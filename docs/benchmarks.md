@@ -490,9 +490,12 @@ uses `dca107d`, with the **same production tree**, against frozen TENT
 `e1ea5d31`. Each diagnostic case has three warmups and 1,000 byte-checked
 samples. The latter run uses four-vCPU Ubuntu 24.04 / Linux
 7.0.0-1017-azure VMs: stable Rust 1.99.1 on EPYC 9V45, Rust 1.85 on
-EPYC 7763. The device reports `MSFT NVMe Accelerator v1.0`, 512-byte logical
-and 4 KiB physical sectors, the `none` scheduler and a 256 KiB request limit.
-This is a virtual-disk experiment, not installed NVMe qualification.
+EPYC 7763. The initial MSRV trace and stable counterfactual expose
+`MSFT NVMe Accelerator v1.0`, with a 256 KiB request limit; the counterfactual
+MSRV job exposes `Msft Virtual Disk` (`sda`), with a 2 MiB limit. Both report
+512-byte logical / 4 KiB physical sectors and the `none` scheduler. Each
+within-job engine comparison shares its device; the jobs are distinct virtual
+disks, not installed NVMe qualification.
 
 Both implementations open the payload descriptor with `O_RDWR|O_DIRECT`,
 without `O_DSYNC` or `O_SYNC`; OrbiTE also uses `O_CLOEXEC`. The separate
@@ -536,7 +539,12 @@ they are **not** untraced benchmark p99s. Stable / Rust 1.85 stay separate.
 | OrbiTE contiguous | 26.58 / 19.71 | — | 17.41 / 3.00 |
 | TENT contiguous | 25.61 / 12.89 | 25.01 / 17.48 | 1.88 / 2.77 |
 
-The TENT bulk-control longest block waits are 28.45 / 27.48 ms. Thus an
+A [reversed-order run](https://github.com/OrbitInfra/OrbiTE/actions/runs/42567993578)
+on source `fc3c2a5` runs bulk verification first and the legacy verifier later.
+TENT gapped tail medians are 27.03 / 30.12 ms with bulk and 3.28 / 3.39 ms
+with legacy verification. The effect persists in both orders.
+
+The original TENT bulk-control longest block waits are 28.45 / 27.48 ms. Thus an
 unchanged TENT owner exhibits the purported OrbiTE-specific gapped tail when
 only verification changes. Lower offered load reduces it without replacing
 OrbiTE's worker, ring or drain; it does **not** eliminate every outlier (notably
