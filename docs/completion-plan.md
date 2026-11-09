@@ -94,11 +94,12 @@ after each:
    diagnostics preserve event-retained owners. The [calibration gate](qualification.md#caller-stream-local-cuda-copy)
    is written for PCIe Hopper and Grace C2C, not run. Keep existing defaults
    until those results exist.
-5. **Small-WRITE caller CQ wait — implemented.** The eligible contiguous host
+5. **Small-WRITE caller CQ wait — done.** The eligible contiguous host
    request peeks once and waits up to 200 µs, capped by its deadline. A missed
    window hands the same ring to the existing drain worker. Retention, cancel,
-   partial-submit and exact-prefix controls remain. Stop for review; next are
-   the separate HP-TCP fixture flake fix and release preparation.
+   partial-submit and exact-prefix controls remain. The separate HP-TCP fixture
+   fix checks owner retirement independently of port reuse; stop for its review,
+   then release preparation is next.
 6. **NIXL plugin implementation.** Requires the upstream explicit-cancel API
    and the outcome of #1958, plus the hardware batch before the formal backend
    RFC: installed GPU/RDMA results for the current artifact and `nixlbench`

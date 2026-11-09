@@ -69,7 +69,34 @@ fn a_public_batch_posts_independent_lanes_and_reports_each_ack() {
 
 #[test]
 fn dropping_a_busy_lane_fences_new_work_and_physical_close_joins_sessions() {
-    let (src, dst, remote, local, peer) = setup(cfg(), 12);
+    check_physical_close(false);
+}
+
+#[test]
+fn a_rebound_port_cannot_invalidate_the_old_hp_tcp_shutdown_receipt() {
+    check_physical_close(true);
+}
+
+fn check_physical_close(rebind: bool) {
+    let dst = TransferEngine::new(cfg()).unwrap();
+    // Keep the explicit port out of other fixtures' bind(0) allocation range.
+    let (listener, _guard) = crate::test_ports::guarded_port();
+    let endpoint = listener.local_addr().unwrap();
+    let mut config = cfg();
+    config.hp_tcp.bind_address = "127.0.0.1".into();
+    config.hp_tcp.port = endpoint.port();
+    drop(listener);
+    let src = TransferEngine::new(config).unwrap();
+    let remote = src
+        .register_memory(vec![0xa5; 12].into(), Permission::RemoteReadWrite)
+        .unwrap();
+    let local = dst
+        .register_memory(vec![0xee; 12].into(), Permission::LocalOnly)
+        .unwrap();
+    let peer = dst
+        .open_segment(src.endpoint(), src.source_epoch(), WAIT)
+        .unwrap();
+    assert_eq!(endpoint, address(&peer).into());
     let request = TransferRequest::new(
         Transport::HpTcp,
         local.base_address() + 1,
@@ -81,14 +108,90 @@ fn dropping_a_busy_lane_fences_new_work_and_physical_close_joins_sessions() {
             .unwrap()
             .is_complete()
     );
-    assert_eq!(&bytes(&local)[1..9], &[0xa5; 8]);
-    let mut idle = connect(address(&peer));
-    src.close(WAIT).unwrap();
-    src.close(WAIT).unwrap();
-    assert!(idle.read_exact(&mut [0; 1]).is_err());
-    assert!(
-        TcpStream::connect_timeout(&address(&peer).into(), Duration::from_millis(100)).is_err()
+    assert_eq!(
+        bytes(&local),
+        [
+            0xee, 0xa5, 0xa5, 0xa5, 0xa5, 0xa5, 0xa5, 0xa5, 0xa5, 0xee, 0xee, 0xee
+        ]
     );
+    let hp = src.hp_transport_for_test();
+    let handles = hp.workers.handles();
+    let (entered, started) = mpsc::channel();
+    let (retired, dropped) = mpsc::channel();
+    struct OnDrop(mpsc::Sender<usize>, usize);
+    impl Drop for OnDrop {
+        fn drop(&mut self) {
+            let _ = self.0.send(self.1);
+        }
+    }
+    let jobs: Vec<_> = handles
+        .iter()
+        .enumerate()
+        .map(|(index, handle)| {
+            let (entered, retired) = (entered.clone(), retired.clone());
+            handle.spawn(async move {
+                let _receipt = OnDrop(retired, index);
+                entered.send(()).unwrap();
+                std::future::pending::<()>().await;
+            })
+        })
+        .collect();
+    for _ in &handles {
+        started.recv_timeout(WAIT).unwrap();
+    }
+    // A complete guarded READ proves each socket was accepted, not just queued
+    // by the kernel. Leave its next frame incomplete while physical close runs.
+    let mut sessions: Vec<_> = handles
+        .iter()
+        .map(|_| {
+            let mut socket = connect(address(&peer));
+            socket
+                .write_all(&frame(&peer, TransferOp::Read, 1, 8).encode())
+                .unwrap();
+            let reply = response(&mut socket);
+            assert_eq!((reply.status, reply.committed), (Status::Ok, 8));
+            let mut data = [0xcc; 10];
+            socket.read_exact(&mut data[1..9]).unwrap();
+            assert_eq!(
+                data,
+                [0xcc, 0xa5, 0xa5, 0xa5, 0xa5, 0xa5, 0xa5, 0xa5, 0xa5, 0xcc]
+            );
+            socket.write_all(&[0]).unwrap();
+            socket
+        })
+        .collect();
+    src.close(WAIT).unwrap();
+    src.close(WAIT).unwrap();
+    // close joins every reactor. Already-delivered task-drop receipts and
+    // finished tasks prove those owners retired without observing a port.
+    let mut receipts: Vec<_> = (0..handles.len())
+        .map(|_| dropped.try_recv().unwrap())
+        .collect();
+    receipts.sort_unstable();
+    assert_eq!(receipts, (0..handles.len()).collect::<Vec<_>>());
+    assert!(jobs.iter().all(tokio::task::JoinHandle::is_finished));
+    assert!(matches!(hp.reserve(1), Err(Error::RequesterClosed)));
+    for session in &mut sessions {
+        let error = session.read_exact(&mut [0]).unwrap_err();
+        assert!(
+            matches!(
+                error.kind(),
+                std::io::ErrorKind::UnexpectedEof | std::io::ErrorKind::ConnectionReset
+            ),
+            "{error}"
+        );
+    }
+    assert_eq!(bytes(&remote), [0xa5; 12]);
+    if rebind {
+        // Force the CI interleaving: a different listener now owns the address.
+        // The old connect_timeout(...).is_err() assertion fails deterministically.
+        let replacement = TcpListener::bind(endpoint).unwrap();
+        let probe = connect(address(&peer));
+        let (accepted, client) = accept(&replacement);
+        assert_eq!(client, probe.local_addr().unwrap());
+        assert_eq!(accepted.local_addr().unwrap(), endpoint);
+        assert!(matches!(hp.reserve(1), Err(Error::RequesterClosed)));
+    }
 }
 
 #[cfg(feature = "rdma")]

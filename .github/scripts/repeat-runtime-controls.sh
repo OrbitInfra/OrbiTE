@@ -134,8 +134,16 @@ if [[ ${2:-} == dmabuf ]]; then
   if [[ ,${ORBITE_FEATURES:-}, == *,metrics,* ]]; then expected=12; fi
   test "${#controls[@]}" -eq "$expected"
 fi
-if [[ ${2:-} == rdma-priority || ${2:-} == dmabuf ]]; then
-  # Exercise the snapshot boundary under CPU contention, with bounded load.
+if [[ ${2:-} == hp-close ]]; then
+  iterations=1000
+  controls=(
+    transport::hp_tcp::tests::batch::dropping_a_busy_lane_fences_new_work_and_physical_close_joins_sessions
+    transport::hp_tcp::tests::batch::a_rebound_port_cannot_invalidate_the_old_hp_tcp_shutdown_receipt
+    cuda::tests::staging_pipeline::source_destruction_joins_an_abandoned_delegate_before_freeing_the_pin
+  )
+fi
+if [[ ${2:-} == rdma-priority || ${2:-} == dmabuf || ${2:-} == hp-close ]]; then
+  # Exercise owner boundaries under CPU contention, with bounded load.
   load_count=$(nproc)
   if ((load_count > 8)); then load_count=8; fi
   load_pids=()

@@ -207,7 +207,11 @@ Each configured worker owns a single-thread Tokio reactor, the Rust counterpart 
 keep their worker affinity and use readiness-driven sockets with TCP_NODELAY.
 Physical owners retain registration and task/byte admission through the last
 slice receipt. The typed configuration, frame layout, static rail limits and
-generation fence are described in [HP-TCP](hp-tcp.md).
+generation fence are described in [HP-TCP](hp-tcp.md). Shutdown controls observe
+retired reactor tasks and the original accepted sockets; a forced port rebind
+proves that a later connection cannot identify the old listener. TCP staging
+teardown similarly waits for its own acceptor-join receipt before checking that
+an abandoned native delegate still retains its pin.
 
 SHM follows the shared allocator and synchronous copy in frozen TENT. TENT
 can also copy a caller-supplied path from `MemoryOptions`. OrbiTE publishes
