@@ -79,23 +79,31 @@ required profiles and evidence for each milestone.
 
 ## Current focus
 
-The [NIXL backend design](nixl-backend.md) is reviewed; its upstream issue is
-still unposted and requires maintainer approval. Work in this order, one
-coherent PR at a time:
+Follow the maintainer's 2026-11-09 order, one PR at a time, stopping for review
+after each:
 
-1. **Direct-I/O WRITE comparison review.** The [block-layer controls](benchmarks.md#direct-io-issue-paths-and-verification-load)
-   find identical measured WRITE geometry and a verification/load-dependent
-   gap: unchanged TENT reproduces the long tail with bulk verification. Both
-   harnesses now use bulk verification; no production owner change is justified
-   by these traces. Keep virtual-disk tails as a P11 limit and review the full
-   paired rows before proceeding.
-2. **Small-WRITE caller CQ wait.** Measure and remove the remaining worker
+1. **NIXL design alignment.** Update the [backend proposal](nixl-backend.md)
+   against the existing upstream cancellation, lifetime and TENT-mode work.
+   No upstream posts, comments, forks or PRs; the maintainer handles them.
+2. **Remove libfabric (FABRIC).** Wait for the separate implementation brief.
+3. **dma-buf GPUDirect RDMA registration.** Wait for its separate brief;
+   installed GPU/RDMA evidence remains required.
+4. **Small-WRITE caller CQ wait.** Measure and remove the remaining worker
    handoff only with a bounded completion/drain proof. Keep all retention,
    cancellation, partial-submit and exact-prefix controls.
-3. **NIXL plugin implementation.** Start only after the maintainer approves
-   the upstream design issue and the lifetime contract is agreed with NIXL.
+5. **NIXL plugin implementation.** Requires the upstream explicit-cancel API
+   and the outcome of #1958, plus the hardware batch before the formal backend
+   RFC: installed GPU/RDMA results for the current artifact and `nixlbench`
+   UCX/Mooncake baselines. The maintainer must approve posting the RFC and
+   upstream must agree to the design before implementation.
    Target `src/plugins/orbite` in NIXL mainline, using existing OrbiTE owners.
    No custom vLLM/SGLang connectors or fork are part of this plan.
+
+The [direct-I/O comparison](benchmarks.md#direct-io-issue-paths-and-verification-load)
+is complete. Its remaining Rust 1.85 gapped WRITE p99 (16.26 ms versus TENT
+3.59 ms, overlapping three-trial ranges) is a P11 limit, not a tuning target
+on the CI virtual disk. Do no more virtual-disk tail work; measure physical
+NVMe tails in the hardware batch.
 
 The [release ladder](#release-ladder) retains the beta API decisions,
 test-consolidation and installed acceptance gates. Publication remains the
@@ -436,18 +444,18 @@ contiguous p99 is 14.1/18.0 ms versus 4.0/6.2 ms (stable/Rust 1.85).
 The [block-layer comparison](benchmarks.md#direct-io-issue-paths-and-verification-load)
 reproduces the gapped tail in unchanged TENT by matching verification reads.
 Both harnesses now use bulk verification; the earlier numbers describe the
-prior verification regime. No production tuning is claimed. Virtual-disk
-load-dependent tails remain for P11; the small-WRITE handoff follows in the
-[ordered performance work](#current-focus). These scoped runs make no general
-performance claim. Add NIXL UCX and Mooncake plugin comparisons during the
+prior verification regime. No production tuning is claimed. The remaining
+work and measurement limits are in [Current focus](#current-focus). These
+scoped runs make no general performance claim. Add NIXL UCX and Mooncake plugin comparisons during the
 hardware pass; the [design proposal](nixl-backend.md) adds no NIXL dependency.
 
 - [ ] Run OrbitKV against an installed artifact through its transfer owner,
   preserving the still-needed source-epoch and source-close contracts. A scoped
   installed prerequisite was accepted at consumer `eb1cc90f`
   ([OrbitKV #307](https://github.com/OrbitInfra/OrbitKV/pull/307)).
-- [ ] Upstream NIXL design agreement, then the purpose-built plugin/bridge and
-  its CPU byte/lifetime controls; installed GPU/storage profiles remain separate.
+- [ ] Meet the [NIXL prerequisites](#current-focus), then the purpose-built
+  plugin/bridge and its CPU byte/lifetime controls; installed GPU/storage
+  plugin profiles remain separate from native qualification.
 - [ ] Matched TENT/OrbiTE comparisons (small/large, fragmented, READ/WRITE,
   cold/warm, mixed priority, CPU/device/file, multirail). Initial guards:
   goodput ≥ 0.95, p99 latency ≤ 1.05 and CPU-per-byte and peak-RSS ≤ 1.10 of the
