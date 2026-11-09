@@ -9,6 +9,8 @@ use crate::{
 
 mod connect_progress;
 mod context_copy;
+#[cfg(feature = "rdma")]
+pub(crate) mod dmabuf;
 pub(super) mod fabric;
 #[cfg(feature = "rdma")]
 mod finish_progress;

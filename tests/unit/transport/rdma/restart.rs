@@ -246,6 +246,7 @@ pub(super) fn stale(
                     fabric: None,
                     hp_registered: false,
                     profile: Default::default(),
+                    gpu_direct_routes: Default::default(),
                     ipc_exportable: false,
                     epoch,
                     id: fields[2].parse().unwrap(),

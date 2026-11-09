@@ -349,7 +349,8 @@ fn describe(endpoint: SocketAddr, epoch: SourceEpoch, deadline: Instant) -> Resu
             || entry[25] > 1
             || entry[26] > 1
             || (entry[26] != 0 && entry[25] != 1)
-            || entry[27] & 0x7f > 1
+            || entry[27] & 0x78 != 0
+            || (entry[27] & 6 != 0 && (entry[25] != 1 || !metadata.rdma))
             || (entry[27] & 1 != 0 && (metadata.hp.is_none() || entry[25] != 0))
         {
             return Err(Error::Protocol("invalid or unordered region descriptor"));
@@ -365,6 +366,7 @@ fn describe(endpoint: SocketAddr, epoch: SourceEpoch, deadline: Instant) -> Resu
             } else {
                 MemoryType::Cuda
             },
+            gpu_direct_routes: crate::GpuDirectRoutes::from_bits((entry[27] >> 1) & 3),
             ipc_exportable: entry[26] != 0,
             hp_registered: entry[27] & 1 != 0,
             profile: if entry[27] & 0x80 != 0 {
@@ -870,6 +872,7 @@ fn serve(
                 entry[25] = u8::from(region.memory_type == MemoryType::Cuda);
                 entry[26] = u8::from(region.ipc_exportable);
                 entry[27] = u8::from(region.hp_registered)
+                    | (region.gpu_direct_routes.bits() << 1)
                     | (u8::from(region.profile != Default::default()) << 7);
                 entry[28..32].copy_from_slice(
                     &crate::transport::mnnvl::Location::wire(region.fabric).to_be_bytes(),

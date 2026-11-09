@@ -16,6 +16,7 @@ use key_domain::ExhaustedWindow;
 pub(super) struct RdmaContext {
     state: Mutex<State>,
     verbs: &'static sys::Verbs,
+    gpu_registration: super::GpuDirectRegistration,
     pub(super) asynchronous: Arc<events::State>,
     pub(super) counters: Arc<events::Counters>,
     pub(super) monitor: Arc<super::monitor::Monitor>,
@@ -124,6 +125,7 @@ impl RdmaContext {
                 gid_index: config.gid_index,
             }))),
             verbs,
+            gpu_registration: config.gpu_direct_registration,
             asynchronous: Arc::default(),
             counters,
             monitor,
@@ -357,19 +359,61 @@ impl RdmaContext {
         };
         self.asynchronous.check_device()?;
         // SAFETY: the MR owner retains the exact registration and actual RdmaContext.
-        memory.with_rdma_context(|| {
-            // SAFETY: The registration owner retains the exact allocation and the locked Open
-            // state holds its protection domain.
-            check("ibv_reg_mr", unsafe {
-                (self.verbs.register_memory)(
-                    handles,
-                    &resources.handles,
-                    memory.base_address() as usize as *mut std::ffi::c_void,
-                    memory.len(),
-                    window_bind,
+        let result =
+            memory.with_rdma_registration(handles, self.gpu_registration, self.verbs, |handles| {
+                // SAFETY: The registration owner retains the exact allocation and the locked Open
+                // state holds its protection domain.
+                check(
+                    if handles.gpu_route == 1 {
+                        "ibv_reg_dmabuf_mr"
+                    } else {
+                        "ibv_reg_mr"
+                    },
+                    // SAFETY: the locked context and retained allocation own the PD and range.
+                    unsafe {
+                        (self.verbs.register_memory)(
+                            handles,
+                            &resources.handles,
+                            memory.base_address() as usize as *mut std::ffi::c_void,
+                            memory.len(),
+                            window_bind,
+                        )
+                    },
                 )
-            })
-        })
+            });
+        self.record_gpu_registration(handles, memory, &resources.usage);
+        result
+    }
+
+    fn record_gpu_registration(
+        &self,
+        handles: &sys::MemoryHandles,
+        memory: &RegisteredMemory,
+        usage: &Arc<Mutex<RdmaStats>>,
+    ) {
+        if handles.mr.is_null() || handles.gpu_route == 0 {
+            return;
+        }
+        memory
+            .0
+            .gpu_direct_routes
+            .fetch_or(handles.gpu_route, std::sync::atomic::Ordering::Release);
+        let mut stats = usage.lock().unwrap_or_else(|p| p.into_inner());
+        if handles.gpu_route == 1 {
+            stats.dmabuf_registrations += 1;
+        } else {
+            stats.peermem_registrations += 1;
+        }
+        log::debug!(
+            "CUDA RDMA registration id={} bytes={} route={}",
+            memory.id(),
+            memory.len(),
+            if handles.gpu_route == 1 {
+                "dmabuf"
+            } else {
+                "peermem"
+            }
+        );
     }
 
     pub(super) fn register_message(
@@ -492,19 +536,16 @@ impl RdmaContext {
             } => Some(loan.registration()),
             _ => None,
         };
-        let mut construct = || {
+        let handles = &mut grant.handles;
+        let new_mr = handles.mr.is_null();
+        let mut construct = |handles: &mut sys::MemoryHandles| {
             Ok(if reused {
                 *local = connection.local;
-                let grant = resources
-                    .grant
-                    .as_mut()
-                    .ok_or(Error::Internal("missing reused grant"))?;
-                // SAFETY: The locked context owns the PD; the endpoint and grant supply live,
-                // exclusively borrowed handle slots.
+                // SAFETY: the locked context and grant own all handle slots and backing.
                 unsafe {
                     (self.verbs.prepare_grant)(
                         &mut connection.handles,
-                        &mut grant.handles,
+                        handles,
                         &device.handles,
                         buffer,
                         length,
@@ -512,16 +553,11 @@ impl RdmaContext {
                     )
                 }
             } else {
-                let grant = resources
-                    .grant
-                    .as_mut()
-                    .ok_or(Error::Internal("missing new grant"))?;
-                // SAFETY: The endpoint owner retains the native CQ, connection and registration
-                // through construction or cleanup.
+                // SAFETY: all construction outputs remain with this grant until cleanup.
                 unsafe {
                     (self.verbs.open)(
                         &mut connection.handles,
-                        &mut grant.handles,
+                        handles,
                         &device.handles,
                         device.address.port,
                         device.address.gid_index,
@@ -537,11 +573,16 @@ impl RdmaContext {
                 }
             })
         };
-        let code = if let Some(memory) = registration {
-            memory.with_rdma_context(construct)
+        let code = if let Some(memory) = &registration {
+            memory.with_rdma_registration(handles, self.gpu_registration, self.verbs, construct)
         } else {
-            construct()
+            construct(handles)
         };
+        if new_mr {
+            if let Some(memory) = &registration {
+                self.record_gpu_registration(handles, memory, &device.usage);
+            }
+        }
         if private_pd && !connection.handles.private_pd.is_null() {
             let mut usage = device.usage.lock().unwrap_or_else(|p| p.into_inner());
             usage.active_grant_pds += 1;

@@ -84,11 +84,12 @@ after each:
 1. **NIXL design alignment — done.** The [backend proposal](nixl-backend.md)
    follows the upstream cancellation, lifetime and TENT-mode discussions.
    No upstream posts, comments, forks or PRs; the maintainer handles them.
-2. **Remove libfabric (FABRIC).** Excluded by design: NVIDIA platforms only;
-   AWS EFA is a non-goal. Remove its owner, public surface and gates, preserving
-   CUDA fabric handles, MNNVL and EGM.
-3. **dma-buf GPUDirect RDMA registration.** Wait for its separate brief;
-   installed GPU/RDMA evidence remains required.
+2. **Remove libfabric (FABRIC) — done.** Excluded by design: NVIDIA platforms
+   only; AWS EFA is a non-goal. CUDA fabric handles, MNNVL and EGM are unchanged.
+3. **dma-buf GPUDirect RDMA registration — implemented.** Auto/explicit route
+   policy, fd/MR ownership and route evidence have CPU shim controls. The
+   [two installed profiles](qualification.md#verification-queue) remain unqualified;
+   stop for review before the next item.
 4. **Local-copy kernel SM budget and intent-aware Auto.** Wait for its
    separate brief; do not change local-copy scheduling in the removal PR.
 5. **Small-WRITE caller CQ wait.** Measure and remove the remaining worker

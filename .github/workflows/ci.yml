@@ -139,7 +139,7 @@ jobs:
       - name: Build the packaged staging control and mixed GPU gates
         if: matrix.features == 'rdma,cuda'
         run: |
-          for consumer in staging-control mixed-gpu; do
+          for consumer in staging-control mixed-gpu gdr-dmabuf; do
             python3 tests/hardware/build_installed.py --consumer "$consumer" --toolchain "$RUSTUP_TOOLCHAIN" --output "$RUNNER_TEMP/$consumer-$RUSTUP_TOOLCHAIN"
           done
       - name: Repeat lane, CPU-only requester and accounting controls 50 times

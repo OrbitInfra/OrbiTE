@@ -422,6 +422,25 @@ checks its identity and verifies the absence of network/thread syscalls.
 
 ## RDMA resource owners
 
+CUDA registration adds a deliberate extension to frozen TENT's XPU dma-buf
+exporter in `rdma/context.cpp`; TENT's NVIDIA availability check uses peermem.
+OrbiTE's `cuda/rdma.rs` resolves the immutable route policy and exports the
+allocation while restoring the exact caller context. All shared/private-PD and
+GPU reuse paths pass the same `sys/memory.rs` registration boundary. No export
+or registration error can fall through to pointer registration. The
+`dmabuf_export_or_registration_error_never_calls_the_pointer_registration`
+negative control includes an error after an fd was returned. Host registration
+is unchanged. The [route guide](rdma-cuda.md#gpu-direct-registration-routes)
+records NVIDIA/NCCL alignment, PCIe mapping and fd lifetime contracts.
+
+`dmabuf_unregister_and_close_timeout_keep_fds_until_the_real_invalidation`
+holds real control traffic at the verbs shim, checks private and reused GPU
+parents, and proves timeout/unregister cannot release a live grant.
+`dmabuf_failed_deregister_or_fd_close_keeps_backing_context_and_charges_without_retry`
+keeps native cleanup failures charged after engine drop. Retained fd count is
+bounded by existing cached-MR and active-grant budgets, not a new pool.
+
+
 A bounded rail table is shared by requester workers and the existing port
 monitor. TENT keeps one table per worker. OrbiTE serializes only pair
 accounting so two workers cannot arm concurrent trials. A receipt identifies

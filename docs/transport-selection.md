@@ -197,7 +197,8 @@ announces the SHM trailer. Bit 6 announces MNNVL fabric capabilities. Bytes 4–
 20–35 hold the process nonce only for NVLink. Bytes 36–43 give the maximum
 accepted transfer length as a big-endian unsigned integer. An unknown limit
 prevents folding two requests. Bytes 1–3 are reserved and must be zero. Region
-bytes 25–27 carry memory type, IPC export consent and HP-TCP registration.
+bytes 25–27 carry memory type, IPC export consent and registration flags
+(HP-TCP plus observed CUDA RDMA routes; see [Describe layout](cpu-tcp.md#development-wire-contract)).
 The [Describe layout](cpu-tcp.md#development-wire-contract) gives the trailer order and SHM fields.
 
 The RDMA path reply carries the advertised endpoint width. The rendezvous

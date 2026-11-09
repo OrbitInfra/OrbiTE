@@ -190,6 +190,18 @@ impl TransferEngine {
                 snapshot
                     .counters
                     .push(("orbite_rdma_allocated_bytes_total", allocated));
+                if let Ok(routes) = r.stats() {
+                    snapshot.counters.extend([
+                        (
+                            "orbite_rdma_dmabuf_registrations_total",
+                            routes.dmabuf_registrations,
+                        ),
+                        (
+                            "orbite_rdma_peermem_registrations_total",
+                            routes.peermem_registrations,
+                        ),
+                    ]);
+                }
                 let s = r.rail_health_stats();
                 snapshot
                     .gauges

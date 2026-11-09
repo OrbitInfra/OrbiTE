@@ -831,11 +831,21 @@ impl RegisteredMemory {
     }
 
     #[cfg(feature = "rdma")]
-    pub(crate) fn with_rdma_context<T>(&self, operation: impl FnOnce() -> Result<T>) -> Result<T> {
+    pub(crate) fn with_rdma_registration<T>(
+        &self,
+        handles: &mut crate::transport::rdma::MemoryHandles,
+        policy: crate::transport::rdma::GpuDirectRegistration,
+        verbs: &crate::transport::rdma::Verbs,
+        operation: impl FnOnce(&mut crate::transport::rdma::MemoryHandles) -> Result<T>,
+    ) -> Result<T> {
+        #[cfg(not(feature = "cuda"))]
+        let _ = (policy, verbs);
         match &self.0.allocation {
-            MemoryBacking::Host(_) => operation(),
+            MemoryBacking::Host(_) => operation(handles),
             #[cfg(feature = "cuda")]
-            MemoryBacking::Cuda(memory) => memory.with_rdma_context(operation),
+            MemoryBacking::Cuda(memory) => {
+                memory.with_rdma_registration(handles, policy, &verbs.gpu_registration, operation)
+            }
         }
     }
 
@@ -1021,6 +1031,7 @@ impl AllocationRef {
 }
 
 pub(crate) struct Registration {
+    pub(crate) gpu_direct_routes: std::sync::atomic::AtomicU8,
     pub(crate) internal: bool,
     #[cfg(feature = "metrics")]
     pub(crate) metric_transports: std::sync::atomic::AtomicU16,
@@ -1314,6 +1325,7 @@ impl MemoryRegistry {
             } else {
                 let (allocation, offset, length) = &ranges[plan.input];
                 let memory = RegisteredMemory(Arc::new(Registration {
+                    gpu_direct_routes: Default::default(),
                     internal,
                     #[cfg(feature = "metrics")]
                     metric_transports: Default::default(),
@@ -1328,6 +1340,7 @@ impl MemoryRegistry {
                         length: *length,
                         permission,
                         memory_type: allocation.memory_type(),
+                        gpu_direct_routes: Default::default(),
                         ipc_exportable: allocation.ipc_exportable(),
                         fabric: None,
                         hp_registered: false,
@@ -1448,6 +1461,13 @@ impl MemoryRegistry {
             })
             .map(|entry| {
                 let mut descriptor = entry.memory.0.descriptor;
+                descriptor.gpu_direct_routes = crate::GpuDirectRoutes::from_bits(
+                    entry
+                        .memory
+                        .0
+                        .gpu_direct_routes
+                        .load(std::sync::atomic::Ordering::Acquire),
+                );
                 #[cfg(feature = "cuda")]
                 {
                     descriptor.fabric = entry

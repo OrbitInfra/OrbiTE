@@ -49,6 +49,7 @@ fn region(kind: MemoryType, ipc_exportable: bool) -> RemoteRegion {
         fabric: None,
         hp_registered: false,
         profile: Default::default(),
+        gpu_direct_routes: Default::default(),
         ipc_exportable,
     }
 }

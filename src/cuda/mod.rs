@@ -21,7 +21,7 @@ mod pinned;
 mod probe;
 pub(crate) use probe::discover as discover_topology;
 #[cfg(feature = "rdma")]
-mod rdma;
+pub(crate) mod rdma;
 mod readiness;
 mod staging;
 mod stream;
@@ -668,4 +668,4 @@ impl CudaMemory {
 
 #[cfg(test)]
 #[path = "../../tests/unit/cuda/mod.rs"]
-mod tests;
+pub(crate) mod tests;

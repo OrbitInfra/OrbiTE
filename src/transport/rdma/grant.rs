@@ -206,12 +206,7 @@ impl GrantResources {
             })?;
             self.handles.mr = std::ptr::null_mut();
         } else {
-            // SAFETY: The grant owns the registration and its backing until deregistration
-            // succeeds.
-            let code = unsafe { (verbs.deregister)(&mut self.handles) };
-            if code != 0 {
-                return Err(("ibv_dereg_mr", code));
-            }
+            self.handles.retire(verbs)?;
         }
         if let Some(message) = &mut self.message {
             message.close(verbs)?;

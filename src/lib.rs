@@ -117,7 +117,8 @@ pub use {
         },
     },
     segment::{
-        FileSegment, FileSegmentInfo, RemoteRegion, RemoteSegment, SourceEpoch, TransferTarget,
+        FileSegment, FileSegmentInfo, GpuDirectRoutes, RemoteRegion, RemoteSegment, SourceEpoch,
+        TransferTarget,
     },
 };
 

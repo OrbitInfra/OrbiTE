@@ -545,15 +545,7 @@ impl MemoryRegion {
                 let retired = resources
                     .handles
                     .destroy_gpu_key(self.verbs)
-                    .and_then(|()| {
-                        // SAFETY: every grant or probe referencing this parent has retired.
-                        let code = unsafe { (self.verbs.deregister)(&mut resources.handles) };
-                        if code == 0 {
-                            Ok(())
-                        } else {
-                            Err(("ibv_dereg_mr", code))
-                        }
-                    });
+                    .and_then(|()| resources.handles.retire(self.verbs));
                 if let Err((operation, code)) = retired {
                     let mut usage = resources
                         .usage

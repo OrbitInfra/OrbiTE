@@ -104,6 +104,14 @@ pub(super) struct LocalApi {
     pub kernel: Option<KernelApi>,
 }
 pub(super) struct Driver {
+    #[cfg(feature = "rdma")]
+    pub dmabuf_export: Option<
+        unsafe extern "C" fn(*mut c_void, u64, usize, sys::CUmemRangeHandleType, u64) -> Status,
+    >,
+    #[cfg(feature = "rdma")]
+    pub version: unsafe extern "C" fn(*mut c_int) -> Status,
+    #[cfg(feature = "rdma")]
+    pub close_fd: unsafe extern "C" fn(c_int) -> c_int,
     pub(super) local: LocalApi,
     pub(super) vmm: Option<VmmApi>,
     pub(super) _library: Option<Library>,
@@ -252,7 +260,19 @@ impl Driver {
                 .ok(),
             },
             vmm,
+            #[cfg(feature = "rdma")]
+            dmabuf_export: symbol(
+                &library,
+                b"cuMemGetHandleForAddressRange\0",
+                "cuMemGetHandleForAddressRange",
+                sys::cuMemGetHandleForAddressRange as _,
+            )
+            .ok(),
+            #[cfg(feature = "rdma")]
+            close_fd: libc::close,
             init: symbol!(&library, cuInit),
+            #[cfg(feature = "rdma")]
+            version: symbol!(&library, cuDriverGetVersion),
             device_get: symbol!(&library, cuDeviceGet),
             device_count: symbol!(&library, cuDeviceGetCount),
             #[cfg(feature = "rdma")]
