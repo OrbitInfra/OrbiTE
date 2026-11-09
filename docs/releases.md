@@ -98,7 +98,7 @@ identical production code.
 | Scattered 64 × 4 KiB TCP READ / WRITE | p50 **8.59 → 4.23 / 9.33 → 6.30 ms**; TENT after **6.18 / 6.07 ms**. WRITE remains 3.7% slower than TENT |
 | Single 4 KiB TCP READ | CPU **370 → 190 µs** per batch; TENT after **256 µs** |
 | 4 KiB buffered tmpfs READ / WRITE | p50 **156 → 51 / 197 → 193 µs**, or **0.61× / 2.30×** TENT after. CPU **166 → 55 / 250 → 178 µs**; WRITE latency remains a limit |
-| Gapped ext4 READ / WRITE | **Clean-reset** p99: stable **10.41 / 32.98 ms** versus TENT **1.74 / 1.82 ms**; Rust 1.85 **10.63 / 25.98 ms** versus **1.59 / 1.76 ms**. [All paired rows](benchmarks.md#reset-only-paired-comparison) retain the regressions. The tail remains open; production owners are unchanged |
+| Gapped ext4 READ / WRITE | **Clean-reset** p99: stable **10.41 / 32.98 ms** versus TENT **1.74 / 1.82 ms**; Rust 1.85 **10.63 / 25.98 ms** versus **1.59 / 1.76 ms**. [All paired rows](benchmarks.md#reset-only-paired-comparison) retain the regressions. The [verification-load control](benchmarks.md#direct-io-issue-paths-and-verification-load) reproduces the long tail in unchanged TENT; current virtual-disk tails remain a limit |
 
 The earlier small-file **old-harness** ext4 p99 was 14.9/5.9 ms versus
 TENT 2.2/2.6 ms; it included reset writeback and is not isolated transfer cost.
@@ -120,8 +120,12 @@ rule out extra rings, bounce allocation and drain-loop sleeps for aligned
 gaps. They also confirm that the old truncate/rewrite reset contaminated
 virtually every ext4 window. Both harnesses now preallocate once and finish
 in-place reset writes with `fdatasync` before timing. That removes reset
-writeback; it does not eliminate all long direct-I/O waits or establish their
-underlying cause. The earlier [unchanged-code control](benchmarks.md#unchanged-code-paired-control)
+writeback. The subsequent block-layer comparison finds identical measured
+WRITE geometry but different verification reads and cached folios. Changing
+only TENT's verifier reproduces the long gapped tail; reducing offered load
+reduces most tails, with residual outliers. Both normal harnesses now use bulk
+verification reads. This corrects the comparison without changing production
+owners or claiming a runtime speedup; host rate limiting remains an inference. The earlier [unchanged-code control](benchmarks.md#unchanged-code-paired-control)
 remains labeled old-harness. Small tmpfs WRITE still usually creates a worker
 after the caller sees a pending CQE; its old control-pair p50 is 199→191 µs
 versus TENT's 84 µs. The caller-wait candidate is deferred.

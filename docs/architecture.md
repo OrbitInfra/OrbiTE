@@ -237,7 +237,10 @@ The same preflight, partial-submit drain and prefix aggregation serve both paths
 Aligned gapped and contiguous host batches keep one ring for the whole group,
 without bounce allocation, as checked by
 `aligned_file_batches_use_one_ring_without_bounce_for_gaps_or_contiguous_ranges`.
-The [tail diagnosis](benchmarks.md#ext4-tail-diagnosis) changes no drain owner.
+The [block-layer diagnosis](benchmarks.md#direct-io-issue-paths-and-verification-load)
+finds a verification/load-dependent comparison; it changes no ring, submission
+or drain owner. The long tail is reproducible with unchanged TENT by altering
+only its untimed verifier. Retention and short-prefix controls remain intact.
 CUDA/file submissions use the same
 worker and ring for successive rounds. The optional file pool lends one
 aligned slot per eligible request. A miss uses the charged pageable or proxy
