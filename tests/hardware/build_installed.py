@@ -255,8 +255,9 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
         if probe != protocol:
             raise ValueError('unexpected installed consumer protocol')
         linkage = run('ldd', ['ldd', str(binary)], cwd=output)
-        if 'not found' in linkage or ('libibverbs' in linkage) != ('rdma' in features) or 'libcuda' in linkage or (storage and ('liburing' in linkage or 'libcufile' in linkage)):
+        if 'not found' in linkage or 'libibverbs' in linkage or 'libcuda' in linkage or (storage and ('liburing' in linkage or 'libcufile' in linkage)):
             raise ValueError('installed consumer has unexpected native linkage')
+        run('native-link', [sys.executable, str(root / 'scripts/check-no-native-link.py'), str(binary)], cwd=output)
         libraries = {word: digest(Path(word)) for word in linkage.split() if word.startswith('/') and Path(word).is_file()}
         manifest.update(status='passed', native_libraries=libraries, archive=str(archive), archive_sha256=digest(archive),
                         library_manifest=str(library / 'Cargo.toml'), features=resolved,
