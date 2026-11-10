@@ -2,160 +2,222 @@
 
 ## 0.1.0-beta.1 — preparation
 
-This is a release candidate for maintainer review, not a publication record.
-The Rust and Python APIs are the freeze candidate; the
-[Rust freeze decisions](rust-api.md#freeze-decisions) and
-[Python surface review](python.md#surface-and-defaults) record the maintainer's
-decisions and the boundaries excluded from the freeze. Publishing to crates.io
-and PyPI is the
-maintainer's action. The last published Rust milestone is `0.1.0-alpha.1`
-from `7cc48490`. The beta.1 version is spelled `0.1.0b1` on PyPI.
+This is the first beta publication candidate, not a publication record.
+The maintainer publishes and approves the tag separately. The last published
+Rust milestone is `0.1.0-alpha.1` from `7cc48490`; **beta.1** is `0.1.0b1` on
+PyPI. No Python release predates it. OrbiTE is a transfer engine for LLM
+inference on NVIDIA; [scope and non-goals](architecture.md#scope-and-non-goals)
+separate byte movement from the consumer's cache and discovery policy.
 
-### Changes since 0.1.0-alpha.1
+### Changes since alpha.1
 
-- Local-copy `submit` now takes `LocalCopyOptions` in place of the optional
-  producer-event reference: set `intent`, `priority` and `ready` there. No
-  alternate submit method or compatibility alias is provided. `LocalCopyStats`
-  includes per-class diagnostic snapshots and is no longer `Copy`. The Python
-  API does not expose local copy and is unchanged. Before 0.1.0, clean breaking
-  changes remain allowed while ownership and wire safety rules stay fixed.
-- Local-copy kernels accept a validated total CTA cap. Auto uses a higher
-  threshold for background DeviceToHost copies; its new default keeps these
-  copies on DMA until calibrated. Normal/default-options selection remains at
-  128 compiled operations with no cap. Forced backends, ordered DMA for
-  overlap and event-retained owners are unchanged. The Hopper PCIe and Grace
-  C2C calibration gates are written, not run; defaults await hardware evidence.
-- Rust is the primary interface. Python lives in the separate
-  `orbite-python` packaging crate and mirrors the Rust API with PEP 8 names.
-  Installed wheels cover CPython
-  3.10–3.14 on Linux x86_64/aarch64; blocking calls release the GIL.
-  Buffer exporters and CUDA Array Interface/DLPack owners stay retained
-  through native drain, including cancellation and uncertain cleanup.
-- The C ABI (`libtent`, the `tent_*` exports), native/classic C++ adapters,
-  device plugin ABI and diagnostics C interface were removed. No classic
-  `mooncake.engine` shim is shipped. The offline CLI is now
-  `orbite diagnostics version [--json]`, avoiding Mooncake's `tent` command.
-  Rust diagnostics retain text/JSON output and exit codes.
-- Discovery is P2P-only. Consumers own membership, KV indexes and metadata
-  stores, publish endpoint/epoch authority, and retire departed peers.
-  Non-P2P configuration is explicitly rejected. Rust per-peer retirement
-  fences new work, drains existing owners and reclaims unreferenced identities;
-  failed native cleanup stays retained and charged. Python segment close keeps
-  reversible handle semantics.
-- The S23 TENT wire interoperability profile was removed. Both peers run the
-  same OrbiTE build; no autodetection or downgrade is available. The frozen v0.3.14 CPU oracle remains as a behavior baseline. See the
-  [wire and consumer boundary](tent-parity.md#wire-and-consumer-boundaries).
-- FABRIC/libfabric is removed and excluded by design: NVIDIA platforms only;
-  AWS EFA is a non-goal. The host-only path could not move GPU KV directly.
-  Its Cargo feature, config/stats, Rust/Python transport and metric series are
-  removed; remaining transport values do not change. CUDA fabric handles,
-  MNNVL and EGM remain. MPComm is deferred: no consumer or available provider.
-  See the [scope and revisit condition](tent-parity.md#upstream-transport-inventory-and-selected-scope).
-- S26 adds verified size/batch sweeps against frozen TENT and CPU fault controls, including real requester kills during partial TCP and
-  HP-TCP WRITEs. Raw measurements stay outside Git. No tuning is included.
-- The [product positioning](architecture.md#scope-and-non-goals)
-  centers OrbitKV cache tiering and cross-node KV reuse. P/D is a later NIXL
-  integration design, after installed GDR/NVLink qualification; no custom
-  connector or NIXL dependency is added.
+- Rust is primary; Python is a PEP 8 binding to the same retained owners.
+  The [Rust inventory](rust-api.md#current-public-surface) and
+  [Python inventory](python.md#surface-and-defaults) describe today's surface,
+  not a freeze. Public enums and field records are non-exhaustive except
+  `TransferOp`. `NVLinkStats` became `NvlinkStats`, `MemType` became
+  `TopologyMemoryKind`, and `MemoryBacking` is the retained backing type.
+  Hidden binding helpers require the Python crate's exact core-version pin.
+- TENT wire, API, configuration and naming compatibility are removed.
+  `TentSettings`, `from_tent_*`, `MC_TENT_CONF`, legacy environment mappings,
+  TENT-shaped Python names and transport-ID conversions are gone. Use
+  `EngineConfig::from_json/from_file/from_env`; only `ORBITE_CONF` selects an
+  environment document. Unknown keys and wrong types fail. Metrics use
+  `orbite_` names. Frozen TENT v0.3.14 remains the design reference, CPU oracle
+  and performance baseline, not a runtime dependency.
+- C ABI, C++/classic-TE adapters, device plugin ABI and diagnostics C exports
+  are removed. The CLI is `orbite diagnostics version [--json]`, replacing
+  `tent`. Python ships no `tent` or `mooncake.engine` alias.
+- Discovery is P2P-only. Consumers publish endpoint and authoritative source
+  epoch. Rust `close_segment` fences a peer, drains it and reclaims identities
+  after their last reference; uncertain cleanup stays retained and charged.
+  Python segment close remains reversible handle invalidation.
+- FABRIC/libfabric is excluded: NVIDIA platforms only; AWS EFA is a non-goal.
+  Its feature, transport, configuration and metrics are removed; remaining
+  transport discriminants are unchanged. CUDA fabric handles and MNNVL/EGM
+  are unaffected. MPComm is deferred: no consumer or available provider.
+- File vectors accept retained host/CUDA ranges and padding: zero-fill on
+  WRITE, discard on READ, with completed-prefix semantics. Runtime GDS disable
+  and lazy probing preserve feature isolation and strict explicit selection.
+- `rdma.gpu_direct_registration = auto | dmabuf | peermem` adds a checked,
+  fail-closed CUDA dma-buf route with optional verbs symbol lookup. Explicit
+  Direct registration never silently becomes staging. Export flags remain
+  zero; Grace topology-specific PCIe forcing is not implemented. The opt-in
+  GPU source reuse route remains unqualified.
+- Local-copy `submit(direction, descriptors, LocalCopyOptions)` replaces the
+  optional event argument; options carry intent, priority and readiness.
+  `kernel_cta_limit` bounds the grid; `kernel_threshold_background` defaults to
+  `usize::MAX`, keeping background DeviceToHost Auto on DMA until calibration.
+  `None` retains the original CTA budget; normal Auto uses 128 compiled DMA
+  operations. `LocalCopyStats` adds per-class diagnostics and is no longer
+  `Copy`. Forced backends, overlap ordering and event-retained owners remain.
+  These APIs are Rust-only; installed calibration is unrun.
+- TCP reuses bounded, epoch-scoped streams. Small eligible host-file work can
+  complete on the caller with a deadline-bounded wait of at most 200 µs.
+  Unfinished rings transfer to the existing drain owner without resubmission.
+  Worker exit/start failures retain submitted owners as sticky `Unquiesced`;
+  exceptional GDS group paths settle common admission and metrics accounting.
 
-This preparation unifies package versions and validates wheel/sdist metadata,
-including under optimized Python. Rust public field records and enums are
-non-exhaustive except binary `TransferOp`; construct configs through defaults
-and field assignment. `NVLinkStats` is renamed to `NvlinkStats`, `MemoryBacking`
-is the real type name, and `TopologyMemoryKind` names topology entries without reference-specific naming. Binding-only
-helpers and the standalone adaptive core are hidden and outside the freeze;
-the Python crate pins the exact core version. Five accidental Python helper
-imports are private. Python's additive helpers and reversible segment close
-are ratified. Missing documentation must close before `0.1.0`. Transfer behavior
-is unchanged. TCP, configuration and
-the Python CPU/TCP wheel profile are labeled **Qualified on Linux CI** only
-against the [named jobs and tests](qualification.md#linux-ci-release-profiles).
-HP-TCP loopback, same-host SHM and ext4/tmpfs io_uring retain their bounded
-Linux CI qualification.
+### Qualification and limits
 
-### Independent interfaces
-
-TENT remains the frozen design reference, CPU oracle and performance baseline.
-Wire, API, configuration and naming compatibility are out of scope. The
-compatibility loaders, MC_/NCCL/MOONCAKE aliases and S16 compatibility inventories
-are removed. Rust exposes `EngineConfig::from_json/from_file/from_env`;
-only `ORBITE_CONF` configures the environment loader. Python now mirrors Rust
-owners with PEP 8 methods and an `orbite.Error` hierarchy. Exporter retention,
-GIL release, cancellation and physical drain guarantees are unchanged.
-
-Metrics use the `orbite_` prefix. Public TENT transport-ID conversion methods
-and excluded Python transport identities are removed; diagnostics reports only
-OrbiTE transports. `TopologyMemoryKind` replaces `MemType`, distinct from
-registration `MemoryType`. Native comparison jobs have 120-minute headroom;
-the 480 byte-checked rows and sample counts are unchanged.
-
-### Known limitations
-
-Every **current GPU, RDMA, GDS, MNNVL/EGM and CXL profile is unqualified**.
-This includes GPUDirect, staging, caller-stream local copies, NVLink and Python
-CUDA exporters. Older accepted H20/RoCE artifacts do not qualify this release.
-Physical two-host TCP and physical multi-rail remain unqualified. CPU shim tests are not device evidence. Required installed
-gates remain in the [verification queue](qualification.md#verification-queue).
-
-The profile-guided TCP and small-file passes repeat S26 on four-vCPU Linux
-runners. The TCP pair is `f0556448` → `de9fd60b` on EPYC 7763. The current file pair
-is `578531b7` → `a5874066`, on four-vCPU EPYC 9V74 (stable) and EPYC 7763
-(1.85) runners. Each pair shares one VM, with full byte checks and
-frozen TENT on that runner. The table reports medians of three 100-sample
-trials; the two jobs are not pooled. These are scoped measurements, not
-release speed guarantees. The reset-only pair (`521861db` → `19ec2009`)
-also uses one EPYC 7763 VM per toolchain; it changes both harnesses, with
-identical production code.
-
-| Workload | Paired result / remaining limit |
+| Profile on this source | Evidence / limit |
 | --- | --- |
-| Scattered 64 × 4 KiB TCP READ / WRITE | p50 **8.59 → 4.23 / 9.33 → 6.30 ms**; TENT after **6.18 / 6.07 ms**. WRITE remains 3.7% slower than TENT |
-| Single 4 KiB TCP READ | CPU **370 → 190 µs** per batch; TENT after **256 µs** |
-| 4 KiB buffered tmpfs WRITE | Stable p50 **117.9→57.3 µs**, CPU **130.2→61.5 µs**; 1.85 p50 **192.8→76.1 µs**, CPU **181.3→86.6 µs**. After p50 is **1.02×/0.96×** TENT. A missed caller window still needs worker drain |
-| Small-file regressions | Stable tmpfs 4 KiB READ p50 **+9.3%**; stable ext4 64 KiB WRITE p99 **331→544 µs (+64.4%)**, with separate trial ranges. The bounded wait can delay handoff on a miss; its contribution versus VM/device variation is not isolated. [Every row and regression](benchmarks.md#small-file-paired-results) is retained |
-| Gapped ext4 READ / WRITE | **Clean-reset** p99: stable **10.41 / 32.98 ms** versus TENT **1.74 / 1.82 ms**; Rust 1.85 **10.63 / 25.98 ms** versus **1.59 / 1.76 ms**. [All paired rows](benchmarks.md#reset-only-paired-comparison) retain the regressions. The [verification-load control](benchmarks.md#direct-io-issue-paths-and-verification-load) reproduces the long tail in unchanged TENT; current virtual-disk tails remain a limit |
+| TCP DRAM, configuration | Qualified on Linux CI: [named jobs and controls](qualification.md#linux-ci-release-profiles); loopback/multiple processes, not physical two-host qualification |
+| HP-TCP, SHM | Qualified on Linux CI: [loopback rails](qualification.md#hp-tcp-rail-verification) and [same-host DRAM](qualification.md#shared-memory-and-cxl-verification); no physical multi-rail or CXL claim |
+| io_uring DRAM/file | Qualified on Linux CI: [real ext4/tmpfs](qualification.md#local-file-segments); unavailable kernels fail explicitly |
+| Python CPU/TCP and quickstart | [Installed-wheel CI](qualification.md#python-wheels), CPython 3.10–3.14, Linux x86_64/aarch64; exporter lifetime and GIL controls remain. Including native features in a wheel does not qualify hardware |
+| GPU, RDMA, GDS, NVLink, MNNVL/EGM, CXL and physical rails | Implemented; installed profiles unqualified on this artifact. Older H20/RoCE artifacts qualify only their recorded revisions. [Verification queue](qualification.md#verification-queue) |
 
-The earlier small-file **old-harness** ext4 p99 was 14.9/5.9 ms versus
-TENT 2.2/2.6 ms; it included reset writeback and is not isolated transfer cost.
-The [original S26 evidence](qualification.md#cpu-benchmark-evidence) keeps its
-historical values and labels. The [TCP results](benchmarks.md#paired-results-and-regressions)
-and [small-file results](benchmarks.md#small-file-paired-results)
-pin revisions, hosts, parameters and every numerical regression. The TCP profile confirmed one
-connection per physical request and substantial reply-poll CPU. TCP now reuses
-bounded, epoch-scoped streams and uses deadline-bounded socket waits. Dirty
-streams retire without replay, and uncertain cleanup retains its owners.
-One eligible host-file operation can finish on its caller after an initial
-CQ check and a wait of at most 200 µs, capped by its deadline and three enter
-attempts. A missed window or enter failure moves the same ring to the existing
-drain worker without resubmitting. Uncertain handoff retains every owner.
-No public API, observational polling contract or ring bound changes.
-In the **old-harness** small-file pair, Rust 1.85's 64 KiB ext4 READ/WRITE
-p50 regresses 15%/17% while CPU falls
-16%/20%; the contribution of changed wake timing versus file/VM variation is
-not isolated. Larger file groups keep their worker path. Per-sample traces
-rule out extra rings, bounce allocation and drain-loop sleeps for aligned
-gaps. They also confirm that the old truncate/rewrite reset contaminated
-virtually every ext4 window. Both harnesses now preallocate once and finish
-in-place reset writes with `fdatasync` before timing. That removes reset
-writeback. The subsequent block-layer comparison finds identical measured
-WRITE geometry but different verification reads and cached folios. Changing
-only TENT's verifier reproduces the long gapped tail; reducing offered load
-reduces most tails, with residual outliers. Both normal harnesses now use bulk
-verification reads. This corrects the comparison without changing production
-owners or claiming a runtime speedup; host rate limiting remains an inference. The earlier [unchanged-code control](benchmarks.md#unchanged-code-paired-control)
-remains labeled old-harness. The small-file caller wait now addresses the
-separate pending-WRITE handoff; requests that exceed its bounded window still
-use the existing drain worker.
-There is one exclusive direct-TCP lane per peer, without a concurrent-caller performance
-claim. The separate Rust 1.85 pair used a newer EPYC 9V45: scattered TCP
-improved, but 64 MiB READ p50/p99 regressed 2.8%/10.7% while CPU fell 4.2%.
-Blocking wakeups can trade latency for CPU; the exact contribution is not isolated.
-p99 uses only 100 samples per trial. Timed WRITEs still exclude a durability
-barrier; reset synchronization is outside the interval. These results say nothing about RNIC, GPU or physical SSD
-performance.
+Missing public documentation remains a pre-0.1.0 gate: close the findings and
+turn the audit into `-D missing-docs`. The NIXL plugin is not implemented; its
+[upstream and hardware prerequisites](nixl-backend.md) remain separate.
 
-Timeout, cancellation and terminal status remain distinct from a physical
-release receipt. Uncertain cleanup retains owners; uncertain WRITEs are never
-replayed. Before `0.1.0`, peers must run the same build. The explicit
-compatibility policy and hardware gates start at the
-[stable release boundary](completion-plan.md#release-ladder).
+### Known performance limits
+
+These are byte-checked CPU-runner measurements, not general speed guarantees.
+[Benchmarks](benchmarks.md) pins revisions, hosts, sample counts and every row;
+raw results remain CI artifacts. p99 uses 100 samples per trial. Timed WRITEs
+exclude durability barriers. There is no GPU, RNIC or physical NVMe claim.
+
+| Workload | Recorded result / remaining limit |
+| --- | --- |
+| Scattered 64 × 4 KiB TCP | READ p50 8.59→4.23 ms; WRITE 9.33→6.30 ms, still 3.7% above TENT's 6.07 ms on the paired runner. Single 4 KiB READ CPU falls 370→190 µs; TENT 256 µs. One exclusive lane per peer has no concurrent-caller performance claim |
+| Small tmpfs WRITE (#193) | 4 KiB p50 117.9→57.3 µs on stable and 192.8→76.1 µs on 1.85; after/TENT 1.02×/0.96×. A missed caller window still needs worker drain |
+| Bounded-wait trade-off (#193) | Stable tmpfs 4 KiB READ p50 +9.3%; ext4 64 KiB WRITE p99 331→544 µs (+64.4%), separate trial ranges. A miss can delay handoff; its contribution versus VM/device variation is not isolated |
+| Clean-harness ext4 tail (#186) | Rust 1.85 gapped WRITE p99 16.26 ms versus TENT 3.59 ms, overlapping three-trial ranges. Bulk-verifier and offered-load counterfactuals reproduce the tail in unchanged TENT. This stays a P11 limit; physical NVMe measurement is in the hardware batch, with no more virtual-disk tuning planned |
+| Other TCP regression | Rust 1.85 64 MiB READ p50/p99 +2.8%/+10.7% while CPU falls 4.2%; wake latency versus host variation is not isolated |
+
+Earlier S26 ext4 values are **old-harness** evidence: truncate/rewrite reset
+writeback overlapped 31,999 of 32,000 measured windows. Both harnesses now
+preallocate once, reset in place and `fdatasync` before timing; zero fixed
+windows contained reset writeback. The intermediate clean-reset comparison
+still used different verification reads. Keep those historical tables under
+[reset isolation](benchmarks.md#reset-only-paired-comparison) and the subsequent
+[block-layer comparison](benchmarks.md#direct-io-issue-paths-and-verification-load);
+they are not current release performance claims.
+
+### Compatibility boundary
+
+Breaking Rust/Python API changes remain allowed before 0.1.0, including between
+betas. The **0.1.x API and wire freeze begins at 0.1.0**: same-0.1.x peers will
+interoperate, with breaking API or wire changes requiring a minor bump under
+0.x semver. Until then, both peers must run the same build. The native
+control-plane `VERSION` remains **1** and cannot detect a build mismatch;
+there is no pre-0.1.0 compatibility promise. See the
+[wire rule](tent-parity.md#wire-and-consumer-boundaries). Timeout, cancellation
+and logical terminal status never substitute for physical retirement, and an
+uncertain WRITE is never replayed.
+
+## Maintainer publication procedure
+
+This section configures a future publication. This PR creates no tag, package
+publication or GitHub Release. Source versions stay `0.1.0-beta.1` and
+`0.1.0b1`. Only the maintainer approves publication.
+
+### One-time setup
+
+Use [PyPI Trusted Publishing](https://docs.pypi.org/trusted-publishers/creating-a-project-through-oidc/)
+and [crates.io Trusted Publishing](https://crates.io/docs/trusted-publishing),
+so neither job stores a long-lived registry token. The crate already exists
+under owner `feichai0017`; the Python distribution is a pending publisher until
+its first successful upload (a pending publisher does not reserve the name).
+
+1. In repository **Settings → Environments**, create `pypi` and `crates-io`.
+   Each must require a maintainer reviewer (for example `feichai0017`), prohibit
+   administrator bypass, and allow deployment **tags matching `v*` only**, no
+   branches. If the sole maintainer also starts the run, leave “prevent
+   self-review” off so that their separate approval is possible; enabling it
+   requires a second authorized reviewer. Do not run a publishing tag before
+   these protection rules exist. GitHub must offer required reviewers for the
+   repository's visibility/plan.
+2. In the maintainer's PyPI account, **Publishing → Add a new pending publisher**:
+   project `orbite`, owner `OrbitInfra`, repository `OrbiTE`, workflow filename
+   `release.yml`, environment `pypi`. Confirm the name remains available.
+   After first upload, manage the publisher under the project's Publishing tab.
+3. As the existing crates.io owner, add a GitHub trusted publisher to `orbite`:
+   owner `OrbitInfra`, repository `OrbiTE`, workflow `release.yml`, environment
+   `crates-io`. No publisher is configured for the unpublished Python Rust crate.
+4. Allow the pinned official publishing actions. Only the two protected jobs
+   receive `id-token: write`. Only the final GitHub Release job receives
+   `contents: write`. Build/test jobs have read-only repository access.
+
+The published wheels are the **combined RDMA/CUDA/io_uring/GDS/metrics**
+profile, one for each CPython 3.10–3.14 × Linux x86_64/aarch64. They are built
+in pinned official [manylinux 2.28 images](https://github.com/pypa/manylinux)
+with `maturin --manylinux 2_28`, supporting glibc 2.28 and newer (including
+RHEL/Rocky 8 and Ubuntu 20.04). No dependency requires a newer glibc.
+The artifact check rejects grafted verbs/provider, CUDA and cuFile libraries;
+ELF checks reject linked verbs symbols. Every publication wheel runs the
+unchanged quickstart in a separate container without those libraries.
+CPU quickstarts need none of them. Configured GPU/RDMA/GDS paths need the
+host's NVIDIA driver, rdma-core/providers and cuFile respectively, and remain
+**unqualified on hardware** for this artifact. The sdist uses the same profile and its rebuild
+requires native build headers. CPU + io_uring and MSRV wheels remain review
+artifacts; profiles share filenames and must never be uploaded together.
+
+Build dependency installation checks `dpkg -s` first. Only absent packages
+are requested, with at most three 180-second update/install attempts that
+alternate the runner mirror and Ubuntu's archive (ports on aarch64). Exhaustion
+is fatal. No failed test job is retried automatically. The workflow recovery
+hook retries only an initial failed run whose created jobs all succeeded or
+were skipped, the GitHub uncreated-matrix failure case. Tag and dispatched
+release runs are excluded; their registry receipts always require manual review.
+
+### Review and dry run
+
+A pull request from a `release/` branch runs `release.yml` as a dry run.
+It calls the ordinary CI, wheel and oracle jobs once; their standalone PR
+instances skip only to avoid duplicate copies of those same jobs.
+After merge, the maintainer can also run:
+
+```sh
+gh workflow run release.yml --repo OrbitInfra/OrbiTE --ref main -f dry_run=true
+gh run list --repo OrbitInfra/OrbiTE --workflow release.yml
+# Choose the displayed run ID; then watch and download its tested artifacts.
+gh run watch RUN_ID --repo OrbitInfra/OrbiTE --exit-status
+gh run download RUN_ID --repo OrbitInfra/OrbiTE --name release-artifacts --dir release-artifacts
+(cd release-artifacts && sha256sum -c SHA256SUMS)
+```
+
+The workflow checks versions, exact Python core pin and tag, reruns both
+Rust toolchains/all CI features, strict docs and docs.rs without verbs headers,
+the frozen oracle/480-row comparisons, all wheels and the sdist rebuild.
+It installs and runs the packaged quickstarts. Package allowlists reject logs,
+traces (except the frozen CPU fixture), generated HTML and hardware run output.
+The reviewed set contains ten wheels, one sdist, one `.crate`, `SHA256SUMS` and
+these release notes. Dry runs cannot obtain registry credentials or publish.
+
+### Approved publication and partial failure
+
+Only after separate approval, from the accepted clean commit:
+
+```sh
+git switch main
+git pull --ff-only
+# Verify HEAD is the approved release-preparation commit before creating the tag.
+git tag -a v0.1.0-beta.1 -m 'OrbiTE 0.1.0-beta.1'
+git push origin refs/tags/v0.1.0-beta.1
+```
+
+The tag starts a fresh gate/build run. Mismatched tags fail, including during
+dry runs. Approve each environment only after reviewing the gates and artifact
+hashes. The publishing jobs run once, verify registry SHA-256 receipts, and
+only then create a prerelease on GitHub for the **existing** tag with notes and
+checksums. No branch/manual run can publish unless its ref is that matching tag.
+For an existing tag, an explicitly approved manual run uses
+`gh workflow run release.yml --ref v0.1.0-beta.1 -f dry_run=false`; do not use it
+to blindly repeat a partly successful publication.
+
+If one registry fails, the workflow summary preserves the other's result and
+creates no GitHub Release. A failed upload may already have published some
+files. Compare PyPI's version JSON filename/digest list and crates.io's version
+checksum with the retained `SHA256SUMS` before recovery. Do not move the tag,
+rebuild a different artifact under the same version, enable `skip-existing`,
+or rerun successful publishing jobs. A maintainer may rerun only a failed job
+once they establish that it uploaded nothing. For partial PyPI uploads, approve
+a recovery uploading only the missing files from the original checked set;
+for a verification/network failure after upload, verify receipts read-only.
+`python3 scripts/verify-registry.py pypi release-artifacts` and the
+`crates-io` variant perform those checks without uploading. Create the GitHub
+Release only after both complete receipts are verified. No automatic recovery
+or deletion of published versions is part of this workflow.

@@ -1,4 +1,5 @@
 fn main() {
+    println!("cargo:rustc-check-cfg=cfg(docsrs)");
     // Shared host access tracking and registered DMA leases have distinct users.
     for (name, enabled) in [
         (

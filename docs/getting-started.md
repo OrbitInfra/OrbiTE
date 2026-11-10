@@ -1,11 +1,39 @@
 # Quick Start
 
-Build the current source on Linux with Rust 1.85 or later. The default CPU/TCP
-path needs no CUDA toolkit, RNIC or native provider library. `orbite 0.1.0-alpha.1`
-is published on crates.io for early development; its API is unstable. Build
-from this checkout to run the examples below.
+The installed beta quickstart below needs no GPU. Until maintainer publication,
+use the reviewed CI artifacts or build from source. The older published
+alpha.1 does not provide this current API.
 
-## Get the source
+## Installed quickstart
+
+After maintainer publication, use the README's [Quick Start](https://github.com/OrbitInfra/OrbiTE#quick-start)
+commands on Linux. No GPU or CUDA/RDMA SDK is required to run the wheel or the
+Rust example with only `io-uring`. The Rust installer needs Rust 1.85+, a C
+linker and standard build tools; Python needs CPython 3.10–3.14 on x86_64 or
+aarch64. Use a Python virtual environment. A kernel/security policy that blocks
+io_uring is an error, not a skipped file demonstration.
+
+The exact programs are [Rust example](https://github.com/OrbitInfra/OrbiTE/blob/main/examples/orbite-quickstart.rs) and
+[Python example](https://github.com/OrbitInfra/OrbiTE/blob/main/python/orbite/quickstart.py). They start a child source process, exchange
+its authoritative endpoint and epoch through a pipe, READ then WRITE a guarded
+DRAM range over TCP, and check both payload and guards. A temporary local file
+then receives a WRITE and a READ through io_uring, also with guards. They close
+their owners and remove the file. This demonstrates API use, not durable storage
+or discovery. Production consumers supply their own endpoint/epoch authority.
+
+Successful output from either program:
+
+```text
+TCP: two-process READ/WRITE and guards verified
+io_uring: DRAM/file READ/WRITE and guards verified
+```
+
+Release CI installs the Rust example from the `.crate` archive and runs Python
+with `-I -m orbite.quickstart` from installed wheels and the rebuilt sdist.
+It never substitutes a source-tree import. Before publication, download the
+review artifacts using the [release procedure](releases.md#maintainer-publication-procedure).
+
+## Build from source
 
 ```sh
 git clone https://github.com/OrbitInfra/OrbiTE.git

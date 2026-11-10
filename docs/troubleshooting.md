@@ -6,9 +6,11 @@ are separate checks.
 
 ## The crates.io package does not expose the documented API
 
-The published `0.1.0-alpha.1` is the original package reservation. Build the
-current repository source for the APIs in this documentation. The
-[Quick Start](getting-started.md) uses a source example.
+The last published crate is the early-development `0.1.0-alpha.1`. The current
+docs describe the beta.1 candidate, not that older artifact. Until the
+maintainer publishes it, use source or the checked CI artifacts described in
+the [release procedure](releases.md#review-and-dry-run). After publication,
+use the pinned versions in the [installed quickstart](getting-started.md#installed-quickstart).
 
 ## RDMA bindings fail to compile
 

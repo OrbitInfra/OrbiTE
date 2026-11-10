@@ -33,6 +33,7 @@
 //! # }
 //! ```
 
+#![cfg_attr(docsrs, feature(doc_cfg))]
 #![deny(unsafe_code)]
 #![deny(unsafe_op_in_unsafe_fn)]
 
@@ -53,6 +54,7 @@ mod error;
 mod memory;
 #[cfg(not(unsupported_native_target))]
 #[cfg(feature = "metrics")]
+#[cfg_attr(docsrs, doc(cfg(feature = "metrics")))]
 pub mod metrics;
 #[cfg(not(unsupported_native_target))]
 mod notification;
@@ -66,10 +68,13 @@ mod segment;
 pub mod transport;
 
 #[cfg(all(target_os = "linux", feature = "gds"))]
+#[cfg_attr(docsrs, doc(cfg(all(target_os = "linux", feature = "gds"))))]
 pub use transport::gds::{GdsMode, GdsStats};
 #[cfg(all(target_os = "linux", feature = "io-uring"))]
+#[cfg_attr(docsrs, doc(cfg(all(target_os = "linux", feature = "io-uring"))))]
 pub use transport::io_uring::{IoUringConfig, IoUringStats};
 #[cfg(all(target_os = "linux", feature = "cuda"))]
+#[cfg_attr(docsrs, doc(cfg(all(target_os = "linux", feature = "cuda"))))]
 pub mod cuda;
 #[cfg(all(target_os = "linux", not(unsupported_native_target)))]
 pub use runtime::topology::{
@@ -82,6 +87,7 @@ pub use transport::{
     shm::ShmConfig,
 };
 #[cfg(all(target_os = "linux", feature = "cuda"))]
+#[cfg_attr(docsrs, doc(cfg(all(target_os = "linux", feature = "cuda"))))]
 pub use {
     config::StagingLocation, runtime::proxy_manager::StagingStats, transport::nvlink::NvlinkStats,
 };

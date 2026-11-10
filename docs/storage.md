@@ -149,7 +149,9 @@ differs from frozen TENT’s nonblocking caller status polling, so an abandoned
 batch still has an independent drain owner. A failed worker start, or a worker
 that exits with a submitted ring still in its ready slot, retains the ring,
 fd, loans, bounce storage and admission charges and reports sticky `Unquiesced`.
-Neither exit permits replay or marks the batch physically drained. CUDA, pinned
+Neither exit permits replay or marks the batch physically drained. The caller
+window may expire before its first blocking reap; retained ownership depends on
+the completion receipt, not on a minimum number of waits. CUDA, pinned
 producer waits, vectors and larger groups keep their existing worker path.
 The synchronous report counts only the
 consecutive fully successful requests before the first failure, and only their

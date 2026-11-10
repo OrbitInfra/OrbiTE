@@ -291,6 +291,8 @@ impl Submitted {
         // A blocked enter yields the CPU. Keep both the time and interruption
         // budget fixed, independent of the destruction window used by drain.
         let until = (Instant::now() + SMALL_WAIT).min(self.deadline);
+        #[cfg(test)]
+        tests::pause_caller_wait(until);
         for _ in 0..3 {
             if Instant::now() >= until {
                 break;

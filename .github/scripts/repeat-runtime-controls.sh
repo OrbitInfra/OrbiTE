@@ -142,7 +142,14 @@ if [[ ${2:-} == hp-close ]]; then
     cuda::tests::staging_pipeline::source_destruction_joins_an_abandoned_delegate_before_freeing_the_pin
   )
 fi
-if [[ ${2:-} == rdma-priority || ${2:-} == dmabuf || ${2:-} == hp-close ]]; then
+if [[ ${2:-} == io-worker-exit ]]; then
+  iterations=1000
+  controls=(
+    transport::io_uring::tests::inline::worker_exit_retains_a_ready_file_handoff_and_publishes_unquiesced
+    transport::io_uring::tests::inline::forced_caller_pause_skips_reap_without_releasing_a_worker_exit_owner
+  )
+fi
+if [[ ${2:-} == rdma-priority || ${2:-} == dmabuf || ${2:-} == hp-close || ${2:-} == io-worker-exit ]]; then
   # Exercise owner boundaries under CPU contention, with bounded load.
   load_count=$(nproc)
   if ((load_count > 8)); then load_count=8; fi

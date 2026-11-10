@@ -68,16 +68,31 @@ fn a_public_batch_posts_independent_lanes_and_reports_each_ack() {
 }
 
 #[test]
-fn dropping_a_busy_lane_fences_new_work_and_physical_close_joins_sessions() {
-    check_physical_close(false);
+fn a_rebound_port_cannot_invalidate_the_old_hp_tcp_shutdown_receipt() {
+    let (listener, _guard) = crate::test_ports::guarded_port();
+    let endpoint = listener.local_addr().unwrap();
+    let mut config = cfg();
+    config.hp_tcp.bind_address = "127.0.0.1".into();
+    config.hp_tcp.port = endpoint.port();
+    drop(listener);
+    let engine = TransferEngine::new(config).unwrap();
+    let hp = engine.hp_transport_for_test();
+    engine.close(WAIT).unwrap();
+    assert!(matches!(hp.reserve(1), Err(Error::RequesterClosed)));
+    // This independent listener had no sessions: immediate rebinding must not
+    // depend on the busy-lane control's previous TCP connections or close state.
+    // Force another listener to own the address after the owner's close receipt.
+    let replacement = TcpListener::bind(endpoint).unwrap();
+    let probe = TcpStream::connect_timeout(&endpoint, WAIT).unwrap();
+    let (accepted, client) = accept(&replacement);
+    assert_eq!(client, probe.local_addr().unwrap());
+    assert_eq!(accepted.local_addr().unwrap(), endpoint);
+    // The old connect_timeout(...).is_err() assertion fails deterministically.
+    assert!(matches!(hp.reserve(1), Err(Error::RequesterClosed)));
 }
 
 #[test]
-fn a_rebound_port_cannot_invalidate_the_old_hp_tcp_shutdown_receipt() {
-    check_physical_close(true);
-}
-
-fn check_physical_close(rebind: bool) {
+fn dropping_a_busy_lane_fences_new_work_and_physical_close_joins_sessions() {
     let dst = TransferEngine::new(cfg()).unwrap();
     // Keep the explicit port out of other fixtures' bind(0) allocation range.
     let (listener, _guard) = crate::test_ports::guarded_port();
@@ -182,16 +197,6 @@ fn check_physical_close(rebind: bool) {
         );
     }
     assert_eq!(bytes(&remote), [0xa5; 12]);
-    if rebind {
-        // Force the CI interleaving: a different listener now owns the address.
-        // The old connect_timeout(...).is_err() assertion fails deterministically.
-        let replacement = TcpListener::bind(endpoint).unwrap();
-        let probe = connect(address(&peer));
-        let (accepted, client) = accept(&replacement);
-        assert_eq!(client, probe.local_addr().unwrap());
-        assert_eq!(accepted.local_addr().unwrap(), endpoint);
-        assert!(matches!(hp.reserve(1), Err(Error::RequesterClosed)));
-    }
 }
 
 #[cfg(feature = "rdma")]

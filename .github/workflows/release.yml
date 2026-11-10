@@ -1,0 +1,220 @@
+name: Release preparation
+
+on:
+  push:
+    tags: ['v*']
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Validate and build only (publication requires an existing matching tag and approvals)
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+# One attempt per ref; never cancel a publication already in progress.
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  version:
+    if: github.event_name != 'pull_request' || startsWith(github.head_ref, 'release/')
+    runs-on: ubuntu-24.04
+    outputs:
+      publish: ${{ steps.version.outputs.publish }}
+      tag: ${{ steps.version.outputs.tag }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Check versions, exact core pin and tag
+        id: version
+        env:
+          RELEASE_REF: ${{ github.ref }}
+          RELEASE_EVENT: ${{ github.event_name }}
+          DRY_RUN: ${{ inputs.dry_run != false }}
+        run: python3 scripts/check-release.py --ref "$RELEASE_REF" --event "$RELEASE_EVENT" --dry-run "$DRY_RUN" --output "$GITHUB_OUTPUT"
+      - name: Negative release controls (also with assertions disabled)
+        run: |
+          python3 -I tests/python/test_release.py -v
+          python3 -I -O tests/python/test_release.py -v
+
+  gates:
+    needs: version
+    uses: ./.github/workflows/ci.yml
+    with:
+      release_gate: true
+  wheels:
+    needs: version
+    uses: ./.github/workflows/python.yml
+    with:
+      release_gate: true
+  oracle:
+    needs: version
+    uses: ./.github/workflows/native-cpu.yml
+    with:
+      release_gate: true
+
+  docs:
+    needs: version
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - run: |
+          python3 -m venv "$RUNNER_TEMP/docs"
+          "$RUNNER_TEMP/docs/bin/pip" install -r docs/requirements.txt
+          "$RUNNER_TEMP/docs/bin/sphinx-build" -n -W --keep-going docs "$RUNNER_TEMP/html"
+          python3 scripts/check-docs.py "$RUNNER_TEMP/html"
+
+  docs-rs:
+    needs: version
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Build docs.rs feature profile without RDMA headers or SDKs
+        env:
+          DOCS_RS: '1'
+          RUSTDOCFLAGS: '--cfg docsrs -D warnings'
+        run: |
+          test ! -e /usr/include/infiniband/verbs.h
+          rustup toolchain install nightly --profile minimal
+          features=$(python3 -c 'import tomllib; print(",".join(tomllib.load(open("Cargo.toml", "rb"))["package"]["metadata"]["docs"]["rs"]["features"]))')
+          cargo +nightly doc --locked --no-deps --no-default-features --target x86_64-unknown-linux-gnu --features "$features"
+
+  package:
+    needs: version
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain: [stable, '1.85.0']
+    env:
+      RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - run: rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
+      - name: Install and run the crate quickstart outside the checkout
+        run: |
+          if test -e /proc/sys/kernel/io_uring_disabled; then sudo sysctl -w kernel.io_uring_disabled=0; fi
+          bash .github/scripts/check-installed-quickstart.sh "$RUNNER_TEMP/quickstart"
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: crate-${{ matrix.toolchain }}
+          path: ${{ runner.temp }}/quickstart/*.crate
+          if-no-files-found: error
+
+  artifacts:
+    needs: [version, gates, wheels, oracle, docs, docs-rs, package]
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: orbite-*-stable
+          path: incoming
+      - uses: actions/download-artifact@v5
+        with:
+          name: crate-stable
+          path: incoming/crate-stable
+      - name: Assemble tested distributions and SHA-256 manifest
+        run: python3 scripts/prepare-release.py incoming release-artifacts
+      - uses: actions/upload-artifact@v7.0.2
+        with:
+          name: release-artifacts
+          path: release-artifacts/
+          if-no-files-found: error
+      - name: Dry-run receipt
+        if: needs.version.outputs.publish != 'true'
+        run: |
+          echo 'Dry run complete. No OIDC token, registry upload, tag or GitHub Release was requested.' >> "$GITHUB_STEP_SUMMARY"
+          cat release-artifacts/SHA256SUMS >> "$GITHUB_STEP_SUMMARY"
+
+  pypi:
+    needs: [version, artifacts]
+    if: needs.version.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    environment: pypi
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/download-artifact@v5
+        with:
+          name: release-artifacts
+          path: release-artifacts
+      - name: Select only verified Python artifacts
+        run: |
+          (cd release-artifacts && sha256sum -c SHA256SUMS)
+          mkdir dist
+          cp release-artifacts/*.whl release-artifacts/*.tar.gz dist/
+      - name: Publish Python distributions once
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # release/v1
+        with:
+          packages-dir: dist/
+      - name: Verify the registry receipt
+        run: python3 scripts/verify-registry.py pypi release-artifacts
+
+  crates-io:
+    needs: [version, artifacts]
+    if: needs.version.outputs.publish == 'true'
+    runs-on: ubuntu-24.04
+    environment: crates-io
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/download-artifact@v5
+        with:
+          name: release-artifacts
+          path: release-artifacts
+      - name: Reproduce the tested crate before obtaining credentials
+        run: |
+          rustup toolchain install stable --profile minimal
+          cargo +stable package --locked --features io-uring
+          cmp target/package/orbite-*.crate release-artifacts/orbite-*.crate
+      - uses: rust-lang/crates-io-auth-action@3268eb413133e2960fa4ae0e963ca76380c54cd9 # v1
+        id: auth
+      - name: Publish the crate once
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ steps.auth.outputs.token }}
+        run: cargo +stable publish --locked
+      - name: Verify the registry receipt
+        run: python3 scripts/verify-registry.py crates-io release-artifacts
+
+  github-release:
+    needs: [version, artifacts, pypi, crates-io]
+    if: needs.version.outputs.publish == 'true' && needs.pypi.result == 'success' && needs.crates-io.result == 'success'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - uses: actions/download-artifact@v5
+        with:
+          name: release-artifacts
+          path: release-artifacts
+      - name: Require both receipts again before creating the release
+        run: |
+          python3 scripts/verify-registry.py pypi release-artifacts
+          python3 scripts/verify-registry.py crates-io release-artifacts
+      - name: Create release for the existing tag only
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ needs.version.outputs.tag }}
+        run: gh release create "$RELEASE_TAG" --verify-tag --prerelease --title "$RELEASE_TAG" --notes-file release-artifacts/RELEASE-NOTES.md release-artifacts/*.crate release-artifacts/*.whl release-artifacts/*.tar.gz release-artifacts/SHA256SUMS
+
+  outcome:
+    needs: [version, artifacts, pypi, crates-io, github-release]
+    if: always() && needs.version.result != 'skipped'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Report partial success without retrying any upload
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo 'Each registry result is independent; success includes checksum verification. A failed job may already have uploaded some artifacts. Inspect registry hashes before any manual recovery; no automatic retry or skip-existing is used.' >> "$GITHUB_STEP_SUMMARY"
+          printf '%s\n' "$RESULTS" >> "$GITHUB_STEP_SUMMARY"

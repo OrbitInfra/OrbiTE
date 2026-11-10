@@ -15,6 +15,18 @@ VERSION = "0.1.0b1"
 
 
 class ArtifactValidation(unittest.TestCase):
+    def test_grafted_native_libraries_are_rejected_with_optimized_python(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / f"orbite-{VERSION}-cp313-cp313-manylinux_2_28_x86_64.whl"
+            for library in ("libibverbs.so.1", "libibverbs-deadbeef.so.1", "libmlx5.so", "librdmacm.so.1", "libcuda.so.1", "libcudart.so", "libcufile.so.0"):
+                with self.subTest(library=library):
+                    with zipfile.ZipFile(path, "w") as archive:
+                        archive.writestr(f"orbite-{VERSION}.dist-info/METADATA", f"Name: orbite\nVersion: {VERSION}\n")
+                        archive.writestr(f"orbite.libs/{library}", b"fixture")
+                    result = subprocess.run([sys.executable, "-O", str(CHECK), str(path)], capture_output=True, text=True)
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn("vendored native runtime", result.stderr)
+
     def test_metadata_checks_survive_optimization(self):
         with tempfile.TemporaryDirectory(prefix="orbite-artifact-check-") as directory:
             root = Path(directory)

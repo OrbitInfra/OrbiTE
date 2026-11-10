@@ -1,6 +1,11 @@
 name: CI
 
 on:
+  workflow_call:
+    inputs:
+      release_gate:
+        type: boolean
+        default: false
   push:
     branches: [main]
   pull_request:
@@ -11,6 +16,8 @@ permissions:
 
 jobs:
   check:
+    # Release PRs run this same job through release.yml, once per revision.
+    if: ${{ !startsWith(github.head_ref, 'release/') || inputs.release_gate }}
     runs-on: ubuntu-24.04
     strategy:
       fail-fast: false
@@ -42,6 +49,9 @@ jobs:
           cd ../../../tests/hardware/local_copy
           clang++-19 -x cuda --cuda-device-only --cuda-gpu-arch=sm_52 -nocudainc -nocudalib -O3 -S compute.cu -o "$RUNNER_TEMP/compute.ptx"
           diff -u compute.ptx "$RUNNER_TEMP/compute.ptx"
+      - name: Check bounded dependency retries and infrastructure-only recovery
+        if: matrix.features == ''
+        run: python3 -m unittest discover -s tests/ci -v
       - name: Format
         run: cargo fmt --all --check
       - name: Check
@@ -90,7 +100,7 @@ jobs:
         run: python3 tests/hardware/build_installed.py --consumer gds-p10 --toolchain "$RUSTUP_TOOLCHAIN" --output "$RUNNER_TEMP/gds-p10-installed"
       - name: Clippy
         run: cargo clippy --workspace --locked --features "$ORBITE_FEATURES" --all-targets -- -D warnings
-      - name: Audit the Rust freeze candidate documentation
+      - name: Audit the public Rust documentation
         if: matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive'
         run: |
           set -o pipefail
@@ -314,6 +324,12 @@ jobs:
             tail -n 2 "$RUNNER_TEMP/dmabuf-suite-$iteration.log"
           done
           echo "dma-buf controls passed 1000 times under CPU load; full lib suite passed three times at $(nproc) threads." >> "$GITHUB_STEP_SUMMARY"
+      - name: Repeat file worker exit receipts 1000 times under CPU load
+        if: matrix.features == 'io-uring'
+        run: |
+          binary=$(cargo test --locked --features "$ORBITE_FEATURES" --lib --no-run --message-format=json |
+            jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
+          .github/scripts/repeat-runtime-controls.sh "$binary" io-worker-exit
       - name: Repeat HP-TCP and TCP close receipts 1000 times under CPU load
         if: matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive'
         run: |

@@ -12,7 +12,7 @@ plugin implementation or qualification yet.
 The [current work order](completion-plan.md#current-focus) defines the plugin
 prerequisites. Installed GPU/RDMA results on the current artifact precede the
 formal backend RFC; this local design review adds no qualification.
-The beta.1 [Rust surface review](rust-api.md#beta1-freeze-candidate) and
+The beta.1 [Rust surface review](rust-api.md#current-public-surface) and
 [Python surface](python.md#surface-and-defaults) define the API freeze
 boundary. Public enums and field records are non-exhaustive except binary
 `TransferOp`; configs use defaults and field assignment. Documented primary
@@ -584,7 +584,7 @@ failed-destruction controls exercise its per-grant authority. See
 [GPU ownership](rdma-cuda.md#gpudirect-rdma-ownership).
 
 The `rdma-adaptive` Cargo feature retains the hidden, unstable shared v0.3.14
-congestion core outside the beta API freeze. A device and each route have separate byte windows. A domain-local lock
+congestion core outside the stability promise. A device and each route have separate byte windows. A domain-local lock
 serializes reset and tick against concurrent feedback. Admission in enforce mode
 rolls back the device reservation if the route defers. Only an explicit receipt
 returns a permit’s charge. The moved/dropped permit control covers this

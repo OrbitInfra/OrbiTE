@@ -8,13 +8,17 @@ cargo doc --locked --no-deps --open
 ```
 
 Add `--features rdma,cuda` in an environment with the
-[build prerequisites](build.md).
+[build prerequisites](build.md). The docs.rs profile includes CUDA, io_uring,
+GDS and metrics on Linux through runtime-loaded SDKs; it deliberately excludes
+`rdma`/`rdma-adaptive`, whose generated bindings need system verbs headers.
+CI builds that profile with `--cfg docsrs` and no verbs headers. Use the full
+local feature build for RDMA rustdoc.
 
-## Beta.1 freeze candidate
+## Current public surface
 
-This is the public surface and stability boundary for `0.1.0-beta.1`.
-Hardware qualification is separate. Rust is the primary API.
-The following names and their public methods/fields are the candidate; private
+This is the current public surface for `0.1.0-beta.1`.
+This is an inventory, not a freeze: breaking changes are allowed before 0.1.0, including between betas. Hardware qualification is separate. Rust is the primary API.
+The following names and their public methods/fields are inventoried here; private
 transport owners, native function tables and test shims are not public APIs.
 Full signatures come from rustdoc for the chosen feature set. TENT
 compatibility surfaces are out of scope.
@@ -33,14 +37,14 @@ compatibility surfaces are out of scope.
 | CPU providers | `HpTcpConfig`, `ShmConfig`, `MnnvlConfig`, `MnnvlHandleType`; SHM allocation/free (MNNVL settings exist without an active CUDA provider) |
 | Linux topology | `Topology`, `NicEntry`, `NicType`, `MemEntry`, `TopologyMemoryKind`, `DEVICE_PRIORITY_RANKS`; local/discovered topology snapshots |
 | `rdma` | `transport::rdma::{RdmaConfig, GpuDirectRegistration, RdmaHostMemory, RdmaCudaMemory, RdmaProgressMode, SchedulingParams, NicLoadStats, QpReadDepths, RdmaStats}`; NIC load queries |
-| Unstable `rdma-adaptive` (excluded from freeze) | `transport::rdma::adaptive_congestion_control`: `Config`, `Mode`, `PathState`, `Snapshot`, `Signals`, `DomainState`, `AdmissionDomain`, `Decision`, `Reason`, `Rejection`, `PathHandle`, `Permit`, `Classification`, `FailureScope`, `Outcome`, `classify_completion`, `classify_async_event`; hidden callable core, not a live worker policy |
+| Unstable `rdma-adaptive` (outside the stability promise) | `transport::rdma::adaptive_congestion_control`: `Config`, `Mode`, `PathState`, `Snapshot`, `Signals`, `DomainState`, `AdmissionDomain`, `Decision`, `Reason`, `Rejection`, `PathHandle`, `Permit`, `Classification`, `FailureScope`, `Outcome`, `classify_completion`, `classify_async_event`; hidden callable core, not a live worker policy |
 | `cuda` | `cuda::{CudaMemory, RetainedResources, allocate_pinned_host, retained_resources}`, root `StagingLocation`, `StagingStats`, `NvlinkStats`; device/fabric/EGM allocation, external ownership, producer readiness, staging trim and IPC cache flush |
 | `cuda::local_copy` | `PinnedHostRegistration`, `CopyDirection`, `LocalCopyBackend`, `LocalCopyConfig`, `LocalCopyOptions`, `LocalCopyDesc`, `ProducerEvent`, `LocalCopyEngine`, `LocalCopyStats`, `LocalCopyClassStats`, `LocalCopyFallback`, `LocalCopyCompletion`; caller stream, intent/priority, CTA cap, descriptors, submit, event progress/wait and close |
 | Storage features | `io-uring`: `IoUringConfig`, `IoUringStats`; `gds`: `GdsMode`, `GdsStats` |
 | `metrics` | `metrics::{MetricsConfig, Metrics}`; engine metrics/status, enable toggle, JSON/Prometheus snapshots and writers |
 | Offline diagnostics | `diagnostics::{BUILD_VERSION, BUILD_COMMIT, SCHEMA_VERSION, Outcome, Check, BuildInfo, Snapshot, version_snapshot}`; text/JSON rendering and exit code; `orbite diagnostics version` CLI |
 
-### Freeze decisions
+### API decisions
 
 All public enums and every public struct with public fields are
 `#[non_exhaustive]`. `TransferOp` is the sole exhaustive enum: its binary
@@ -63,14 +67,14 @@ config.runtime_queue = Some(queue);
 Their public fields remain mutable. QP pools use `QpPool::default()` followed by
 a unique name and any count/link overrides.
 
-| Boundary | Freeze decision |
+| Boundary | API decision |
 | --- | --- |
 | Primary Rust helpers | `transport_installed`, `register_memory_ranges`, `Batch::observe_tasks`, `resolve_policy_name` and `discover_peer_epoch` are documented API. Installation is not availability on a peer; observational status is not a drain receipt; discovery never replaces consumer epoch authority. |
 | Binding internals | Backing `release_owned`, registration `exclusively_held` and `shm_backing_name` are `#[doc(hidden)]`, outside the stability promise. The Python packaging crate pins the core to the exact same release because it uses these helpers. |
 | Names | `NvlinkStats` matches `Transport::Nvlink`; `MemoryBacking` is the actual retained owner enum. `TopologyMemoryKind` describes topology entries and is distinct from registration `MemoryType`. Public TENT settings and transport-ID conversions are removed. `ReceiverCreditUpdateV1` names OrbiTE's credit-update schema. |
-| Adaptive core | The callable `rdma-adaptive` module is `#[doc(hidden)]`, unstable and outside this freeze. It has no engine integration or consumer. Crate-private visibility creates dead-code/unused-import warnings; hiding the reference core preserves its tests without suppressing those lints. |
-| Documentation | Missing docs are not a beta freeze blocker: adding documentation is non-breaking. The release-readiness audit found 668 all-feature Linux diagnostics. Before `0.1.0`, close the remaining findings and promote the CI audit to `-D missing-docs`, as required by the [release ladder](completion-plan.md#release-ladder). Ownership, receipts, epochs and units are documented at their affected entry points. |
-| Native binding types | The deliberate cudarc stream coupling and raw owner-backed alternative below remain. GPU signatures are frozen candidates even though installed profiles remain unqualified. |
+| Adaptive core | The callable `rdma-adaptive` module is `#[doc(hidden)]`, unstable and outside the stability promise. It has no engine integration or consumer. Crate-private visibility creates dead-code/unused-import warnings; hiding the reference core preserves its tests without suppressing those lints. |
+| Documentation | Missing docs are not a beta publication blocker: adding documentation is non-breaking. The release-readiness audit found 668 all-feature Linux diagnostics. Before `0.1.0`, close the remaining findings and promote the CI audit to `-D missing-docs`, as required by the [release ladder](completion-plan.md#release-ladder). Ownership, receipts, epochs and units are documented at their affected entry points. |
+| Native binding types | The deliberate cudarc stream coupling and raw owner-backed alternative below remain. Signatures may change between betas; installed GPU profiles remain unqualified. |
 
 ## Transfer requests
 
@@ -94,7 +98,7 @@ order.
 default) and owns requester and source admission. Configuration is immutable per
 engine. `engine.config()` borrows its effective settings.
 
-#`Transport::Fabric` and the provider config/stats exports are removed. All
+`Transport::Fabric` and the provider config/stats exports are removed. All
 remaining Rust discriminants are unchanged; `Transport` stays non-exhaustive.
 CUDA fabric allocations, MNNVL and EGM are unaffected.
 
