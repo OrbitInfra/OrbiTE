@@ -21,11 +21,15 @@ class NativeIsolation(unittest.TestCase):
                 self.assertNotIn(name, maps)
 
     def test_configured_providers_name_the_missing_library(self):
-        for config, library in (({"rdma": {}}, "libibverbs.so.1"),
-                                ({"nvlink": True}, "libcuda.so.1")):
+        with self.assertRaises(orbite.UnavailableError) as error:
+            orbite.TransferEngine(orbite.EngineConfig(rdma={}))
+        self.assertIn("libibverbs.so.1", str(error.exception))
+        # NVLink pools are lazy too: demand actual device backing, not just an
+        # empty configured engine. No CUDA allocation can exist without a driver.
+        with orbite.TransferEngine(orbite.EngineConfig(nvlink=True)) as engine:
             with self.assertRaises(orbite.UnavailableError) as error:
-                orbite.TransferEngine(orbite.EngineConfig(**config))
-            self.assertIn(library, str(error.exception))
+                engine.allocate_memory(16, orbite.MemoryOptions(location="cuda:0"))
+            self.assertIn("libcuda.so.1", str(error.exception))
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "file"
             path.write_bytes(b"source")

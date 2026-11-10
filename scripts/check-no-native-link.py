@@ -20,6 +20,9 @@ def check(path):
         if " UND " in line and re.search(r"\b_?ibv_", line):
             raise SystemExit(f"{path}: unresolved verbs symbol: {line.strip()}")
     print(f"{path.name}: no native SDK NEEDED or undefined ibv_* exports")
+    for line in dynamic.splitlines():
+        if "(NEEDED)" in line:
+            print(line.strip())
 
 
 def main():

@@ -2735,9 +2735,10 @@ shared QoS and complete F16/P6 parity remain open.
 F16 rate discovery follows frozen TENT
 `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab` `context.cpp`
 (`recordPortSpeed`, `queryEffectiveSpeed`, `refreshPortAttributes`) and
-`ibv_loader.cpp` optional-symbol handling. The existing `ibverbs-sys` dependency
-and native resource owners remain. A thin C shim calls the system header's
-port-query inline and returns only a generated fixed-width result. No Rust
+`ibv_loader.cpp` optional-symbol handling. Native resource owners remain;
+[verbs loading](#native-runtime-isolation) now uses system-header layouts and a
+retained runtime table instead of `ibverbs-sys`. A thin C shim implements the
+header's extended/legacy port-query split and returns a fixed-width result. No Rust
 mirror of `verbs_context` is maintained. Extended-speed support follows the
 installed header; older headers keep the legacy encoding. Effective speed is
 loaded once from the runtime library and converted from 100 Mb/s units.
