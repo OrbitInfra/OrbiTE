@@ -360,11 +360,13 @@ impl TransferEngine {
         result: BatchReport,
     ) -> BatchReport {
         #[cfg(feature = "gds")]
-        let result = {
-            let PreparedTarget::File { requests, .. } = &submission.payload else {
-                return result;
-            };
-            submission.finish_gds_range(result, &requests[first..first + count], _progress)
+        let result = match &submission.payload {
+            PreparedTarget::File { requests, .. } => {
+                submission.finish_gds_range(result, &requests[first..first + count], _progress)
+            }
+            // Only file targets hold GDS buffer leases. A rejected non-file
+            // group still needs the common metrics and admission retirement.
+            PreparedTarget::Memory { .. } => result,
         };
         #[cfg(feature = "metrics")]
         for (i, o) in submission.owners[first..first + count].iter().enumerate() {

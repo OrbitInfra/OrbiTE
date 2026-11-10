@@ -256,6 +256,13 @@ their original worker. `pending_small_file_handoff_keeps_loans_through_cancel_ti
 holds a real CQE across cancellation, timeout, unregister and close;
 `failed_worker_handoff_quarantines_the_accepted_sqe_without_replay` proves that
 a failed handoff retains the ring and admission instead of replaying a WRITE.
+`worker_exit_retains_a_ready_file_handoff_and_publishes_unquiesced` forces
+early return and unwind before the worker takes a submitted ready job. Unlike
+frozen TENT's unbounded in-flight wait at sub-batch free, this lost drain owner
+is quarantined with sticky `Unquiesced`, including its admission and bounce
+charges; the native `ManuallyDrop` owner alone is not an accounting receipt.
+`gds_non_file_group_keeps_common_retirement_and_metrics` checks that the GDS
+target guard skips only file-specific lease cleanup, never common finalization.
 The plain ring keeps [default completion interrupts](https://man7.org/linux/man-pages/man2/io_uring_setup.2.html);
 it does not defer completion work to the submitting thread's next ring call.
 `pending_native_io_completes_on_worker_while_caller_only_computes` forces
