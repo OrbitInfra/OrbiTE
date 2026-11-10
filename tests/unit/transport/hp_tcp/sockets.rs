@@ -413,6 +413,9 @@ fn backpressured_write_keeps_its_only_task_and_byte_charge_until_ack() {
 
 #[test]
 fn restart_at_the_same_ports_and_address_rejects_the_old_write_id() {
+    if crate::test_ports::isolated().is_some() {
+        return;
+    }
     let mut c = cfg();
     let dst = TransferEngine::new(c.clone()).unwrap();
     let (control, _control_guard) = crate::test_ports::guarded_port();

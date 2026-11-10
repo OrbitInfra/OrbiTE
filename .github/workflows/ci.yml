@@ -339,6 +339,13 @@ jobs:
           "$binary" --test-threads="$(nproc)" > "$RUNNER_TEMP/hp-close-suite.log" 2>&1 || { cat "$RUNNER_TEMP/hp-close-suite.log"; exit 1; }
           tail -n 2 "$RUNNER_TEMP/hp-close-suite.log"
           echo "Three close/port-reuse controls passed 1000 times under CPU load; full lib suite passed at $(nproc) threads." >> "$GITHUB_STEP_SUMMARY"
+      - name: Repeat fixed-port handoffs 1000 times and 20 full suites under CPU load
+        if: matrix.features == 'gds' || matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive'
+        run: |
+          binary=$(cargo test --locked --features "$ORBITE_FEATURES" --lib --no-run --message-format=json |
+            jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
+          .github/scripts/repeat-runtime-controls.sh "$binary" port-handoff
+          echo "Fixed-port controls passed 1000 times; 20 full lib suites passed under CPU load at $(nproc) threads." >> "$GITHUB_STEP_SUMMARY"
       - name: Repeat GDS reservation release at suite parallelism
         if: matrix.features == 'rdma,cuda,io-uring,gds'
         run: |

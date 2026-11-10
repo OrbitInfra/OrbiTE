@@ -62,6 +62,15 @@ The full-feature jobs' `P10 CPU fault matrix and real peer kills` step repeats
 the new real-process kill controls 50 times per toolchain. This is lifetime
 and byte evidence, not a physical-network latency or throughput claim.
 
+Fixed-port restart, close and metrics fixtures execute in isolated child
+processes before opening their sockets. A deterministic fork control identifies
+the inherited listener by socket inode and reproduces `AddrInUse` despite
+`CLOEXEC` and the UDP reservation. The `CI` step
+`Repeat fixed-port handoffs 1000 times and 20 full suites under CPU load` runs
+on stable and Rust 1.85 for `gds` and the full feature set, at `nproc` test
+threads. Shutdown assertions use owner retirement receipts; no runtime bind or
+close behavior changes.
+
 The independent OrbiTE APIs are **Qualified on Linux CI** at
 `6c94bf4999d334c3afd80f047b11381782f6df57`, in these bounded CPU profiles:
 
