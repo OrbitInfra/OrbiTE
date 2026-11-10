@@ -35,7 +35,13 @@ pub(super) unsafe extern "C" fn poll(h: *mut ConnectionHandles, result: *mut Com
         let Some(poll_cq) = (*(*cq).context).ops.poll_cq else {
             return -libc::EOPNOTSUPP;
         };
-        let mut completion = ffi::ibv_wc::default();
+        // Preserve the previous binding's fail-closed CQ initialization; only
+        // a provider-written success status can become a completion receipt.
+        let mut completion = ffi::ibv_wc {
+            status: ffi::ibv_wc_status::IBV_WC_GENERAL_ERR,
+            opcode: ffi::ibv_wc_opcode::IBV_WC_LOCAL_INV,
+            ..ffi::ibv_wc::default()
+        };
         let count = poll_cq(cq, 1, &mut completion);
         if count == 1 {
             let mut output = Completion {

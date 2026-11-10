@@ -272,6 +272,7 @@ fn chained_posts_preserve_generated_abi_offsets_ids_and_accepted_prefix_without_
 }
 
 struct NativeCq {
+    sentinel: bool,
     count: i32,
     bytes: [u8; 48],
 }
@@ -286,7 +287,9 @@ unsafe extern "C" fn capture_poll(
     // SAFETY: The fixture keeps NativeCq in cq_context; the polling caller provides writable
     // completion entries.
     unsafe {
-        let state = &*(*cq).cq_context.cast::<NativeCq>();
+        let state = &mut *(*cq).cq_context.cast::<NativeCq>();
+        state.sentinel = (*completion).status == ffi::ibv_wc_status::IBV_WC_GENERAL_ERR
+            && (*completion).opcode == ffi::ibv_wc_opcode::IBV_WC_LOCAL_INV;
         if state.count == 1 {
             std::ptr::copy_nonoverlapping(state.bytes.as_ptr(), completion.cast(), 48);
         }
@@ -299,6 +302,7 @@ fn poll_dispatch_decodes_native_cqes_and_only_reads_error_valid_fields() {
     assert_eq!(std::mem::size_of::<ffi::ibv_wc>(), 48);
     let mut context = Box::new(ffi::ibv_context::default());
     let mut state = NativeCq {
+        sentinel: false,
         count: 0,
         bytes: [0; 48],
     };
@@ -325,6 +329,7 @@ fn poll_dispatch_decodes_native_cqes_and_only_reads_error_valid_fields() {
         // output.
         assert_eq!(unsafe { poll(&mut handles, &mut output) }, count);
         assert_eq!(output.id, 0);
+        assert!(state.sentinel);
     }
     state.count = 1;
     for (status, opcode, length, vendor) in [
