@@ -31,7 +31,11 @@ fn gds_non_file_group_keeps_common_retirement_and_metrics() -> Result<()> {
     assert_eq!(prepared.owners.len(), 2);
     #[cfg(feature = "metrics")]
     prepared.accept_metrics();
-    assert_eq!(engine.stats()?.runtime_queue.unwrap().queued_owners, 2);
+    // Admission immediately reserves the idle dispatch window, even though
+    // this fixture rejects the group before making a native call.
+    let queue = engine.stats()?.runtime_queue.unwrap();
+    assert_eq!((queue.queued_owners, queue.queued_bytes), (0, 0));
+    assert_eq!((queue.dispatching_owners, queue.dispatching_bytes), (2, 16));
 
     for first in 0..2 {
         // Force the defensive non-File arm. It has no cuFile buffer leases,
@@ -68,7 +72,8 @@ fn gds_non_file_group_keeps_common_retirement_and_metrics() -> Result<()> {
         ));
         // The final permit deliberately follows PreparedSubmission teardown.
         let queue = engine.stats()?.runtime_queue.unwrap();
-        assert_eq!((queue.queued_owners, queue.queued_bytes), (1, 8));
+        assert_eq!((queue.queued_owners, queue.queued_bytes), (0, 0));
+        assert_eq!((queue.dispatching_owners, queue.dispatching_bytes), (1, 8));
         #[cfg(feature = "metrics")]
         {
             let text = engine.metrics().unwrap().prometheus();
