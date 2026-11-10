@@ -99,8 +99,12 @@ after each:
    window hands the same ring to the existing drain worker. Retention, cancel,
    partial-submit and exact-prefix controls remain. The HP-TCP fixture fix is
    done. File-worker exceptional retirement now retains submitted ready jobs
-   on exit and settles common GDS group accounting; stop for review, then
-   release preparation is next.
+   on exit and settles common GDS group accounting.
+   Release preparation is preserved separately. Its prerequisite is runtime-only
+   verbs loading: the combined wheel must import and run the GPU-free quickstart
+   without native SDK libraries. After that merges, rebase release preparation
+   and select the combined RDMA/CUDA/io_uring/GDS/metrics publication profile.
+   Publication remains a separate maintainer action.
 6. **NIXL plugin implementation.** Requires the upstream explicit-cancel API
    and the outcome of #1958, plus the hardware batch before the formal backend
    RFC: installed GPU/RDMA results for the current artifact and `nixlbench`

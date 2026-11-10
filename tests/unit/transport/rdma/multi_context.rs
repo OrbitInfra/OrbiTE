@@ -1,7 +1,7 @@
 //! Actual same-RNIC/different-PD registration, followed by the shared-CQ gate.
 use std::collections::BTreeSet;
 
-use ibverbs_sys as ffi;
+use crate::transport::rdma::sys::ffi;
 
 use super::*;
 

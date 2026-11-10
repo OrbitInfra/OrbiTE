@@ -2,7 +2,7 @@ use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
 
-use ibverbs_sys as ffi;
+use crate::transport::rdma::sys::ffi;
 
 use super::*;
 use crate::transport::rdma::{
@@ -198,8 +198,8 @@ fn route_generations_preserve_new_faults_and_lost_consumer_precedence() {
     state.fence_route();
     assert!(!state.resume(old));
     assert!(state.resume(state.generation()));
-    state.event(ibverbs_sys::IBV_EVENT_DEVICE_FATAL);
-    state.event(ibverbs_sys::IBV_EVENT_PORT_ACTIVE);
+    state.event(crate::transport::rdma::sys::ffi::IBV_EVENT_DEVICE_FATAL);
+    state.event(crate::transport::rdma::sys::ffi::IBV_EVENT_PORT_ACTIVE);
     assert!(!state.resume(state.generation()));
     state.lost(libc::EIO);
     state.fence_route();

@@ -13,8 +13,11 @@ and slice length through the `log` facade at debug level.
 ## Build and select a path
 
 The default crate supports CPU/TCP without a native SDK. The independent `rdma`
-and `cuda` features enable libibverbs and CUDA Driver API bindings; runtime use
-still needs the actual driver, provider and devices. All engine, protocol,
+and `cuda` features enable runtime-loaded libibverbs and CUDA Driver API bindings.
+RDMA install resolves `libibverbs.so.1` once and retains it for the process lifetime;
+a CPU-only engine in that build does not load it. A missing library or required
+export returns `Unavailable` naming `libibverbs.so.1`. Runtime RDMA still needs
+the host provider and devices. All engine, protocol,
 progress and resource owners are Rust. A small C shim only queries port rates
 from the installed libibverbs headers.
 

@@ -72,6 +72,7 @@ impl RdmaTransport {
         #[cfg(feature = "cuda")] proxy: Arc<crate::runtime::proxy_manager::ProxyManager>,
     ) -> Result<Arc<Self>> {
         config.validate()?;
+        sys::install()?;
         let usage = Arc::default();
         let registrations =
             buffers::LocalBufferManager::new(&config, Arc::clone(&usage), &sys::REAL);

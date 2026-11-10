@@ -2,6 +2,7 @@
 #define ORBITE_RDMA_PORT_H
 
 #include <stdint.h>
+#include <infiniband/verbs.h>
 
 /* Only these values cross the shim boundary; provider structs stay in C. */
 struct orbite_port_attr {
@@ -14,7 +15,9 @@ struct orbite_port_attr {
     uint8_t active_width;
 };
 
-int orbite_query_port(void *context, uint8_t port,
-                      struct orbite_port_attr *result);
+int orbite_query_port(struct ibv_context *context, uint8_t port,
+                      struct orbite_port_attr *result,
+                      int (*legacy)(struct ibv_context *, uint8_t,
+                                    struct _compat_ibv_port_attr *));
 
 #endif

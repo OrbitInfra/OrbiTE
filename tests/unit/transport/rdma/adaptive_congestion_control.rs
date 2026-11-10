@@ -310,10 +310,10 @@ fn concurrent_oversize_reservations_and_epoch_resets_are_bounded() {
 
 #[test]
 fn verbs_errors_classify_root_failures_and_ignore_topology_events() {
+    use crate::transport::rdma::sys::ffi;
     use FailureScope::*;
     use Outcome::*;
     use ffi::ibv_wc_status::*;
-    use ibverbs_sys as ffi;
     for (code, outcome, scope, root) in [
         (IBV_WC_SUCCESS, Success, Operation, false),
         (IBV_WC_RNR_RETRY_EXC_ERR, ReceiverPressure, Qp, true),

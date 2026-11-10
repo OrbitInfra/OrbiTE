@@ -1,4 +1,5 @@
 use super::*;
+use libloading::Library;
 
 #[test]
 fn negotiated_speed_decodes_xdr_and_leaves_unknown_values_unset() {
@@ -94,14 +95,38 @@ fn public_header_port_query_and_optional_symbol_preserve_fields_errors_and_units
             };
             assert_eq!(link_speed_mbps(&attr), Some(expected));
         }
-        let query = PortSpeedQuery::from_library(library);
+        // SAFETY: this fixture exports the legacy ABI and the library owns the callback.
+        let legacy = unsafe {
+            library.get::<unsafe extern "C" fn(
+                *mut ffi::ibv_context,
+                u8,
+                *mut ffi::_compat_ibv_port_attr,
+            ) -> c_int>(b"orbite_test_legacy_query\0")
+        }
+        .unwrap();
+        // SAFETY: the fixture returns its live, non-extended context for mode 3.
+        let context = unsafe { make_context(3) };
+        let mut attr = shim::orbite_port_attr::default();
+        assert_eq!(
+            // SAFETY: the context, callback and writable output remain alive during the call.
+            unsafe { shim::orbite_query_port(context, 7, &mut attr, Some(*legacy)) },
+            0
+        );
+        assert_eq!(link_speed_mbps(&attr), Some(400_000));
+        assert_eq!(
+            // SAFETY: the shim refuses an absent legacy callback before invoking native code.
+            unsafe { shim::orbite_query_port(context, 7, &mut attr, None) },
+            libc::ENOSYS
+        );
+        // SAFETY: the fixture exports the exact optional rate ABI and stays loaded.
+        let query = unsafe { library.get::<QueryPortSpeed>(b"ibv_query_port_speed\0") }.ok();
         assert_eq!(query.is_some(), present);
         if let Some(query) = query {
             for (port, expected) in [(1, 200_000), (4, 0)] {
                 assert_eq!(
                     // SAFETY: This fixture symbol explicitly accepts a null context and remains
                     // loaded by the query owner.
-                    unsafe { effective_speed(query.query, std::ptr::null_mut(), port) }.unwrap(),
+                    unsafe { effective_speed(*query, std::ptr::null_mut(), port) }.unwrap(),
                     expected
                 );
             }
@@ -109,7 +134,7 @@ fn public_header_port_query_and_optional_symbol_preserve_fields_errors_and_units
                 assert!(
                     // SAFETY: This fixture symbol explicitly accepts a null context and remains
                     // loaded by the query owner.
-                    matches!(unsafe { effective_speed(query.query,std::ptr::null_mut(),port) },Err(Error::Backend {code:observed,..}) if observed==code)
+                    matches!(unsafe { effective_speed(*query,std::ptr::null_mut(),port) },Err(Error::Backend {code:observed,..}) if observed==code)
                 );
             }
         }

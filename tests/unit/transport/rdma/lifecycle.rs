@@ -1,6 +1,6 @@
 //! Native cleanup faults and reconnect with both peer processes kept alive.
 use super::*;
-use ibverbs_sys as ffi;
+use crate::transport::rdma::sys::ffi;
 use std::ffi::c_int;
 use std::net::SocketAddr;
 

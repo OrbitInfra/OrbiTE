@@ -567,9 +567,12 @@ fn connections(engine: &TransferEngine) -> Vec<Observation> {
                         .unwrap()
                         .handles
                         .qp
-                        .cast::<ibverbs_sys::ibv_qp>()
+                        .cast::<crate::transport::rdma::sys::ffi::ibv_qp>()
                 };
-                assert_eq!(qp.state, ibverbs_sys::ibv_qp_state::IBV_QPS_RTS);
+                assert_eq!(
+                    qp.state,
+                    crate::transport::rdma::sys::ffi::ibv_qp_state::IBV_QPS_RTS
+                );
                 let connection = resources.connection.lock().unwrap();
                 assert_eq!(connection.send_queue.outstanding(), 0);
                 assert_eq!(connection.receive_queue.outstanding(), 0);

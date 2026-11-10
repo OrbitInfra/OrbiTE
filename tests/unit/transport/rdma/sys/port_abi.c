@@ -28,7 +28,7 @@ void *orbite_test_context(int mode) {
     static struct verbs_context context;
     memset(&context, 0, sizeof(context));
     context.sz = sizeof(context);
-    context.context.abi_compat = __VERBS_ABI_IS_EXTENDED;
+    context.context.abi_compat = mode == 3 ? NULL : __VERBS_ABI_IS_EXTENDED;
     context.context.num_comp_vectors = mode;
     context.query_port = query;
     return &context.context;
@@ -44,3 +44,8 @@ int ibv_query_port_speed(struct ibv_context *context, uint32_t port, uint64_t *s
     return 0;
 }
 #endif
+
+int orbite_test_legacy_query(struct ibv_context *context, uint8_t port,
+                            struct _compat_ibv_port_attr *attr) {
+    return query(context, port, (struct ibv_port_attr *)attr, sizeof(struct ibv_port_attr));
+}

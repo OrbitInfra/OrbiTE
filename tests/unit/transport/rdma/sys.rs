@@ -361,7 +361,7 @@ fn poll_dispatch_decodes_native_cqes_and_only_reads_error_valid_fields() {
         }
         let flags = std::mem::offset_of!(ffi::ibv_wc, wc_flags);
         state.bytes[flags..flags + 4].copy_from_slice(&WITH_INVALIDATE.to_ne_bytes());
-        let key = std::mem::offset_of!(ffi::ibv_wc, imm_data);
+        let key = std::mem::offset_of!(ffi::ibv_wc, __bindgen_anon_1);
         state.bytes[key..key + 4].copy_from_slice(&0x01020304u32.to_ne_bytes());
         let qpn = std::mem::offset_of!(ffi::ibv_wc, qp_num);
         state.bytes[qpn..qpn + 4].copy_from_slice(&0x12345u32.to_ne_bytes());

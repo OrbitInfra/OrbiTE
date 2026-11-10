@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
 use std::sync::{Mutex, Weak};
 
-use ibverbs_sys::{IBV_EVENT_COMM_EST, IBV_EVENT_SQ_DRAINED};
+use crate::transport::rdma::sys::ffi::{IBV_EVENT_COMM_EST, IBV_EVENT_SQ_DRAINED};
 
 use super::cq_lane;
 use crate::{Error, Result};
@@ -152,10 +152,10 @@ impl State {
 pub(super) fn port_event(kind: u32) -> bool {
     matches!(
         kind,
-        ibverbs_sys::IBV_EVENT_PORT_ERR
-            | ibverbs_sys::IBV_EVENT_PORT_ACTIVE
-            | ibverbs_sys::IBV_EVENT_GID_CHANGE
-            | ibverbs_sys::IBV_EVENT_LID_CHANGE
+        crate::transport::rdma::sys::ffi::IBV_EVENT_PORT_ERR
+            | crate::transport::rdma::sys::ffi::IBV_EVENT_PORT_ACTIVE
+            | crate::transport::rdma::sys::ffi::IBV_EVENT_GID_CHANGE
+            | crate::transport::rdma::sys::ffi::IBV_EVENT_LID_CHANGE
     )
 }
 

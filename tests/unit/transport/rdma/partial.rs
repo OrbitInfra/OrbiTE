@@ -1,7 +1,7 @@
 //! Reject the second native WR through the actual mlx5 provider's SGE limit.
 use std::ffi::{c_char, c_int};
 
-use ibverbs_sys as ffi;
+use crate::transport::rdma::sys::ffi;
 
 use super::*;
 

@@ -3,6 +3,7 @@
 use super::*;
 
 pub(in crate::transport::rdma) fn devices() -> Result<Vec<(String, String)>> {
+    super::install()?;
     // This inventory operation never opens a provider context.
     // SAFETY: The provider owns count device pointers and their C names until
     // ibv_free_device_list.

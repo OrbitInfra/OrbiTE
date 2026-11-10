@@ -14,8 +14,18 @@ current repository source for the APIs in this documentation. The
 
 Reproduce with Ubuntu 24.04, GCC/G++ and Clang/libclang 18, matching CI.
 Confirm that `LIBCLANG_PATH` resolves the selected libclang and that an inherited
-`CLANG_PATH` does not select a conflicting installation. The build needs CMake,
-pkg-config and libibverbs development files. See the [build guide](build.md).
+`CLANG_PATH` does not select a conflicting installation. The build needs a C
+compiler, pkg-config and libibverbs headers. See the [build guide](build.md).
+
+## libibverbs not found
+
+`Unavailable("libibverbs.so.1: …")` means the configured RDMA install could not
+load the host library or a required export. Install the host's rdma-core runtime
+and its matching RNIC provider, and check the dynamic loader search path. Do not
+copy a wheel's vendored provider onto the host. RDMA is loaded only on explicit
+configuration/discovery; importing a combined wheel and using TCP or io_uring
+needs no verbs runtime. CUDA and explicit GDS failures similarly name
+`libcuda.so.1` and `libcufile.so.0`.
 
 ## No RDMA device or compatible path is selected
 

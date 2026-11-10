@@ -2768,6 +2768,22 @@ and permission to bring the explicitly selected requester RoCE data link down
 and back up. The supervisor verifies restoration before releasing its locks.
 Physical link-loss and recovery remain unqualified.
 
+## Native runtime isolation
+
+The `Native runtime isolation` workflow runs `no-native-libraries (stable)` and
+`no-native-libraries (1.85.0)` in a container without `libibverbs.so.1`,
+`libcuda.so.1` or `libcufile.so.0`. It runs the full-feature lib suite, the installed
+combined wheel's ownership controls and `orbite.quickstart` (two-process TCP and
+real-file io_uring bytes/guards). Explicit native use must report `Unavailable`
+naming its missing library. The existing `CI` matrix also runs with rdma-core
+installed. These are CPU loader/lifetime controls, not RDMA or GPU qualification.
+
+`scripts/check-no-native-link.py` checks the core cdylib, example binary, test
+binary and every wheel's ELF dynamic table for native SDK dependencies and
+undefined verbs exports; a deliberately linked fixture must fail the check.
+The wheel matrix also rejects bundled providers. The loader's fake libraries
+omit each required export in turn and cover both optional-symbol states.
+
 ## RDMA request priority
 
 Source implementation adds `TransferRequest::priority` and opt-in
