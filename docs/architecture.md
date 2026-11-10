@@ -12,7 +12,7 @@ plugin implementation or qualification yet.
 The [current work order](completion-plan.md#current-focus) defines the plugin
 prerequisites. Installed GPU/RDMA results on the current artifact precede the
 formal backend RFC; this local design review adds no qualification.
-The beta.1 [Rust surface review](rust-api.md#beta1-freeze-candidate) and
+The beta.1 [Rust surface review](rust-api.md#current-public-surface) and
 [Python surface](python.md#surface-and-defaults) define the API freeze
 boundary. Public enums and field records are non-exhaustive except binary
 `TransferOp`; configs use defaults and field assignment. Documented primary

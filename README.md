@@ -11,13 +11,13 @@
 
   [![CI](https://github.com/OrbitInfra/OrbiTE/actions/workflows/ci.yml/badge.svg)](https://github.com/OrbitInfra/OrbiTE/actions/workflows/ci.yml)
   [![Crates.io](https://img.shields.io/crates/v/orbite.svg)](https://crates.io/crates/orbite)
-  [![Rust](https://img.shields.io/badge/rust-1.85%2B-orange.svg)](Cargo.toml)
-  [![License](https://img.shields.io/badge/license-Apache--2.0-blue.svg)](LICENSE)
+  [![PyPI](https://img.shields.io/pypi/v/orbite.svg)](https://pypi.org/project/orbite/)
+  [![Docs](https://img.shields.io/badge/docs-online-blue.svg)](https://orbitinfra.github.io/OrbiTE/)
 </div>
 
 OrbiTE moves KV bytes between GPU memory, DRAM, local SSD and peer hosts over
 RDMA/GPUDirect, NVLink/MNNVL, TCP, io_uring and GDS, in Rust with a Python API.
-Memory, registrations and staging are never released before the hardware provably stops accessing them.
+Memory, registrations and staging stay retained until [physical retirement](docs/architecture.md#engine-and-transport-boundary) proves the hardware has stopped accessing them.
 [OrbitKV](https://github.com/OrbitInfra/OrbitKV) is its first user.
 
 <div align="center">
@@ -37,28 +37,24 @@ Memory, registrations and staging are never released before the hardware provabl
 
 ## Quick Start
 
-On Linux with Rust 1.85 or later:
+On Linux (Rust 1.85+, or CPython 3.10–3.14), after beta.1 publication:
 
 ```sh
-git clone https://github.com/OrbitInfra/OrbiTE.git
-cd OrbiTE
-cargo run --locked --example tcp_roundtrip
+cargo install orbite --version 0.1.0-beta.1 --locked --features io-uring --example orbite-quickstart
+orbite-quickstart
+# Or Python, in a virtual environment:
+python -m pip install orbite==0.1.0b1
+python -I -m orbite.quickstart
 ```
 
-Expected output:
-
-```text
-17 bytes: hello from OrbiTE
-```
-
-The CPU/TCP example needs no CUDA or RDMA SDK. Enable the `rdma` and `cuda`
-features with the [build guide](docs/build.md), then continue with the
-[Rust API guide](docs/rust-api.md) and [RDMA/CUDA guide](docs/rdma-cuda.md).
+Both programs verify two-process TCP READ/WRITE and DRAM↔file io_uring bytes
+and guards, without a GPU. Linux must permit io_uring; an unavailable kernel
+is an error. [Source and prerequisites](docs/getting-started.md#installed-quickstart).
 
 ## Status
 
-[Beta.1 source](docs/releases.md); CPU paths are qualified in their stated Linux CI profiles.
-Current GPU/RDMA profiles remain unqualified until the hardware batch; see [qualification](docs/qualification.md).
+[Beta.1 preparation](docs/releases.md): CPU paths qualified on Linux CI; current GPU/RDMA profiles unqualified on this release ([limits](docs/qualification.md)).
+APIs may break between betas; the 0.1.x API and wire freeze begins at 0.1.0.
 
 ## License
 

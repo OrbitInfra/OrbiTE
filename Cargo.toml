@@ -23,6 +23,14 @@ categories = ["network-programming"]
 include = ["build.rs", "src/**", "benches/**", "tests/**", "examples/**", "docs/**", "python/**", "pyproject.toml", "Cargo.toml", "Cargo.lock", "README.md", "LICENSE", "!**/__pycache__/**", "!**/*.pyc"]
 publish = ["crates-io"]
 
+# docs.rs uses runtime-loaded CUDA/storage only; RDMA requires system verbs headers.
+[package.metadata.docs.rs]
+features = ["cuda", "io-uring", "gds", "metrics"]
+no-default-features = true
+default-target = "x86_64-unknown-linux-gnu"
+targets = []
+rustdoc-args = ["--cfg", "docsrs"]
+
 [features]
 default = []
 rdma = ["dep:cc", "dep:bindgen", "dep:libloading"]

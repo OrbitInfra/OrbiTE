@@ -1,6 +1,7 @@
 name: Frozen TENT CPU comparison
 
 on:
+  workflow_call:
   pull_request:
     paths:
       - 'src/**'

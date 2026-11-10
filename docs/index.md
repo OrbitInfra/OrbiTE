@@ -44,7 +44,7 @@ boundaries, implemented in Rust with no Mooncake C++ dependency.
 
 ## Status
 
-The source is preparing [0.1.0-beta.1](releases.md); publication and API freeze
+The source is preparing [0.1.0-beta.1](releases.md); publication
 approval remain with the maintainer. Current hardware profiles remain unqualified.
 [Capabilities](capabilities.md) lists each path and its limits,
 [qualification](qualification.md) records the evidence, and the

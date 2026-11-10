@@ -36,7 +36,7 @@ The beta API freeze changes Rust extensibility and construction, not transfer
 behavior. Downstream examples, installed consumers and Python wheels compile
 against the same release-pinned core. Artifact rejection is exercised with
 ordinary Python, `-O` and `PYTHONOPTIMIZE=2`; invalid metadata cannot bypass it.
-The [freeze decisions](rust-api.md#freeze-decisions) keep native qualification
+The [freeze decisions](rust-api.md#api-decisions) keep native qualification
 separate from this API review.
 
 The following records accepted historical CI evidence, limited to its artifact.
