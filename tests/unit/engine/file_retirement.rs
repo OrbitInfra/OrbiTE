@@ -5,8 +5,10 @@ use std::sync::atomic::Ordering;
 #[test]
 fn gds_non_file_group_keeps_common_retirement_and_metrics() -> Result<()> {
     let mock = Mock::new(crate::GdsMode::NativeOnly);
-    let mut config = EngineConfig::default();
-    config.runtime_queue = Some(Default::default());
+    let config = EngineConfig {
+        runtime_queue: Some(Default::default()),
+        ..Default::default()
+    };
     let mut engine = TransferEngine::new(config.clone())?;
     mock.install(&mut engine, &config);
     let source = TransferEngine::new(Default::default())?;
