@@ -49,6 +49,9 @@ jobs:
           cd ../../../tests/hardware/local_copy
           clang++-19 -x cuda --cuda-device-only --cuda-gpu-arch=sm_52 -nocudainc -nocudalib -O3 -S compute.cu -o "$RUNNER_TEMP/compute.ptx"
           diff -u compute.ptx "$RUNNER_TEMP/compute.ptx"
+      - name: Check bounded dependency retries and infrastructure-only recovery
+        if: matrix.features == ''
+        run: python3 -m unittest discover -s tests/ci -v
       - name: Format
         run: cargo fmt --all --check
       - name: Check
@@ -321,6 +324,12 @@ jobs:
             tail -n 2 "$RUNNER_TEMP/dmabuf-suite-$iteration.log"
           done
           echo "dma-buf controls passed 1000 times under CPU load; full lib suite passed three times at $(nproc) threads." >> "$GITHUB_STEP_SUMMARY"
+      - name: Repeat file worker exit receipts 1000 times under CPU load
+        if: matrix.features == 'io-uring'
+        run: |
+          binary=$(cargo test --locked --features "$ORBITE_FEATURES" --lib --no-run --message-format=json |
+            jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
+          .github/scripts/repeat-runtime-controls.sh "$binary" io-worker-exit
       - name: Repeat HP-TCP and TCP close receipts 1000 times under CPU load
         if: matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive'
         run: |

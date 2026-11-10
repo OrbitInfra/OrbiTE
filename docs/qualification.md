@@ -2789,7 +2789,11 @@ installed. These are CPU loader/lifetime controls, not RDMA or GPU qualification
 `scripts/check-no-native-link.py` checks the core cdylib, example binary, test
 binary and every wheel's ELF dynamic table for native SDK dependencies and
 undefined verbs exports; a deliberately linked fixture must fail the check.
-The wheel matrix also rejects bundled providers. The loader's fake libraries
+The wheel matrix also rejects bundled providers. Publication wheels use the
+pinned manylinux 2.28 builders and exactly `rdma,cuda,io-uring,gds,metrics`.
+Each Python/architecture/toolchain job installs its actual publication wheel
+in a separate Python runtime container without verbs/CUDA/cuFile and runs
+`test_native_runtime.py` plus the installed ownership controls. The loader's fake libraries
 omit each required export in turn and cover both optional-symbol states.
 
 ## RDMA request priority

@@ -53,7 +53,7 @@ is an error. [Source and prerequisites](docs/getting-started.md#installed-quicks
 
 ## Status
 
-[Beta.1 preparation](docs/releases.md): CPU paths qualified on Linux CI; current GPU/RDMA profiles unqualified on this release ([limits](docs/qualification.md)).
+[Beta.1 preparation](docs/releases.md): CPU paths qualified on Linux CI. Wheels include GPU/RDMA/GDS paths, unqualified on hardware; those paths need the host’s NVIDIA driver, rdma-core and cuFile ([limits](docs/qualification.md)).
 APIs may break between betas; the 0.1.x API and wire freeze begins at 0.1.0.
 
 ## License

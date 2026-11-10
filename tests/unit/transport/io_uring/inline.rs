@@ -299,6 +299,15 @@ fn failed_worker_handoff_quarantines_the_accepted_sqe_without_replay() -> Result
 
 #[test]
 fn worker_exit_retains_a_ready_file_handoff_and_publishes_unquiesced() -> Result<()> {
+    worker_exit_receipts(false)
+}
+
+#[test]
+fn forced_caller_pause_skips_reap_without_releasing_a_worker_exit_owner() -> Result<()> {
+    worker_exit_receipts(true)
+}
+
+fn worker_exit_receipts(pause: bool) -> Result<()> {
     if !kernel() {
         return Ok(());
     }
@@ -321,6 +330,7 @@ fn worker_exit_retains_a_ready_file_handoff_and_publishes_unquiesced() -> Result
                     true // Early exit exercises the same guard without unwinding.
                 }));
             });
+            PAUSE_CALLER_WAIT.with(|p| p.set(pause));
             let mut batch = f.engine.submit_async(
                 op,
                 &f.segment,
@@ -414,7 +424,13 @@ fn worker_exit_retains_a_ready_file_handoff_and_publishes_unquiesced() -> Result
             }
             drop(f);
             let t = trace.lock().unwrap();
-            assert_eq!((t.submits, t.peeks, t.reaps), (1, 1, 1));
+            assert_eq!((t.submits, t.peeks), (1, 1));
+            assert!(t.reaps <= 1);
+            if pause {
+                // The old (1, 1, 1) assertion deterministically fails here.
+                assert_eq!(t.reaps, 0);
+                assert_ne!((t.submits, t.peeks, t.reaps), (1, 1, 1));
+            }
             assert!(t.alive.upgrade().is_some());
             assert!(owner.upgrade().is_some());
             assert_eq!(backing.drops.load(std::sync::atomic::Ordering::SeqCst), 0);

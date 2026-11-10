@@ -33,7 +33,7 @@ def main():
     for runner, arch in (("ubuntu-24.04", "x86_64"), ("ubuntu-24.04-arm", "aarch64")):
         for minor in range(10, 15):
             source = args.input / f"orbite-{runner}-3.{minor}-stable" / "wheel-combined"
-            wheels = list(source.glob(f"orbite-{python}-cp3{minor}-cp3{minor}-*{arch}.whl"))
+            wheels = list(source.glob(f"orbite-{python}-cp3{minor}-cp3{minor}-manylinux_2_28_{arch}.whl"))
             release.require(len(wheels) == 1, f"missing/ambiguous wheel: {source}")
             files += wheels
     sdists = list((args.input / "orbite-ubuntu-24.04-3.13-stable" / "sdist").glob(f"orbite-{python}.tar.gz"))

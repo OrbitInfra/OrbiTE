@@ -30,4 +30,4 @@ bindings = "pyo3"
 manifest-path = "crates/orbite-python/Cargo.toml"
 module-name = "orbite._native"
 python-source = "python"
-features = ["pyo3/extension-module", "rdma", "cuda", "io-uring", "gds", "metrics", "rdma-adaptive"]
+features = ["pyo3/extension-module", "rdma", "cuda", "io-uring", "gds", "metrics"]

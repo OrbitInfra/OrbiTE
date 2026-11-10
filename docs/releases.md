@@ -142,11 +142,26 @@ its first successful upload (a pending publisher does not reserve the name).
    `contents: write`. Build/test jobs have read-only repository access.
 
 The published wheels are the **combined RDMA/CUDA/io_uring/GDS/metrics**
-profile (including the hidden `rdma-adaptive` reference core), one for each
-CPython 3.10–3.14 × Linux x86_64/aarch64. Native libraries load at runtime;
-CPU quickstarts need no GPU. The sdist uses the same profile and its rebuild
+profile, one for each CPython 3.10–3.14 × Linux x86_64/aarch64. They are built
+in pinned official [manylinux 2.28 images](https://github.com/pypa/manylinux)
+with `maturin --manylinux 2_28`, supporting glibc 2.28 and newer (including
+RHEL/Rocky 8 and Ubuntu 20.04). No dependency requires a newer glibc.
+The artifact check rejects grafted verbs/provider, CUDA and cuFile libraries;
+ELF checks reject linked verbs symbols. Every publication wheel runs the
+unchanged quickstart in a separate container without those libraries.
+CPU quickstarts need none of them. Configured GPU/RDMA/GDS paths need the
+host's NVIDIA driver, rdma-core/providers and cuFile respectively, and remain
+**unqualified on hardware** for this artifact. The sdist uses the same profile and its rebuild
 requires native build headers. CPU + io_uring and MSRV wheels remain review
 artifacts; profiles share filenames and must never be uploaded together.
+
+Build dependency installation checks `dpkg -s` first. Only absent packages
+are requested, with at most three 180-second update/install attempts that
+alternate the runner mirror and Ubuntu's archive (ports on aarch64). Exhaustion
+is fatal. No failed test job is retried automatically. The workflow recovery
+hook retries only an initial failed run whose created jobs all succeeded or
+were skipped, the GitHub uncreated-matrix failure case. Tag and dispatched
+release runs are excluded; their registry receipts always require manual review.
 
 ### Review and dry run
 

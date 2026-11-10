@@ -12,10 +12,28 @@ use crate::{
 };
 
 thread_local! {
+    static PAUSE_CALLER_WAIT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static FAIL_WORKER_START: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static WORKER_STARTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     static WORKER_EXIT: std::cell::RefCell<Option<WorkerExitHook>> = const { std::cell::RefCell::new(None) };
 }
+// Hold the polling caller until another thread observes its actual deadline.
+// This forces the scheduling interleaving without sleeps or a fake CQ receipt.
+pub(crate) fn pause_caller_wait(until: Instant) {
+    if PAUSE_CALLER_WAIT.with(|p| p.replace(false)) {
+        std::thread::scope(|scope| {
+            let (send, recv) = mpsc::sync_channel(0);
+            scope.spawn(move || {
+                while Instant::now() < until {
+                    std::thread::yield_now();
+                }
+                send.send(()).unwrap();
+            });
+            recv.recv_timeout(EVENTUAL_PROGRESS).unwrap();
+        });
+    }
+}
+
 pub(crate) type WorkerExitHook = Box<dyn FnOnce() -> bool + Send>;
 pub(crate) fn take_worker_exit_hook() -> Option<WorkerExitHook> {
     WORKER_EXIT.with(|h| h.borrow_mut().take())

@@ -14,6 +14,14 @@ def require(condition, message):
         raise ValueError(message)
 
 
+FORBIDDEN_NATIVE = re.compile(r"^lib(?:ibverbs|mlx5|rdmacm|cuda|cufile)")
+
+
+def check_native_files(names):
+    for name in names:
+        require(not FORBIDDEN_NATIVE.match(Path(name).name), f"vendored native runtime: {name}")
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("artifacts", nargs="+", type=Path)
@@ -34,6 +42,7 @@ def main():
     for path in args.artifacts:
         if path.suffix == ".whl":
             with zipfile.ZipFile(path) as archive:
+                check_native_files(archive.namelist())
                 names = [n for n in archive.namelist() if n.endswith(".dist-info/METADATA")]
                 require(len(names) == 1, f"ambiguous wheel metadata: {path}")
                 data = archive.read(names[0])
@@ -41,6 +50,7 @@ def main():
         else:
             require(path.name == f"orbite-{pep440}.tar.gz", f"wrong sdist filename: {path}")
             with tarfile.open(path) as archive:
+                check_native_files(archive.getnames())
                 member = archive.extractfile(f"orbite-{pep440}/PKG-INFO")
                 require(member is not None, f"missing source metadata: {path}")
                 data = member.read()

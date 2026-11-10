@@ -25,7 +25,7 @@ jobs:
         toolchain: [stable, '1.85.0']
         python: ['3.10', '3.11', '3.12', '3.13', '3.14']
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 35
+    timeout-minutes: 60
     env:
       RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}
       LIBCLANG_PATH: /usr/lib/llvm-18/lib
@@ -58,9 +58,9 @@ jobs:
       - name: CPU wheel rejects CUDA exports before requesting a capsule
         run: python -I tests/python/test_cuda_exporters.py --cpu
       - name: Build and test the installed combined-feature wheel
-        run: bash .github/scripts/check-installed-python.sh "$RUNNER_TEMP/wheel-combined" rdma,cuda,io-uring,gds,metrics,rdma-adaptive
-      - name: Run the published combined wheel quickstart without a GPU
-        run: ORBITE_REQUIRE_IO_URING=1 timeout 120 python -I -m orbite.quickstart
+        run: bash .github/scripts/build-manylinux-wheel.sh "$RUNNER_TEMP/wheel-combined" "${{ matrix.python }}"
+      - name: Run the publication wheel in a clean container without native libraries
+        run: bash .github/scripts/check-clean-wheel.sh "$RUNNER_TEMP/wheel-combined" "${{ matrix.python }}"
       - name: Drive installed CUDA-export owners through the fallible driver table
         run: bash .github/scripts/check-python-cuda.sh "$RUNNER_TEMP/python-cuda-shim"
       - name: Repeat CUDA-export alias, drain and cleanup controls 50 times
