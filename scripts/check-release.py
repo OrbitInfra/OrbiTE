@@ -29,6 +29,10 @@ def versions(root=ROOT):
         require([p["version"] for p in locked if p["name"] == name] == [version], f"{name} lock version mismatch")
     project = tomllib.loads((root / "pyproject.toml").read_text())["project"]
     require(project["name"] == "orbite" and "version" not in project and "version" in project["dynamic"], "Python version must come from Cargo")
+    readme = (root / "README.md").read_text()
+    require(re.search(r"cargo install orbite --version (\S+)", readme)[1] == version, "README Rust version mismatch")
+    require(re.search(r"pip install orbite==(\S+)", readme)[1] == python, "README Python version mismatch")
+    require(re.search(r"## (\S+) — preparation", (root / "docs/releases.md").read_text())[1] == version, "release notes version mismatch")
     for package in (manifest["package"], binding["package"]):
         require(package["license"] == "Apache-2.0", "license drift")
         require(package["repository"] == "https://github.com/OrbitInfra/OrbiTE", "repository drift")

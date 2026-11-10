@@ -84,7 +84,7 @@ qualification; GPU/RDMA/GDS installed fault fixtures remain queued.
 
 | Capability | Status | Limits |
 | --- | --- | --- |
-| Rust API | Beta.1 freeze decisions recorded | [Surface inventory and decisions](rust-api.md#api-decisions) |
+| Rust API | Current beta surface inventoried; breaking changes allowed before 0.1.0 | [Surface inventory and decisions](rust-api.md#api-decisions) |
 | NIXL backend and native bridge | Planned; design only | [South Bound API and owner mapping](nixl-backend.md). No plugin or C bridge is implemented or qualified. The [implementation prerequisites](completion-plan.md#current-focus) include upstream explicit cancel/lifetime agreement and current-artifact hardware evidence before the formal RFC. |
 | TENT C ABI (S19) | Removed; out of scope | No installed C interface |
 | TENT C++ and classic TE (S20) | Removed; out of scope | No source adapters or classic-TE shim |

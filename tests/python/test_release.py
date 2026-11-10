@@ -34,7 +34,7 @@ class ReleaseControls(unittest.TestCase):
                 release.selection(rust, ref, event, dry)
 
     def test_every_version_source_is_checked(self):
-        paths = ("Cargo.toml", "Cargo.lock", "crates/orbite-python/Cargo.toml", "pyproject.toml", "LICENSE")
+        paths = ("Cargo.toml", "Cargo.lock", "crates/orbite-python/Cargo.toml", "pyproject.toml", "README.md", "docs/releases.md", "LICENSE")
         for fault in paths[:-1]:
             with tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
