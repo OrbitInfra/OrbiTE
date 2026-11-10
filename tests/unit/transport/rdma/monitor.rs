@@ -129,7 +129,7 @@ fn one_monitor_handles_many_sources_and_waits_for_ack_before_detaching() {
         .writer
         .as_mut()
         .unwrap()
-        .write_all(&[ibverbs_sys::IBV_EVENT_COMM_EST as u8])
+        .write_all(&[crate::transport::rdma::sys::ffi::IBV_EVENT_COMM_EST as u8])
         .unwrap();
     let until = Instant::now() + EVENTUAL_PROGRESS;
     let mut state = gate.0.lock().unwrap();
@@ -167,7 +167,7 @@ fn one_monitor_handles_many_sources_and_waits_for_ack_before_detaching() {
             .writer
             .as_mut()
             .unwrap()
-            .write_all(&[ibverbs_sys::IBV_EVENT_COMM_EST as u8])
+            .write_all(&[crate::transport::rdma::sys::ffi::IBV_EVENT_COMM_EST as u8])
             .unwrap();
     }
     while sources
@@ -217,7 +217,7 @@ fn a_lost_source_does_not_stop_other_devices_or_allow_native_close() {
         .writer
         .as_mut()
         .unwrap()
-        .write_all(&[ibverbs_sys::IBV_EVENT_COMM_EST as u8])
+        .write_all(&[crate::transport::rdma::sys::ffi::IBV_EVENT_COMM_EST as u8])
         .unwrap();
     while healthy.native.acknowledgments.lock().unwrap().is_empty() {
         assert!(Instant::now() < until);
@@ -309,7 +309,7 @@ fn foreign_port_events_are_acknowledged_without_pausing_selected_port() {
         .writer
         .as_mut()
         .unwrap()
-        .write_all(&[ibverbs_sys::IBV_EVENT_PORT_ERR as u8])
+        .write_all(&[crate::transport::rdma::sys::ffi::IBV_EVENT_PORT_ERR as u8])
         .unwrap();
     let end = Instant::now() + EVENTUAL_PROGRESS;
     while source.native.acknowledgments.lock().unwrap().is_empty() {
@@ -322,7 +322,7 @@ fn foreign_port_events_are_acknowledged_without_pausing_selected_port() {
         .writer
         .as_mut()
         .unwrap()
-        .write_all(&[ibverbs_sys::IBV_EVENT_PORT_ERR as u8])
+        .write_all(&[crate::transport::rdma::sys::ffi::IBV_EVENT_PORT_ERR as u8])
         .unwrap();
     while source.native.acknowledgments.lock().unwrap().len() < 2 {
         assert!(Instant::now() < end);

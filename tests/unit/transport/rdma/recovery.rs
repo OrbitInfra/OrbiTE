@@ -57,7 +57,10 @@ fn monitor_keeps_acking_during_native_drain_and_recovers_without_new_requests() 
     let owner = runtime.device().unwrap();
     let gate = pause_device(&owner);
     let release = Release(Arc::clone(&gate));
-    emit_async(&runtime, ibverbs_sys::IBV_EVENT_PORT_ERR as u8);
+    emit_async(
+        &runtime,
+        crate::transport::rdma::sys::ffi::IBV_EVENT_PORT_ERR as u8,
+    );
     let end = Instant::now() + EVENTUAL_PROGRESS;
     while !gate.0.lock().unwrap().0 {
         assert!(Instant::now() < end);
@@ -72,7 +75,10 @@ fn monitor_keeps_acking_during_native_drain_and_recovers_without_new_requests() 
             .allocate(8, crate::MemoryLocation::Cpu(None), u64::MAX)
             .is_err()
     );
-    emit_async(&runtime, ibverbs_sys::IBV_EVENT_COMM_EST as u8);
+    emit_async(
+        &runtime,
+        crate::transport::rdma::sys::ffi::IBV_EVENT_COMM_EST as u8,
+    );
     wait(&runtime, |s| s.acknowledged_async_events == 2);
     drop(release);
     wait(&runtime, |s| {
@@ -351,7 +357,7 @@ fn paused_port_allows_registration_but_fatal_device_and_lost_consumers_do_not() 
         match fault {
             0 => owner
                 .asynchronous
-                .event(ibverbs_sys::IBV_EVENT_DEVICE_FATAL),
+                .event(crate::transport::rdma::sys::ffi::IBV_EVENT_DEVICE_FATAL),
             1 => owner.asynchronous.lost(libc::EIO),
             _ => owner.asynchronous.lost_completion(libc::EIO),
         }

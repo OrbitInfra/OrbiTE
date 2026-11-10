@@ -117,6 +117,14 @@ impl TransferEngine {
         if let Some(error) = error.into_inner() {
             return Err(error);
         }
+        #[cfg(feature = "gds")]
+        if matches!(selection, Err(Error::Unavailable(_))) && request.transport == Transport::Gds {
+            // Automatic selection may skip a missing provider. An explicit hint
+            // reports its cached load error, naming the runtime library.
+            if let Some(error) = self.gds.as_ref().and_then(|provider| provider.load_error()) {
+                return Err(error);
+            }
+        }
         Ok(FileRequest {
             parts,
             lease,

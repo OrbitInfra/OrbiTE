@@ -40,7 +40,12 @@ unsafe extern "C" fn post(
     // before this observation.
     assert_eq!(unsafe { (*result).accepted }, count);
     // SAFETY: The connection owns the native ibv_qp while the fixture inspects its fields.
-    let qpn = unsafe { (*(*handles).qp.cast::<ibverbs_sys::ibv_qp>()).qp_num };
+    let qpn = unsafe {
+        (*(*handles)
+            .qp
+            .cast::<crate::transport::rdma::sys::ffi::ibv_qp>())
+        .qp_num
+    };
     let mut trace = TRACE.get().unwrap().lock().unwrap();
     // SAFETY: The posting caller lends count initialized descriptors throughout this synchronous
     // callback.

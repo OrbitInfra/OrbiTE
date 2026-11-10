@@ -4,7 +4,8 @@
 
 use std::ffi::{CStr, c_char, c_int, c_void};
 
-use ibverbs_sys as ffi;
+pub(in crate::transport::rdma) mod ffi;
+mod native;
 
 use super::{
     Descriptor, RdmaConfig,
@@ -460,6 +461,11 @@ destroy!(
 );
 destroy!(dealloc_pd, DeviceHandles, pd, ibv_dealloc_pd);
 destroy!(close_device, DeviceHandles, context, ibv_close_device);
+
+// Called only when RDMA is configured; feature compilation never loads a provider.
+pub(super) fn install() -> Result<()> {
+    native::get().map(|_| ())
+}
 
 pub(super) static REAL: Verbs = Verbs {
     #[cfg(feature = "cuda")]

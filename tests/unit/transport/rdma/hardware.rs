@@ -730,7 +730,7 @@ fn source_window_peer() {
                 .handles;
             // SAFETY: The registration retains this native ibv_mr until the deregistration call
             // returns.
-            grant.rkey = unsafe { (*h.mr.cast::<ibverbs_sys::ibv_mr>()).rkey };
+            grant.rkey = unsafe { (*h.mr.cast::<crate::transport::rdma::sys::ffi::ibv_mr>()).rkey };
         }
         let binding = [0x42; COMPLETION_MESSAGE_SIZE];
         if probe == "remote" {

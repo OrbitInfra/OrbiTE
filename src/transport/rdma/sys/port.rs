@@ -1,18 +1,11 @@
 //! Public libibverbs port-query ABI and optional effective-rate symbol.
 
-use std::sync::OnceLock;
-
-use libloading::Library;
-
 use super::{DeviceHandles, c_int, ffi};
 use crate::{Error, Result};
 
-mod shim {
-    #![allow(non_camel_case_types)]
-    include!(concat!(env!("OUT_DIR"), "/port.rs"));
-}
+use super::ffi as shim;
 
-type QueryPortSpeed = unsafe extern "C" fn(*mut ffi::ibv_context, u32, *mut u64) -> c_int;
+type QueryPortSpeed = super::native::PortSpeed;
 
 pub(super) unsafe fn query_port(
     context: *mut ffi::ibv_context,
@@ -21,9 +14,10 @@ pub(super) unsafe fn query_port(
     let mut attr = shim::orbite_port_attr::default();
     // The C compiler uses the system's verbs inline and provider layout. Only
     // our generated, fixed-width result crosses back into Rust.
+    let legacy = super::native::get().ok().map(|table| table.ibv_query_port);
     // SAFETY: The caller retains the verbs context and the C shim writes into its generated
     // output type.
-    let code = unsafe { shim::orbite_query_port(context.cast(), port, &mut attr) };
+    let code = unsafe { shim::orbite_query_port(context, port, &mut attr, legacy) };
     if code == 0 { Ok(attr) } else { Err(code) }
 }
 
@@ -51,41 +45,13 @@ pub(super) fn link_speed_mbps(attr: &shim::orbite_port_attr) -> Option<u64> {
     Some(lane * lanes)
 }
 
-struct PortSpeedQuery {
-    query: QueryPortSpeed,
-    _library: Library,
-}
-
-impl PortSpeedQuery {
-    fn from_library(library: Library) -> Option<Self> {
-        // Optional since rdma-core 62. Keep the library alive with its function.
-        // SAFETY: The named symbol has the QueryPortSpeed ABI and the returned owner retains
-        // its Library.
-        let query = *unsafe { library.get::<QueryPortSpeed>(b"ibv_query_port_speed\0") }.ok()?;
-        Some(Self {
-            query,
-            _library: library,
-        })
-    }
-}
-
 pub(super) unsafe fn query_port_speed(
     device: *const DeviceHandles,
     port: u8,
 ) -> Result<Option<u64>> {
-    static QUERY: OnceLock<Option<PortSpeedQuery>> = OnceLock::new();
-    let query = QUERY.get_or_init(|| {
-        // SAFETY: Load the system verbs provider with its C ABI and retain the handle with the
-        // resolved query.
-        let library = unsafe { Library::new("libibverbs.so.1") }.ok()?;
-        PortSpeedQuery::from_library(library)
-    });
-    match query {
-        // SAFETY: The caller owns the open device and PortSpeedQuery retains the library
-        // defining the function.
-        Some(query) => unsafe {
-            effective_speed(query.query, (*device).context.cast(), port).map(Some)
-        },
+    match super::native::get()?.port_speed {
+        // SAFETY: the caller owns the open context; the process-lifetime table owns the symbol.
+        Some(query) => unsafe { effective_speed(query, (*device).context.cast(), port).map(Some) },
         None => Ok(None),
     }
 }

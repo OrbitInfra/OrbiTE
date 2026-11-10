@@ -1,11 +1,18 @@
 #include "port.h"
 
-#include <infiniband/verbs.h>
+#include <errno.h>
 
-int orbite_query_port(void *context, uint8_t port,
-                      struct orbite_port_attr *result) {
+int orbite_query_port(struct ibv_context *context, uint8_t port,
+                      struct orbite_port_attr *result,
+                      int (*legacy)(struct ibv_context *, uint8_t,
+                                    struct _compat_ibv_port_attr *)) {
     struct ibv_port_attr attr = {0};
-    int code = ibv_query_port((struct ibv_context *)context, port, &attr);
+    /* Same extended-provider/legacy split as verbs.h's ___ibv_query_port.
+       The legacy symbol is supplied by the retained runtime table. */
+    struct verbs_context *vctx = verbs_get_ctx_op(context, query_port);
+    int code = vctx ? vctx->query_port(context, port, &attr, sizeof(attr))
+                    : (legacy ? legacy(context, port, (struct _compat_ibv_port_attr *)&attr)
+                              : ENOSYS);
     if (code != 0)
         return code;
 

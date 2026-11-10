@@ -85,7 +85,6 @@ impl Mock {
             Provider::new(move |config| {
                 driver
                     .mode()
-                    .ok()
                     .map(|_| GdsTransport::new(driver.clone(), config))
             })
         });

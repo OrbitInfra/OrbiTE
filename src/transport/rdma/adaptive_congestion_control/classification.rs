@@ -1,5 +1,5 @@
 //! Classification is evidence for a window epoch. Rail recovery remains with RailMonitor.
-use ibverbs_sys as ffi;
+use crate::transport::rdma::sys::ffi;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]

@@ -225,6 +225,26 @@ ranges. Mapping failure precedes payload I/O, and failed unmap quarantines the
 mapping and its charge. POSIX and directory-backed paths use the same owners.
 See [shared memory](shm.md).
 
+## Native verbs loading
+
+`transport/rdma/sys/native.rs` resolves the host's `libibverbs.so.1` on RDMA
+install, before any native owner exists. A process-lifetime table retains the
+library through every context and cleanup callback. Private header-generated
+layouts and the port inline bridge carry no link-time verbs dependency. The
+existing fallible `Verbs` table still owns operation injection, and post/poll
+still use provider context operations. This follows frozen TENT's
+`transport/rdma/ibv_loader.cpp`. Unlike its static destructor, OrbiTE never unloads
+a successfully installed table, so retained cleanup owners cannot outlive its
+code. `optional_exports_and_loaded_code_follow_the_retained_library` checks that
+the loaded code remains callable after its file is removed. This changes no
+transfer, registration or retirement contract.
+`missing_library_and_each_required_export_are_unavailable_before_a_native_call`
+rejects each incomplete table, and the clean-container gate runs the full
+feature suite and an installed wheel without any verbs/CUDA/cuFile runtime.
+Its ELF negative control rejects a library linked to libibverbs. Explicit GDS
+selection preserves the lazy loader's error; automatic selection still skips
+an unavailable provider.
+
 ## Local file segment ownership
 
 TENT's `SegmentManager` maps a name to one handle, `makeFileRemote` describes one

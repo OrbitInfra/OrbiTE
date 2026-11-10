@@ -1,0 +1,42 @@
+name: Native runtime isolation
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  no-native-libraries:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain: [stable, '1.85.0']
+    env:
+      RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}
+      LIBCLANG_PATH: /usr/lib/llvm-18/lib
+      CLANG_PATH: /usr/bin/clang-18
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Install build-only native prerequisites
+        run: |
+          rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
+          .github/scripts/install-native-deps.sh g++ pkg-config clang-18 libclang-18-dev libibverbs-dev python3-venv
+          python3 -m venv "$RUNNER_TEMP/native-build"
+          echo "$RUNNER_TEMP/native-build/bin" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/native-build/bin/pip" install 'maturin==1.10.2' 'patchelf==0.17.2.4'
+      - name: Prove ELF isolation and run full suite and installed wheel without native libraries
+        run: bash .github/scripts/check-native-runtime.sh "$RUNNER_TEMP/native-runtime"
+      - name: Preserve runtime and linker evidence
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: no-native-libraries-${{ matrix.toolchain }}
+          path: |
+            ${{ runner.temp }}/native-runtime/clean-runtime.log
+            ${{ runner.temp }}/native-runtime/negative.log

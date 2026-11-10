@@ -1508,7 +1508,7 @@ fn asynchronous_event_burst_is_acked_while_progress_or_budget_is_locked() {
         for _ in 0..8 {
             super::super::context::tests::emit_async(
                 &runtime,
-                ibverbs_sys::IBV_EVENT_COMM_EST as u8,
+                crate::transport::rdma::sys::ffi::IBV_EVENT_COMM_EST as u8,
             );
         }
         let until = deadline();

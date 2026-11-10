@@ -1,6 +1,6 @@
 //! Delay real CQEs; observe actual providers and process-owned fault teardown.
 use super::*;
-use ibverbs_sys as ffi;
+use crate::transport::rdma::sys::ffi;
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::ffi::{CStr, c_char, c_int};
 

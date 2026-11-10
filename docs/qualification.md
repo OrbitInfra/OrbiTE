@@ -2735,9 +2735,10 @@ shared QoS and complete F16/P6 parity remain open.
 F16 rate discovery follows frozen TENT
 `e2d6e8e0f2df113d84f9e39379f98c4b67b199ab` `context.cpp`
 (`recordPortSpeed`, `queryEffectiveSpeed`, `refreshPortAttributes`) and
-`ibv_loader.cpp` optional-symbol handling. The existing `ibverbs-sys` dependency
-and native resource owners remain. A thin C shim calls the system header's
-port-query inline and returns only a generated fixed-width result. No Rust
+`ibv_loader.cpp` optional-symbol handling. Native resource owners remain;
+[verbs loading](#native-runtime-isolation) now uses system-header layouts and a
+retained runtime table instead of `ibverbs-sys`. A thin C shim implements the
+header's extended/legacy port-query split and returns a fixed-width result. No Rust
 mirror of `verbs_context` is maintained. Extended-speed support follows the
 installed header; older headers keep the legacy encoding. Effective speed is
 loaded once from the runtime library and converted from 100 Mb/s units.
@@ -2767,6 +2768,22 @@ packaged gate requires two inventory-locked RNICs, a separate control route,
 and permission to bring the explicitly selected requester RoCE data link down
 and back up. The supervisor verifies restoration before releasing its locks.
 Physical link-loss and recovery remain unqualified.
+
+## Native runtime isolation
+
+The `Native runtime isolation` workflow runs `no-native-libraries (stable)` and
+`no-native-libraries (1.85.0)` in a container without `libibverbs.so.1`,
+`libcuda.so.1` or `libcufile.so.0`. It runs the full-feature lib suite, the installed
+combined wheel's ownership controls and `orbite.quickstart` (two-process TCP and
+real-file io_uring bytes/guards). Explicit native use must report `Unavailable`
+naming its missing library. The existing `CI` matrix also runs with rdma-core
+installed. These are CPU loader/lifetime controls, not RDMA or GPU qualification.
+
+`scripts/check-no-native-link.py` checks the core cdylib, example binary, test
+binary and every wheel's ELF dynamic table for native SDK dependencies and
+undefined verbs exports; a deliberately linked fixture must fail the check.
+The wheel matrix also rejects bundled providers. The loader's fake libraries
+omit each required export in turn and cover both optional-symbol states.
 
 ## RDMA request priority
 

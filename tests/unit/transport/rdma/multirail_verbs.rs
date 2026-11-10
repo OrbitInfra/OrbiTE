@@ -3,7 +3,7 @@ use crate::test_support::EVENTUAL_PROGRESS;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::{CStr, c_char, c_int};
 
-use ibverbs_sys as ffi;
+use crate::transport::rdma::sys::ffi;
 
 use super::*;
 
