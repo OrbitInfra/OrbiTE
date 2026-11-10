@@ -116,13 +116,13 @@ impl Provider {
         })
     }
     pub(crate) fn resolve(&self, config: &crate::EngineConfig) -> Option<&GdsTransport> {
-        self.require(config).ok()
-    }
-    pub(crate) fn require(&self, config: &crate::EngineConfig) -> Result<&GdsTransport> {
         self.transport
             .get_or_init(|| (self.load)(config))
             .as_ref()
-            .map_err(Error::for_report)
+            .ok()
+    }
+    pub(crate) fn load_error(&self) -> Option<Error> {
+        self.transport.get()?.as_ref().err().map(Error::for_report)
     }
     pub(crate) fn get(&self) -> Option<&GdsTransport> {
         self.transport.get().and_then(|result| result.as_ref().ok())
