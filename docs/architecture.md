@@ -232,8 +232,12 @@ install, before any native owner exists. A process-lifetime table retains the
 library through every context and cleanup callback. Private header-generated
 layouts and the port inline bridge carry no link-time verbs dependency. The
 existing fallible `Verbs` table still owns operation injection, and post/poll
-still use provider context operations. This packaging boundary differs from the
-frozen TENT build; it changes no transfer, registration or retirement contract.
+still use provider context operations. This follows frozen TENT's
+`transport/rdma/ibv_loader.cpp`. Unlike its static destructor, OrbiTE never unloads
+a successfully installed table, so retained cleanup owners cannot outlive its
+code. `optional_exports_and_loaded_code_follow_the_retained_library` checks that
+the loaded code remains callable after its file is removed. This changes no
+transfer, registration or retirement contract.
 `missing_library_and_each_required_export_are_unavailable_before_a_native_call`
 rejects each incomplete table, and the clean-container gate runs the full
 feature suite and an installed wheel without any verbs/CUDA/cuFile runtime.
