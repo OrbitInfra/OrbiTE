@@ -53,7 +53,7 @@ class ReleaseControls(unittest.TestCase):
                     release.versions(root)
 
     def test_package_outputs_are_rejected_even_if_tracked(self):
-        for name in ("logs/job.log", "docs/html/index.html", "run-output/host.json", "target/core.so", "tests/raw.trace", "../outside", "/absolute", "surprise.txt"):
+        for name in ("logs/job.log", "docs/html/index.html", "run-output/host.json", "target/core.so", "tests/raw.trace", "../outside", "/absolute", "surprise.txt", "tests/hardware/result.json"):
             tracked = {"LICENSE", name} if name != "surprise.txt" else {"LICENSE"}
             with self.subTest(name=name), self.assertRaises(ValueError):
                 contents.check_names(["LICENSE", name], tracked)

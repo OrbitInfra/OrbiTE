@@ -150,7 +150,9 @@ artifacts; profiles share filenames and must never be uploaded together.
 
 ### Review and dry run
 
-A pull request changing release machinery runs `release.yml` as a dry run.
+A pull request from a `release/` branch runs `release.yml` as a dry run.
+It calls the ordinary CI, wheel and oracle jobs once; their standalone PR
+instances skip only to avoid duplicate copies of those same jobs.
 After merge, the maintainer can also run:
 
 ```sh

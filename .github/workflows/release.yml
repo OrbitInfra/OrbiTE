@@ -5,13 +5,6 @@ on:
     tags: ['v*']
   pull_request:
     branches: [main]
-    paths:
-      - '.github/workflows/release.yml'
-      - 'scripts/check-release.py'
-      - 'scripts/check-package-contents.py'
-      - 'scripts/prepare-release.py'
-      - 'scripts/verify-registry.py'
-      - 'tests/python/test_release.py'
   workflow_dispatch:
     inputs:
       dry_run:
@@ -29,6 +22,7 @@ concurrency:
 
 jobs:
   version:
+    if: github.event_name != 'pull_request' || startsWith(github.head_ref, 'release/')
     runs-on: ubuntu-24.04
     outputs:
       publish: ${{ steps.version.outputs.publish }}
@@ -50,12 +44,18 @@ jobs:
   gates:
     needs: version
     uses: ./.github/workflows/ci.yml
+    with:
+      release_gate: true
   wheels:
     needs: version
     uses: ./.github/workflows/python.yml
+    with:
+      release_gate: true
   oracle:
     needs: version
     uses: ./.github/workflows/native-cpu.yml
+    with:
+      release_gate: true
 
   docs:
     needs: version
@@ -209,7 +209,7 @@ jobs:
 
   outcome:
     needs: [version, artifacts, pypi, crates-io, github-release]
-    if: always()
+    if: always() && needs.version.result != 'skipped'
     runs-on: ubuntu-24.04
     steps:
       - name: Report partial success without retrying any upload

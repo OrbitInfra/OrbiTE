@@ -2,6 +2,10 @@ name: Python wheels
 
 on:
   workflow_call:
+    inputs:
+      release_gate:
+        type: boolean
+        default: false
   push:
     branches: [main]
   pull_request:
@@ -12,6 +16,8 @@ permissions:
 
 jobs:
   wheel:
+    # Release PRs run this same job through release.yml, once per revision.
+    if: ${{ !startsWith(github.head_ref, 'release/') || inputs.release_gate }}
     strategy:
       fail-fast: false
       matrix:
