@@ -14,6 +14,11 @@ use crate::{
 thread_local! {
     static FAIL_WORKER_START: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     static WORKER_STARTS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    static WORKER_EXIT: std::cell::RefCell<Option<WorkerExitHook>> = const { std::cell::RefCell::new(None) };
+}
+pub(crate) type WorkerExitHook = Box<dyn FnOnce() -> bool + Send>;
+pub(crate) fn take_worker_exit_hook() -> Option<WorkerExitHook> {
+    WORKER_EXIT.with(|h| h.borrow_mut().take())
 }
 pub(crate) fn check_worker_start() -> Result<()> {
     WORKER_STARTS.with(|n| n.set(n.get() + 1));

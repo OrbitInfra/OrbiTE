@@ -164,6 +164,7 @@ if [[ ${2:-} == io-small ]]; then
     transport::io_uring::tests::inline::ready_small_file_cqes_finish_on_the_caller_with_exact_prefix_and_guards
     transport::io_uring::tests::inline::pending_small_file_handoff_keeps_loans_through_cancel_timeout_and_close
     transport::io_uring::tests::inline::failed_worker_handoff_quarantines_the_accepted_sqe_without_replay
+    transport::io_uring::tests::inline::worker_exit_retains_a_ready_file_handoff_and_publishes_unquiesced
     transport::io_uring::tests::inline::caller_preflight_rejects_full_sq_before_any_file_io
     transport::io_uring::tests::inline::aligned_small_file_requests_need_no_bounce_allocation
     transport::io_uring::tests::inline::pending_native_io_completes_on_worker_while_caller_only_computes
@@ -178,6 +179,9 @@ if [[ ${2:-} == io-small ]]; then
   )
   if [[ ,${ORBITE_FEATURES:-}, == *,metrics,* ]]; then
     controls+=(transport::io_uring::tests::inline::inline_file_metrics_pair_each_public_request_with_one_terminal_attempt)
+  fi
+  if [[ ,${ORBITE_FEATURES:-}, == *,gds,* ]]; then
+    controls+=(engine::tests::file_retirement::gds_non_file_group_keeps_common_retirement_and_metrics)
   fi
 fi
 for ((iteration=1; iteration<=iterations; iteration++)); do

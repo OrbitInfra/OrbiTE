@@ -2,6 +2,10 @@ use super::*;
 #[cfg(feature = "rdma")]
 use crate::test_support::EVENTUAL_PROGRESS;
 
+#[cfg(feature = "gds")]
+#[path = "engine/file_retirement.rs"]
+mod file_retirement;
+
 #[test]
 fn transport_identities_preserve_the_removed_variant_gap() {
     for (transport, discriminant, wire) in [

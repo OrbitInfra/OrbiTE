@@ -430,30 +430,7 @@ impl Batch {
                         _ => -libc::EAGAIN,
                     };
                     log::warn!("io_uring worker could not start; retaining submitted I/O: {error}");
-                    let report = engine.finish_inline_file(
-                        &job.prepared,
-                        (progress, job.first_task),
-                        BatchReport {
-                            completed_requests: 0,
-                            transferred_bytes: 0,
-                            failure: Some(TransferFailure {
-                                request_index: 0,
-                                affected_requests: 1,
-                                error: Error::Unquiesced {
-                                    operation: "io_uring worker start",
-                                    code,
-                                },
-                                remote_effect: if job.prepared.operation == TransferOp::Write {
-                                    RemoteEffect::Unknown
-                                } else {
-                                    RemoteEffect::None
-                                },
-                            }),
-                            locally_drained: false,
-                            notification: NotificationStatus::NotRequested,
-                        },
-                    );
-                    progress.finish_group(engine, job, report);
+                    progress.retain_file(engine, job, "io_uring worker start", code);
                 } else {
                     progress.lock().ready = Some(job);
                     progress.changed.notify_all();
@@ -472,16 +449,23 @@ impl Batch {
         if self.worker.is_none() {
             #[cfg(all(test, feature = "io-uring"))]
             crate::transport::io_uring::tests::check_worker_start()?;
+            #[cfg(all(test, feature = "io-uring"))]
+            let before_ready = crate::transport::io_uring::tests::take_worker_exit_hook();
             let engine = Arc::clone(engine);
             let state = Arc::clone(progress);
             let token = progress.reservation.budget.worker()?;
             self.worker = Some(thread::Builder::new().name("orbite-batch".into()).spawn(
                 move || {
-                    let _exit = WorkerExit {
+                    let exit = WorkerExit {
                         progress: Arc::clone(&state),
                         _token: token,
+                        engine,
                     };
-                    state.run(&engine);
+                    state.run(
+                        &exit.engine,
+                        #[cfg(all(test, feature = "io-uring"))]
+                        before_ready,
+                    );
                 },
             )?);
         }
@@ -1052,9 +1036,29 @@ impl BatchProgress {
         }
     }
 
-    fn run(self: &Arc<Self>, engine: &TransferEngine) {
+    fn run(
+        self: &Arc<Self>,
+        engine: &TransferEngine,
+        #[cfg(all(test, feature = "io-uring"))] mut before_ready: Option<
+            crate::transport::io_uring::tests::WorkerExitHook,
+        >,
+    ) {
         let mut state = self.lock();
         loop {
+            #[cfg(all(test, feature = "io-uring"))]
+            if state
+                .ready
+                .as_ref()
+                .is_some_and(|j| j.pending_file.is_some())
+            {
+                if let Some(hook) = before_ready.take() {
+                    drop(state);
+                    if hook() {
+                        return;
+                    }
+                    state = self.lock();
+                }
+            }
             if let Some(job) = state.ready.take() {
                 drop(state);
                 self.execute_group(engine, job);
@@ -1108,6 +1112,39 @@ impl BatchProgress {
         };
         #[cfg(not(feature = "io-uring"))]
         let report = engine.execute_physical(&job.prepared, Some((self, job.first_task)));
+        self.finish_group(engine, job, report);
+    }
+
+    #[cfg(feature = "io-uring")]
+    fn retain_file(
+        self: &Arc<Self>,
+        engine: &TransferEngine,
+        job: QueuedSubmission,
+        operation: &'static str,
+        code: i32,
+    ) {
+        // Submitted retains its native owners without a CQE; keep the prepared
+        // admission and publish the same sticky outcome if its worker is lost.
+        let report = engine.finish_inline_file(
+            &job.prepared,
+            (self, job.first_task),
+            BatchReport {
+                completed_requests: 0,
+                transferred_bytes: 0,
+                failure: Some(TransferFailure {
+                    request_index: 0,
+                    affected_requests: 1,
+                    error: Error::Unquiesced { operation, code },
+                    remote_effect: if job.prepared.operation == TransferOp::Write {
+                        RemoteEffect::Unknown
+                    } else {
+                        RemoteEffect::None
+                    },
+                }),
+                locally_drained: false,
+                notification: NotificationStatus::NotRequested,
+            },
+        );
         self.finish_group(engine, job, report);
     }
 
@@ -1419,15 +1456,25 @@ impl Drop for BatchProgress {
 struct WorkerExit {
     progress: Arc<BatchProgress>,
     _token: WorkerToken,
+    engine: Arc<TransferEngine>,
 }
 impl Drop for WorkerExit {
     fn drop(&mut self) {
-        // Drop unstarted physical owners outside the progress lock on unwind.
-        let (queue, ready) = {
+        // A ready handoff may already own submitted I/O. Retain its admission
+        // with the native owner before dropping genuinely unstarted jobs.
+        #[allow(unused_mut)]
+        let (queue, mut ready) = {
             let mut state = self.progress.lock();
             state.worker_exited = true;
             (std::mem::take(&mut state.queue), state.ready.take())
         };
+        #[cfg(feature = "io-uring")]
+        if ready.as_ref().is_some_and(|job| job.pending_file.is_some()) {
+            if let Some(job) = ready.take() {
+                self.progress
+                    .retain_file(&self.engine, job, "io_uring worker exit", -libc::EIO);
+            }
+        }
         drop((queue, ready));
         let mut state = self.progress.lock();
         if state.pending != 0 {

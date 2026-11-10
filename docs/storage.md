@@ -146,8 +146,10 @@ through the normal prefix and admission owners without creating a worker. On
 expiry or an enter error, the existing batch worker takes the same ring and
 drains it; it never resubmits the request. This bounded caller wait deliberately
 differs from frozen TENT’s nonblocking caller status polling, so an abandoned
-batch still has an independent drain owner. A failed
-worker start retains the submitted I/O and reports `Unquiesced`. CUDA, pinned
+batch still has an independent drain owner. A failed worker start, or a worker
+that exits with a submitted ring still in its ready slot, retains the ring,
+fd, loans, bounce storage and admission charges and reports sticky `Unquiesced`.
+Neither exit permits replay or marks the batch physically drained. CUDA, pinned
 producer waits, vectors and larger groups keep their existing worker path.
 The synchronous report counts only the
 consecutive fully successful requests before the first failure, and only their
@@ -244,7 +246,9 @@ An ambiguous submit drains without replay. After the deadline plus the
 30-second destruction window, unresolved I/O returns `Unquiesced` and keeps
 its registrations, loans and admission. A later submission or close polls
 quarantined batches. A failed destroy or deregister retains its owners and
-is never retried. Each native batch has its own handle.
+is never retried. Each native batch has its own handle. Group finalization always
+settles metrics and retires drained admission owners (or retains the uncertain
+window), including a rejected non-file group with no cuFile leases to release.
 
 `EngineStats::gds.mode` reports whether the driver disables, permits or
 forces compatibility I/O. `FileSegmentInfo::gds_mode` records that policy

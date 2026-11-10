@@ -298,6 +298,132 @@ fn failed_worker_handoff_quarantines_the_accepted_sqe_without_replay() -> Result
 }
 
 #[test]
+fn worker_exit_retains_a_ready_file_handoff_and_publishes_unquiesced() -> Result<()> {
+    if !kernel() {
+        return Ok(());
+    }
+    for unwind in [false, true] {
+        for op in [TransferOp::Read, TransferOp::Write] {
+            let (mut f, trace) = observed(false, false, false)?;
+            f.engine.unregister_memory(&f.memory)?;
+            let backing = crate::test_support::external_memory(&[0x9a; 32]);
+            f.memory = f.engine.register_host_memory(
+                backing.memory.clone(),
+                0,
+                32,
+                Permission::LocalOnly,
+            )?;
+            let owner = backing.owner.clone();
+            drop(backing.memory);
+            WORKER_EXIT.with(|hook| {
+                *hook.borrow_mut() = Some(Box::new(move || {
+                    assert!(!unwind, "injected exit with a ready submitted file owner");
+                    true // Early exit exercises the same guard without unwinding.
+                }));
+            });
+            let mut batch = f.engine.submit_async(
+                op,
+                &f.segment,
+                &[f.request(1, 0, 8)],
+                None,
+                EVENTUAL_PROGRESS,
+            )?;
+            let status = batch.wait(EVENTUAL_PROGRESS)?;
+            assert_eq!(status.completed_tasks, 0);
+            assert!(!status.locally_drained);
+            let task = batch.task_status(0)?;
+            assert_eq!(task.state, TaskState::Failed);
+            assert_eq!(task.transferred_bytes, 0);
+            assert!(!task.locally_drained);
+            let failure = task.failure.unwrap();
+            assert!(matches!(failure.error, Error::Unquiesced {
+                operation: "io_uring worker exit", code,
+            } if code == -libc::EIO));
+            assert_eq!(
+                failure.remote_effect,
+                if op == TransferOp::Write {
+                    RemoteEffect::Unknown
+                } else {
+                    RemoteEffect::None
+                }
+            );
+            // Completion publication precedes WorkerToken drop. Observe that
+            // actual receipt rather than racing the worker's final accounting.
+            let until = Instant::now() + EVENTUAL_PROGRESS;
+            while f.engine.stats()?.requester_workers != 0 {
+                assert!(Instant::now() < until);
+                std::thread::yield_now();
+            }
+            assert!(matches!(batch.free(), Err(Error::BatchBusy)));
+            assert!(!batch.cancel(0)?);
+            for _ in 0..2 {
+                assert!(matches!(
+                    f.engine.close_file_segment(&f.segment, Duration::ZERO),
+                    Err(Error::Timeout)
+                ));
+                assert!(!batch.locally_drained()?);
+                assert!(matches!(
+                    batch.task_status(0)?.failure.unwrap().error,
+                    Error::Unquiesced {
+                        operation: "io_uring worker exit",
+                        ..
+                    }
+                ));
+            }
+            f.engine.unregister_memory(&f.memory)?;
+            assert!(f.memory.read(1, &mut [0; 8]).is_err());
+            // Real kernel I/O ran once; its withheld CQE cannot authorize READ
+            // copy-back, a release or replay, even after the public batch drops.
+            assert_eq!(
+                fs::read(&f.path)?,
+                if op == TransferOp::Write {
+                    vec![0x9a; 8]
+                } else {
+                    b"abcdefgh".to_vec()
+                }
+            );
+            drop(batch);
+            let stats = f.engine.stats()?;
+            assert_eq!((stats.inflight_batches, stats.inflight_bytes), (1, 8));
+            assert_eq!(stats.io_uring.unwrap().pageable_bytes, 8);
+            assert_eq!((stats.allocated_batches, stats.quarantined_batches), (1, 1));
+            assert!(matches!(
+                f.engine.close(Duration::ZERO),
+                Err(Error::Timeout)
+            ));
+            #[cfg(feature = "metrics")]
+            {
+                let output = f.engine.metrics().unwrap().prometheus();
+                let operation = if op == TransferOp::Read {
+                    "read"
+                } else {
+                    "write"
+                };
+                for expected in [
+                    format!(
+                        "orbite_logical_request_outcomes_total{{operation=\"{operation}\",outcome=\"failed\"}} 1"
+                    ),
+                    format!("orbite_logical_requests_inflight{{operation=\"{operation}\"}} 0"),
+                    "orbite_inflight_attempts{transport=\"io_uring\"} 0".into(),
+                ] {
+                    assert!(
+                        output.lines().any(|line| line == expected),
+                        "missing {expected}"
+                    );
+                }
+            }
+            drop(f);
+            let t = trace.lock().unwrap();
+            assert_eq!((t.submits, t.peeks, t.reaps), (1, 1, 1));
+            assert!(t.alive.upgrade().is_some());
+            assert!(owner.upgrade().is_some());
+            assert_eq!(backing.drops.load(std::sync::atomic::Ordering::SeqCst), 0);
+        }
+    }
+    Ok(())
+}
+
+#[test]
 fn caller_preflight_rejects_full_sq_before_any_file_io() -> Result<()> {
     if !kernel() {
         return Ok(());

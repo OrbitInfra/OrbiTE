@@ -579,6 +579,13 @@ On main after the storage closeout (`017654d`), the same real-file test passed o
 Vectored host controls on ext4 and tmpfs check guarded ranges, zero-filled
 gaps and tails, and the exact prefix after truncation inside a gap. The loader audit runs disabled,
 missing-library and shim-provider cases in separate Linux processes.
+The `io-small` repetition step also forces worker early exit and unwind with a
+submitted ready job: `worker_exit_retains_a_ready_file_handoff_and_publishes_unquiesced`
+checks sticky failure, retained ring/backing/bounce charges, busy free and close,
+and no replay. In GDS builds, `gds_non_file_group_keeps_common_retirement_and_metrics`
+checks the defensive target guard's admission and metric receipts through the
+cuFile shim. Both controls run 50 times on stable and Rust 1.85; this does not
+qualify native GDS.
 
 **CUDA/file staging is implemented. Its installed GPU/NVMe gate is unrun.**
 The `cuda,io-uring` and `rdma,cuda,io-uring` jobs use the CUDA driver shim
