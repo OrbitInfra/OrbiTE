@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import importlib.util
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -12,6 +13,14 @@ ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("release", ROOT / "scripts/check-release.py")
 release = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(release)
+
+
+def release_notes(text, version):
+    notes = text.split("## Maintainer publication procedure", 1)[0]
+    # A Release body has no docs/ base directory. Link to the approved tag.
+    return re.sub(r"\]\(([^():\s]+\.md(?:#[^()\s]+)?)\)",
+                  lambda m: f"](https://github.com/OrbitInfra/OrbiTE/blob/v{version}/docs/{m[1]})",
+                  notes)
 
 
 def main():
@@ -40,7 +49,7 @@ def main():
         shutil.copy2(path, args.output / path.name)
         hashes.append(f"{hashlib.sha256(path.read_bytes()).hexdigest()}  {path.name}\n")
     (args.output / "SHA256SUMS").write_text("".join(sorted(hashes)))
-    notes = (ROOT / "docs/releases.md").read_text().split("## Maintainer publication procedure", 1)[0]
+    notes = release_notes((ROOT / "docs/releases.md").read_text(), rust)
     (args.output / "RELEASE-NOTES.md").write_text(notes)
     print(f"{len(files)} checked release artifacts; CPU and MSRV wheels remain review artifacts")
 

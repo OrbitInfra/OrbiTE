@@ -9,7 +9,8 @@ alias. Rust remains the primary interface.
 Wheels target CPython 3.10–3.14 on Linux x86_64 and aarch64. The maintainer
 publishes releases; CI builds installable review artifacts. Python beta.1 is
 `0.1.0b1`. The published profile includes RDMA, CUDA, io_uring, GDS and
-metrics (plus the hidden adaptive reference core); SDKs load only when used.
+metrics (plus the hidden adaptive reference core). Wheels bundle the verbs
+runtime and its libnl dependencies; CUDA and cuFile are runtime-loaded.
 CPU-only hosts can run the [installed quickstart](getting-started.md#installed-quickstart).
 CPU + io_uring wheels remain separate CI artifacts, not a second PyPI variant.
 A source build uses the same combined profile and needs the

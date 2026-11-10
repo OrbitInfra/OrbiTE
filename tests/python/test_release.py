@@ -19,9 +19,17 @@ def load(name):
 release = load("check-release")
 contents = load("check-package-contents")
 registry = load("verify-registry")
+prepare = load("prepare-release")
 
 
 class ReleaseControls(unittest.TestCase):
+    def test_github_notes_have_tagged_links_and_no_publication_instructions(self):
+        text = "[API](rust-api.md#current-public-surface) [site](https://example.com/api.md)\n## Maintainer publication procedure\nPRIVATE INSTRUCTIONS"
+        result = prepare.release_notes(text, "0.1.0-beta.1")
+        self.assertIn("https://github.com/OrbitInfra/OrbiTE/blob/v0.1.0-beta.1/docs/rust-api.md#current-public-surface", result)
+        self.assertIn("[site](https://example.com/api.md)", result)
+        self.assertNotIn("PRIVATE INSTRUCTIONS", result)
+
     def test_versions_and_tag_gate(self):
         rust, python = release.versions()
         self.assertEqual((rust, python), ("0.1.0-beta.1", "0.1.0b1"))
