@@ -1960,3 +1960,19 @@ fn p10_killed_tcp_requester_retains_partial_write_until_socket_drain() {
 #[cfg(target_os = "linux")]
 #[path = "control_plane/killed_peer.rs"]
 pub(crate) mod killed_peer;
+
+// A per-construction observer, never a process-global shutdown flag.
+thread_local! {
+    static ACCEPTOR_JOIN: std::cell::RefCell<Option<mpsc::Sender<()>>> = const { std::cell::RefCell::new(None) };
+}
+
+pub(super) fn take_acceptor_join_observer() -> Option<mpsc::Sender<()>> {
+    ACCEPTOR_JOIN.with(|next| next.take())
+}
+
+#[cfg(feature = "cuda")]
+pub(crate) fn observe_next_acceptor_join() -> mpsc::Receiver<()> {
+    let (sender, receiver) = mpsc::channel();
+    ACCEPTOR_JOIN.with(|next| assert!(next.replace(Some(sender)).is_none()));
+    receiver
+}

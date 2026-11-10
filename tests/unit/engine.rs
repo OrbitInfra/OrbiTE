@@ -1430,6 +1430,10 @@ fn hp_worker_failure_preserves_an_already_completed_batch() -> Result<()> {
 }
 
 impl TransferEngine {
+    pub(crate) fn hp_transport_for_test(&self) -> &crate::transport::hp_tcp::HpTcpTransport {
+        self.hp_tcp.as_ref().unwrap()
+    }
+
     pub(crate) fn retired_hp_sessions_for_test(&self) -> usize {
         self.hp_tcp
             .as_ref()

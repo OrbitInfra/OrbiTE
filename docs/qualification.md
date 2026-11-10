@@ -527,7 +527,11 @@ python3 /tmp/orbite-shm-installed/shm_run.py --binary /tmp/orbite-shm-installed/
 The Linux CI `Run the two-process HP-TCP loopback consumer` step transfers
 2,097,155 bytes in each direction and checks the payload and guards on both
 processes. The stable job also repeats the socket ownership and rail controls
-50 times. This evidence covers loopback only.
+50 times. The `Repeat HP-TCP and TCP close receipts 1000 times under CPU load`
+step exercises reactor retirement, forced port reuse and a CUDA-shim TCP delegate
+on stable and Rust 1.85, followed by the full lib suite at `nproc` threads.
+These controls observe the retiring owner's receipt, not connection refusal at
+a released port. This evidence covers loopback only.
 
 For physical rails, build on both hosts at the same revision and install
 the resulting binary at the same absolute path. Run the driver on the

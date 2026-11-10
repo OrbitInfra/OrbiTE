@@ -716,8 +716,8 @@ fn abandoned_remote_delegate_releases_only_after_a_confirmed_event() {
 #[test]
 fn source_destruction_joins_an_abandoned_delegate_before_freeing_the_pin() {
     use crate::test_support::EVENTUAL_PROGRESS;
+    let acceptor_joined = crate::runtime::control_plane::tests::observe_next_acceptor_join();
     let source = engine(Transport::Tcp, 1);
-    let endpoint = source.endpoint();
     let device = allocation(&[0x57; 64]);
     let remote = register(&source, memory(&device));
     let (mut channel, nonce) = pin(&source, &remote, 1);
@@ -734,18 +734,9 @@ fn source_destruction_joins_an_abandoned_delegate_before_freeing_the_pin() {
         drop(source);
         done.send(()).unwrap();
     });
-    // The acceptor has exited. The control worker still owns its private
-    // registration and stage until the native completion receipt arrives.
-    let until = Instant::now() + EVENTUAL_PROGRESS;
-    loop {
-        match std::net::TcpStream::connect_timeout(&endpoint, Duration::from_millis(50)) {
-            Err(e) if e.kind() == std::io::ErrorKind::ConnectionRefused => break,
-            _ => {
-                assert!(Instant::now() < until);
-                std::thread::yield_now();
-            }
-        }
-    }
+    // Observe this engine's acceptor join, not global state at its released
+    // address. The control worker still owns the private registration and pin.
+    acceptor_joined.recv_timeout(EVENTUAL_PROGRESS).unwrap();
     assert!(matches!(
         observed.try_recv(),
         Err(std::sync::mpsc::TryRecvError::Empty)

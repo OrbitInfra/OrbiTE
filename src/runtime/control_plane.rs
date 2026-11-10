@@ -600,6 +600,8 @@ pub(crate) struct ControlService {
     endpoint: SocketAddr,
     stopping: Arc<AtomicBool>,
     acceptor: Option<JoinHandle<()>>,
+    #[cfg(test)]
+    acceptor_joined: Option<mpsc::Sender<()>>,
     accept_wake: mio::Waker,
     workers: Vec<JoinHandle<()>>,
     worker_wakes: Vec<Arc<mio::Waker>>,
@@ -628,6 +630,8 @@ impl ControlService {
             endpoint,
             stopping,
             acceptor: None,
+            #[cfg(test)]
+            acceptor_joined: tests::take_acceptor_join_observer(),
             accept_wake,
             workers: Vec::new(),
             worker_wakes: Vec::new(),
@@ -733,6 +737,10 @@ impl Drop for ControlService {
             if acceptor.join().is_err() {
                 log::error!("control acceptor at {} panicked", self.endpoint);
             }
+        }
+        #[cfg(test)]
+        if let Some(observer) = self.acceptor_joined.take() {
+            let _ = observer.send(());
         }
         for worker in self.workers.drain(..) {
             let _ = worker.join();
