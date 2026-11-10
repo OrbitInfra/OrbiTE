@@ -142,6 +142,29 @@ if [[ ${2:-} == hp-close ]]; then
     cuda::tests::staging_pipeline::source_destruction_joins_an_abandoned_delegate_before_freeing_the_pin
   )
 fi
+if [[ ${2:-} == port-handoff ]]; then
+  iterations=1000
+  controls=(
+    test_ports::a_fork_inherits_the_guarded_tcp_listener_until_the_child_exits
+    transport::hp_tcp::tests::batch::a_rebound_port_cannot_invalidate_the_old_hp_tcp_shutdown_receipt
+    transport::hp_tcp::tests::batch::dropping_a_busy_lane_fences_new_work_and_physical_close_joins_sessions
+    transport::hp_tcp::tests::sockets::restart_at_the_same_ports_and_address_rejects_the_old_write_id
+    engine::failover::tests::foreground_and_worker_describe_a_same_port_restart_only_with_its_new_epoch
+    transport::shm::tests::processes::killed_source_cannot_regrant_cached_pages_and_restart_reaps_its_name
+  )
+  if [[ ,${ORBITE_FEATURES:-}, == *,metrics,* ]]; then
+    controls+=(
+      metrics::tests::recording::exported_names_help_and_report_logs_use_orbite
+      metrics::tests::recording::real_tcp_merged_owner_exposes_one_transfer_and_scrapes_both_formats
+      metrics::tests::recording::busy_port_degrades_to_log_only_and_drop_joins_bounded_http_workers
+      metrics::tests::recording::an_expired_owner_records_a_reason_without_fabricating_bytes_or_latency
+      metrics::tests::recording::stalled_client_leaves_the_single_http_worker_and_long_interval_reporter_joinable
+      metrics::tests::recording::http_keeps_zero_histograms_for_tcp_and_unspec_in_both_formats
+      metrics::tests::accounting::exporter_health_survives_pause_and_failed_serialization
+      metrics::tests::accounting::rejected_preflight_records_no_start_and_a_failed_prefix_settles_its_suffix
+    )
+  fi
+fi
 if [[ ${2:-} == io-worker-exit ]]; then
   iterations=1000
   controls=(
@@ -149,7 +172,7 @@ if [[ ${2:-} == io-worker-exit ]]; then
     transport::io_uring::tests::inline::forced_caller_pause_skips_reap_without_releasing_a_worker_exit_owner
   )
 fi
-if [[ ${2:-} == rdma-priority || ${2:-} == dmabuf || ${2:-} == hp-close || ${2:-} == io-worker-exit ]]; then
+if [[ ${2:-} == rdma-priority || ${2:-} == dmabuf || ${2:-} == hp-close || ${2:-} == io-worker-exit || ${2:-} == port-handoff ]]; then
   # Exercise owner boundaries under CPU contention, with bounded load.
   load_count=$(nproc)
   if ((load_count > 8)); then load_count=8; fi
@@ -198,3 +221,16 @@ for ((iteration=1; iteration<=iterations; iteration++)); do
   grep -Fq "test result: ok. ${#controls[@]} passed; 0 failed;" <<<"$output"
 done
 echo "All ${#controls[@]} controls passed $iterations/$iterations on Linux with RUST_TEST_THREADS=$RUST_TEST_THREADS."
+
+if [[ ${2:-} == port-handoff ]]; then
+  # Keep the same CPU load running for complete parallel suites, not just the
+  # isolated controls: concurrent fork/exec is the regression's prerequisite.
+  logs=$(mktemp -d "${RUNNER_TEMP:-/tmp}/port-handoff.XXXXXXXX")
+  for ((iteration=1; iteration<=20; iteration++)); do
+    log="$logs/suite-$iteration.log"
+    "$binary" --test-threads="$RUST_TEST_THREADS" > "$log" 2>&1 || { cat "$log"; exit 1; }
+    echo "Full suite $iteration/20 under CPU load ($RUST_TEST_THREADS threads):"
+    tail -n 2 "$log"
+  done
+  echo "All 20 full lib suites passed under the same CPU load. Logs: $logs"
+fi

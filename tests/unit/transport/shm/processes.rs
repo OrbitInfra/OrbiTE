@@ -294,6 +294,9 @@ fn unregister_unlink_and_peer_exit_hold_exact_inflight_grants() -> Result<()> {
 
 #[test]
 fn killed_source_cannot_regrant_cached_pages_and_restart_reaps_its_name() -> Result<()> {
+    if crate::test_ports::isolated().is_some() {
+        return Ok(());
+    }
     for cxl in [false, true] {
         let control = Dir::new();
         let directory = Dir::new();

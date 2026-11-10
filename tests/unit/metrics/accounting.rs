@@ -43,6 +43,9 @@ fn pairs_follow_the_start_and_only_emit_bounded_outcomes() {
 
 #[test]
 fn exporter_health_survives_pause_and_failed_serialization() {
+    if crate::test_ports::isolated().is_some() {
+        return;
+    }
     let e = engine();
     let m = e.metrics().unwrap();
     m.set_enabled(false);
@@ -130,6 +133,9 @@ fn exporter_health_survives_pause_and_failed_serialization() {
 
 #[test]
 fn rejected_preflight_records_no_start_and_a_failed_prefix_settles_its_suffix() {
+    if crate::test_ports::isolated().is_some() {
+        return;
+    }
     let source = engine();
     let requester = engine();
     let remote = source

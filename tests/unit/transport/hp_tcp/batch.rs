@@ -69,6 +69,9 @@ fn a_public_batch_posts_independent_lanes_and_reports_each_ack() {
 
 #[test]
 fn a_rebound_port_cannot_invalidate_the_old_hp_tcp_shutdown_receipt() {
+    if crate::test_ports::isolated().is_some() {
+        return;
+    }
     let (listener, _guard) = crate::test_ports::guarded_port();
     let endpoint = listener.local_addr().unwrap();
     let mut config = cfg();
@@ -93,6 +96,9 @@ fn a_rebound_port_cannot_invalidate_the_old_hp_tcp_shutdown_receipt() {
 
 #[test]
 fn dropping_a_busy_lane_fences_new_work_and_physical_close_joins_sessions() {
+    if crate::test_ports::isolated().is_some() {
+        return;
+    }
     let dst = TransferEngine::new(cfg()).unwrap();
     // Keep the explicit port out of other fixtures' bind(0) allocation range.
     let (listener, _guard) = crate::test_ports::guarded_port();

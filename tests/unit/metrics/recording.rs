@@ -3,18 +3,8 @@ use crate::metrics::schema::{self, Metric as M};
 
 #[test]
 fn exported_names_help_and_report_logs_use_orbite() {
-    const CHILD: &str = "ORBITE_TEST_METRICS_WORDING";
-    if std::env::var_os(CHILD).is_none() {
-        // A logger is process-global. Isolate it from parallel allocation controls.
-        let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args([
-                "--exact",
-                "metrics::tests::recording::exported_names_help_and_report_logs_use_orbite",
-                "--nocapture",
-            ])
-            .env(CHILD, "1")
-            .output()
-            .unwrap();
+    // The logger and fixed-port lifecycle both require their own process.
+    if let Some(output) = crate::test_ports::isolated() {
         let stdout = String::from_utf8(output.stdout).unwrap();
         let stderr = String::from_utf8(output.stderr).unwrap();
         assert!(output.status.success(), "{stdout}\n{stderr}");
@@ -193,6 +183,9 @@ fn gauges_survive_toggles_failures_keep_the_first_stage_and_quarantine_counts_on
 }
 #[test]
 fn real_tcp_merged_owner_exposes_one_transfer_and_scrapes_both_formats() {
+    if crate::test_ports::isolated().is_some() {
+        return;
+    }
     let source = engine();
     let requester = engine();
     let metrics = requester.metrics().unwrap();
@@ -266,6 +259,9 @@ fn real_tcp_merged_owner_exposes_one_transfer_and_scrapes_both_formats() {
 }
 #[test]
 fn busy_port_degrades_to_log_only_and_drop_joins_bounded_http_workers() {
+    if crate::test_ports::isolated().is_some() {
+        return;
+    }
     let (held, _guard) = guarded_port();
     let port = held.local_addr().unwrap().port();
     let e = TransferEngine::new(config(port)).unwrap();
@@ -299,6 +295,9 @@ fn busy_port_degrades_to_log_only_and_drop_joins_bounded_http_workers() {
 
 #[test]
 fn an_expired_owner_records_a_reason_without_fabricating_bytes_or_latency() {
+    if crate::test_ports::isolated().is_some() {
+        return;
+    }
     let source = engine();
     let requester = engine();
     let r = source
@@ -333,6 +332,9 @@ fn an_expired_owner_records_a_reason_without_fabricating_bytes_or_latency() {
 
 #[test]
 fn stalled_client_leaves_the_single_http_worker_and_long_interval_reporter_joinable() {
+    if crate::test_ports::isolated().is_some() {
+        return;
+    }
     let (listener, _guard) = guarded_port();
     let port = listener.local_addr().unwrap().port();
     drop(listener);
@@ -388,6 +390,9 @@ fn a_retired_initial_route_and_a_rejected_retry_preserve_real_attempt_counts() {
 
 #[test]
 fn http_keeps_zero_histograms_for_tcp_and_unspec_in_both_formats() {
+    if crate::test_ports::isolated().is_some() {
+        return;
+    }
     // Reserve both addresses before starting the server. The kernel may have
     // assigned this port to someone else on the second address independently.
     #[cfg(target_os = "linux")]
