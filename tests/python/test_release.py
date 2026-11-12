@@ -1,10 +1,14 @@
 """Release safety checks, independent of registry credentials and optimized Python."""
 import importlib.util
 import hashlib
+import io
+import json
 from pathlib import Path
 import shutil
 import tempfile
 import unittest
+from unittest.mock import patch
+from urllib.error import HTTPError, URLError
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -86,6 +90,55 @@ class ReleaseControls(unittest.TestCase):
             path.write_bytes(b"untested replacement")
             with self.assertRaises(ValueError):
                 registry.verify("crates-io", [path], good)
+
+    def test_registry_visibility_is_polled_without_repeating_an_upload(self):
+        with tempfile.TemporaryDirectory() as directory:
+            files = [Path(directory) / name for name in ("first.whl", "last.whl")]
+            for path in files:
+                path.write_bytes(path.name.encode())
+            entries = [{"filename": p.name, "digests": {"sha256": hashlib.sha256(p.read_bytes()).hexdigest()}} for p in files]
+            replies = [HTTPError("https://pypi.org/fixture", 404, "not visible", {}, None),
+                       io.BytesIO(json.dumps({"urls": entries[:1]}).encode()),
+                       io.BytesIO(json.dumps({"urls": entries}).encode())]
+            request = registry.urllib.request.Request("https://pypi.org/fixture")
+            with patch.object(registry.urllib.request, "urlopen", side_effect=replies) as read, patch.object(registry.time, "sleep") as sleep:
+                registry.wait_for_receipt("pypi", files, request)
+            self.assertEqual(read.call_count, 3)
+            self.assertEqual(sleep.call_count, 2)
+            self.assertEqual(request.get_method(), "GET")
+            self.assertIsNone(request.data)
+            for call in read.call_args_list:
+                self.assertLessEqual(call.kwargs["timeout"], 10)
+
+    def test_registry_visibility_wait_is_bounded_and_never_accepts_missing_bytes(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "artifact"
+            path.write_bytes(b"tested bytes")
+            with patch.object(registry.urllib.request, "urlopen", side_effect=lambda *a, **kw: io.BytesIO(b'{"urls": []}')) as read, patch.object(registry.time, "sleep") as sleep:
+                with self.assertRaises(registry.ReceiptPending):
+                    registry.wait_for_receipt("pypi", [path], "https://pypi.org/fixture")
+            self.assertEqual(read.call_count, 13)
+            self.assertEqual(sleep.call_count, 12)
+            with patch.object(registry.time, "monotonic", side_effect=[0, 61]), patch.object(registry.urllib.request, "urlopen") as read:
+                with self.assertRaises(registry.ReceiptPending):
+                    registry.wait_for_receipt("pypi", [path], "https://pypi.org/fixture")
+            read.assert_not_called()
+
+    def test_registry_wrong_digest_and_nonvisibility_errors_fail_immediately(self):
+        with tempfile.TemporaryDirectory() as directory:
+            missing = Path(directory) / "missing"
+            present = Path(directory) / "present"
+            missing.write_bytes(b"missing")
+            present.write_bytes(b"tested bytes")
+            replies = [io.BytesIO(b'{"urls": [{"filename": "present", "digests": {"sha256": "wrong"}}]}'),
+                       HTTPError("https://pypi.org/fixture", 403, "denied", {}, None),
+                       URLError("injected network failure")]
+            for reply in replies:
+                with self.subTest(reply=type(reply).__name__), patch.object(registry.urllib.request, "urlopen", side_effect=[reply]) as read, patch.object(registry.time, "sleep") as sleep:
+                    with self.assertRaises((ValueError, URLError)):
+                        registry.wait_for_receipt("pypi", [missing, present], "https://pypi.org/fixture")
+                self.assertEqual(read.call_count, 1)
+                sleep.assert_not_called()
 
 
 if __name__ == "__main__":

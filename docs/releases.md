@@ -203,7 +203,10 @@ The tag starts a fresh gate/build run. Mismatched tags fail, including during
 dry runs. Approve each environment only after reviewing the gates and artifact
 hashes. The publishing jobs run once, verify registry SHA-256 receipts, and
 only then create a prerelease on GitHub for the **existing** tag with notes and
-checksums. No branch/manual run can publish unless its ref is that matching tag.
+checksums. Receipt visibility can lag a successful upload: the checker polls
+missing entries or HTTP 404 within a 60-second budget, at most 13 reads. A
+different checksum or other read error fails immediately. This never repeats
+an upload. No branch/manual run can publish unless its ref is that matching tag.
 For an existing tag, an explicitly approved manual run uses
 `gh workflow run release.yml --ref v0.1.0-beta.1 -f dry_run=false`; do not use it
 to blindly repeat a partly successful publication.
