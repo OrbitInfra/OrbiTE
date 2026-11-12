@@ -94,6 +94,45 @@ With native build prerequisites installed, run the same checks with
 ignored by default and require selected devices, original resource locks and
 external artifact directories.
 
+## CI tiers
+
+Ordinary PRs and main pushes retain the full Rust feature matrix on stable and
+1.85: 28 Clippy/test jobs, including every deterministic ownership control,
+real file checks with `ORBITE_REQUIRE_IO_URING=1` and native-library isolation.
+Clippy already compiles every target, so a separate `cargo check` is redundant.
+Formatting runs once, the feature-independent CPU trace once per toolchain,
+and package dry runs cover default and full features. P10 runs every fault
+case, including each real peer-kill case once.
+
+Python runs both CPU and combined profiles on CPython 3.13, Linux x86_64 and
+aarch64, with both toolchains: four jobs instead of twenty. Each still runs
+the installed-wheel lifetime/byte checks and GPU-free quickstart; the sdist
+rebuild and clean-container checks remain. No tests are deleted. Documentation
+changes confined to `docs/`, README and AGENTS run strict Sphinx/link checks.
+Obsolete PR runs are cancelled; release runs are never cancelled automatically.
+
+The **Extended validation** workflow runs Mondays at 02:23 UTC and on manual
+dispatch. It retains every 50/200/1,000-iteration stress control, failover
+stress, repeated full suites, 50 P10 kill repetitions, all feature-package
+checks, all twenty CPython 3.10–3.14 wheel jobs and both 480-row comparisons.
+Release preparation always selects this complete tier, including dry runs.
+It cannot silently select the reduced Python matrix.
+
+```sh
+gh workflow run extended.yml --ref main
+# Validate a PR branch, or run only the relevant expensive workflow:
+gh workflow run ci.yml --ref <branch> -f extended=true
+gh workflow run python.yml --ref <branch> -f extended=true
+gh workflow run native-cpu.yml --ref <branch> -f baseline_ref=<base-commit>
+```
+
+Run the relevant repetition driver when changing a timing-sensitive owner;
+use a matched comparison for performance changes. Ordinary main checks remain
+because they validate the merged tree. Infrastructure recovery never retries a
+test failure: native-dependency installs have three bounded attempts, repair
+interrupted dpkg configuration within the same attempt budget, alternate
+mirrors and fail after exhaustion.
+
 ## Build the documentation website
 
 The website is generated from this `docs/` tree using Mooncake's Sphinx Book

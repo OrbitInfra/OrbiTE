@@ -6,13 +6,27 @@ on:
       release_gate:
         type: boolean
         default: false
+      extended:
+        type: boolean
+        default: false
   push:
     branches: [main]
+    paths-ignore: ['docs/**', 'README.md', 'AGENTS.md']
   pull_request:
+    paths-ignore: ['docs/**', 'README.md', 'AGENTS.md']
   workflow_dispatch:
+    inputs:
+      extended:
+        description: Run all stability repetitions and per-feature package checks
+        type: boolean
+        default: false
 
 permissions:
   contents: read
+
+concurrency:
+  group: ci-${{ inputs.release_gate && github.run_id || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && !inputs.release_gate }}
 
 jobs:
   check:
@@ -27,6 +41,7 @@ jobs:
     env:
       RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}
       ORBITE_FEATURES: ${{ matrix.features }}
+      ORBITE_EXTENDED: ${{ inputs.release_gate || inputs.extended }}
       CC: gcc
       CXX: g++
       LIBCLANG_PATH: /usr/lib/llvm-18/lib
@@ -53,9 +68,8 @@ jobs:
         if: matrix.features == ''
         run: python3 -m unittest discover -s tests/ci -v
       - name: Format
+        if: matrix.toolchain == 'stable' && matrix.features == ''
         run: cargo fmt --all --check
-      - name: Check
-        run: cargo check --locked --features "$ORBITE_FEATURES"
       - name: Check portable build and Linux-only features
         if: matrix.features == ''
         run: |
@@ -122,7 +136,7 @@ jobs:
         run: |
           binary=$(cargo test --locked --features "$ORBITE_FEATURES" --lib --no-run --message-format=json |
             jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
-          python3 tests/faults/run.py --binary "$binary" --output "$RUNNER_TEMP/p10-cpu" --kill-repeats 50
+          python3 tests/faults/run.py --binary "$binary" --output "$RUNNER_TEMP/p10-cpu" --kill-repeats ${{ (inputs.release_gate || inputs.extended) && 50 || 1 }}
       - name: Preserve P10 CPU fault evidence
         if: always() && matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive'
         uses: actions/upload-artifact@v7.0.2
@@ -130,7 +144,7 @@ jobs:
           name: p10-cpu-${{ matrix.toolchain }}
           path: ${{ runner.temp }}/p10-cpu/
       - name: Repeat guarded restart port ownership at suite parallelism
-        if: matrix.features == ''
+        if: env.ORBITE_EXTENDED == 'true' && (matrix.features == '')
         run: |
           binary=$(cargo test --locked --lib --no-run --message-format=json |
             jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
@@ -156,7 +170,7 @@ jobs:
             python3 tests/hardware/build_installed.py --consumer "$consumer" --toolchain "$RUSTUP_TOOLCHAIN" --output "$RUNNER_TEMP/$consumer-$RUSTUP_TOOLCHAIN"
           done
       - name: Repeat lane, CPU-only requester and accounting controls 50 times
-        if: matrix.toolchain == 'stable' && matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive'
+        if: env.ORBITE_EXTENDED == 'true' && (matrix.toolchain == 'stable' && matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive')
         run: bash .github/scripts/repeat-tcp-observability.sh "$RUNNER_TEMP/r1d-iteration.log"
       - name: Run the two-process HP-TCP loopback consumer
         if: matrix.features == ''
@@ -174,7 +188,7 @@ jobs:
           python3 "$installed/shm_run.py" --binary "$installed/installed/bin/orbite-shm" --posix
           python3 "$installed/shm_run.py" --binary "$installed/installed/bin/orbite-shm" --tmpfs "$standin"
       - name: Repeat RDMA release controls with suite parallelism
-        if: matrix.toolchain == 'stable' && matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive'
+        if: env.ORBITE_EXTENDED == 'true' && (matrix.toolchain == 'stable' && matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive')
         run: |
           binary=$(cargo test --locked --features "$ORBITE_FEATURES" --lib --no-run --message-format=json |
             jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
@@ -188,13 +202,13 @@ jobs:
             grep -F "test result: ok. $count passed; 0 failed;" "$RUNNER_TEMP/r1b.log"
           done
       - name: Repeat TCP stream and retirement controls 50 times
-        if: matrix.features == '' || matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive'
+        if: env.ORBITE_EXTENDED == 'true' && (matrix.features == '' || matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive')
         run: |
           binary=$(cargo test --locked --features "$ORBITE_FEATURES" --lib --no-run --message-format=json |
             jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
           bash .github/scripts/repeat-tcp-pool.sh "$binary" "$RUNNER_TEMP/tcp-pool"
       - name: Repeat peer retirement owner controls 50 times
-        if: matrix.toolchain == 'stable' && matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive'
+        if: env.ORBITE_EXTENDED == 'true' && (matrix.toolchain == 'stable' && matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive')
         run: |
           binary=$(cargo test --locked --features "$ORBITE_FEATURES" --lib --no-run --message-format=json |
             jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
@@ -203,19 +217,19 @@ jobs:
         if: matrix.features == 'rdma,cuda'
         run: python3 tests/hardware/build_installed.py --consumer peer-retirement --toolchain "$RUSTUP_TOOLCHAIN" --output "$RUNNER_TEMP/peer-retirement-installed"
       - name: Repeat small file handoff and drain controls 50 times
-        if: matrix.features == 'io-uring' || matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive'
+        if: env.ORBITE_EXTENDED == 'true' && (matrix.features == 'io-uring' || matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive')
         run: |
           binary=$(cargo test --locked --features "$ORBITE_FEATURES" --lib --no-run --message-format=json |
             jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
           .github/scripts/repeat-runtime-controls.sh "$binary" io-small
       - name: Repeat storage and CUDA release controls 50 times
-        if: matrix.toolchain == 'stable' && matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive'
+        if: env.ORBITE_EXTENDED == 'true' && (matrix.toolchain == 'stable' && matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive')
         run: |
           binary=$(cargo test --locked --features "$ORBITE_FEATURES" --lib --no-run --message-format=json |
             jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
           bash .github/scripts/repeat-storage-cuda.sh "$binary" "$RUNNER_TEMP/r1c-repeats"
       - name: Repeat MNNVL fabric and EGM shim controls 50 times
-        if: matrix.toolchain == 'stable' && (matrix.features == 'cuda' || matrix.features == 'rdma,cuda,io-uring,gds,metrics')
+        if: env.ORBITE_EXTENDED == 'true' && (matrix.toolchain == 'stable' && (matrix.features == 'cuda' || matrix.features == 'rdma,cuda,io-uring,gds,metrics'))
         run: |
           set -o pipefail
           binary=$(cargo test --locked --features "$ORBITE_FEATURES" --lib --no-run --message-format=json |
@@ -233,7 +247,7 @@ jobs:
         if: matrix.features == 'cuda'
         run: python3 tests/hardware/build_installed.py --consumer local-copy --toolchain "$RUSTUP_TOOLCHAIN" --output "$RUNNER_TEMP/orbite-installed-local-copy"
       - name: Repeat caller-stream CTA and lifetime controls 50 times
-        if: matrix.features == 'cuda'
+        if: env.ORBITE_EXTENDED == 'true' && (matrix.features == 'cuda')
         run: |
           binary=$(cargo test --locked --features "$ORBITE_FEATURES" --lib --no-run --message-format=json |
             jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
@@ -259,7 +273,7 @@ jobs:
           cargo check --locked
           cargo metadata --locked --format-version 1 | jq -e '[.packages[] | select(.name == "cudarc") | .version] == ["0.19.8"]'
       - name: Repeat shared mapping lifetime and process controls 50 times
-        if: matrix.toolchain == 'stable' && (matrix.features == '' || matrix.features == 'rdma,cuda,io-uring,gds,metrics')
+        if: env.ORBITE_EXTENDED == 'true' && (matrix.toolchain == 'stable' && (matrix.features == '' || matrix.features == 'rdma,cuda,io-uring,gds,metrics'))
         run: |
           binary=$(cargo test --locked --features "$ORBITE_FEATURES" --lib --no-run --message-format=json |
             jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
@@ -270,7 +284,7 @@ jobs:
             grep -Fq "test result: ok. $count passed; 0 failed; 1 ignored;" "$RUNNER_TEMP/shm-lifetime.log"
           done
       - name: Repeat HP-TCP socket and ownership controls 50 times
-        if: matrix.toolchain == 'stable' && (matrix.features == '' || matrix.features == 'rdma,cuda,io-uring,gds,metrics')
+        if: env.ORBITE_EXTENDED == 'true' && (matrix.toolchain == 'stable' && (matrix.features == '' || matrix.features == 'rdma,cuda,io-uring,gds,metrics'))
         run: |
           binary=$(cargo test --locked --features "$ORBITE_FEATURES" --lib --no-run --message-format=json |
             jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
@@ -281,7 +295,7 @@ jobs:
             grep -Fq "test result: ok. $count passed; 0 failed;" "$RUNNER_TEMP/hp-tcp.log"
           done
       - name: Repeat retirement and Pin controls 50 times
-        if: matrix.toolchain == 'stable' && matrix.features == 'rdma,cuda,io-uring'
+        if: env.ORBITE_EXTENDED == 'true' && (matrix.toolchain == 'stable' && matrix.features == 'rdma,cuda,io-uring')
         run: |
           set -o pipefail
           binary=$(cargo test --locked --features "$ORBITE_FEATURES" --lib --no-run --message-format=json |
@@ -299,7 +313,7 @@ jobs:
           done
           echo "All four controls passed 50/50 on Linux with RUST_TEST_THREADS=$RUST_TEST_THREADS." >> "$GITHUB_STEP_SUMMARY"
       - name: Repeat progress, notification and admission controls 50 times and batch release 200 times
-        if: matrix.toolchain == 'stable' && matrix.features == 'rdma,cuda,io-uring,gds'
+        if: env.ORBITE_EXTENDED == 'true' && (matrix.toolchain == 'stable' && matrix.features == 'rdma,cuda,io-uring,gds')
         run: |
           binary=$(cargo test --locked --features "$ORBITE_FEATURES" --lib --no-run --message-format=json |
             jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
@@ -307,13 +321,13 @@ jobs:
           .github/scripts/repeat-runtime-controls.sh "$binary" batch-release
           .github/scripts/repeat-runtime-controls.sh "$binary" rail-recovery
       - name: Repeat RDMA priority snapshot controls 1000 times under CPU load
-        if: matrix.features == 'rdma,cuda'
+        if: env.ORBITE_EXTENDED == 'true' && (matrix.features == 'rdma,cuda')
         run: |
           binary=$(cargo test --locked --features "$ORBITE_FEATURES" --lib --no-run --message-format=json |
             jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
           .github/scripts/repeat-runtime-controls.sh "$binary" rdma-priority
       - name: Repeat dma-buf isolation 1000 times under load and the full lib suite twice more
-        if: matrix.features == 'rdma,cuda' || matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive'
+        if: env.ORBITE_EXTENDED == 'true' && (matrix.features == 'rdma,cuda' || matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive')
         run: |
           binary=$(cargo test --locked --features "$ORBITE_FEATURES" --lib --no-run --message-format=json |
             jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
@@ -325,13 +339,13 @@ jobs:
           done
           echo "dma-buf controls passed 1000 times under CPU load; full lib suite passed three times at $(nproc) threads." >> "$GITHUB_STEP_SUMMARY"
       - name: Repeat file worker exit receipts 1000 times under CPU load
-        if: matrix.features == 'io-uring'
+        if: env.ORBITE_EXTENDED == 'true' && (matrix.features == 'io-uring')
         run: |
           binary=$(cargo test --locked --features "$ORBITE_FEATURES" --lib --no-run --message-format=json |
             jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
           .github/scripts/repeat-runtime-controls.sh "$binary" io-worker-exit
       - name: Repeat HP-TCP and TCP close receipts 1000 times under CPU load
-        if: matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive'
+        if: env.ORBITE_EXTENDED == 'true' && (matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive')
         run: |
           binary=$(cargo test --locked --features "$ORBITE_FEATURES" --lib --no-run --message-format=json |
             jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
@@ -340,14 +354,14 @@ jobs:
           tail -n 2 "$RUNNER_TEMP/hp-close-suite.log"
           echo "Three close/port-reuse controls passed 1000 times under CPU load; full lib suite passed at $(nproc) threads." >> "$GITHUB_STEP_SUMMARY"
       - name: Repeat fixed-port handoffs 1000 times and 20 full suites under CPU load
-        if: matrix.features == 'gds' || matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive'
+        if: env.ORBITE_EXTENDED == 'true' && (matrix.features == 'gds' || matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive')
         run: |
           binary=$(cargo test --locked --features "$ORBITE_FEATURES" --lib --no-run --message-format=json |
             jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
           .github/scripts/repeat-runtime-controls.sh "$binary" port-handoff
           echo "Fixed-port controls passed 1000 times; 20 full lib suites passed under CPU load at $(nproc) threads." >> "$GITHUB_STEP_SUMMARY"
       - name: Repeat GDS reservation release at suite parallelism
-        if: matrix.features == 'rdma,cuda,io-uring,gds'
+        if: env.ORBITE_EXTENDED == 'true' && (matrix.features == 'rdma,cuda,io-uring,gds')
         run: |
           binary=$(cargo test --locked --features "$ORBITE_FEATURES" --lib --no-run --message-format=json |
             jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
@@ -356,7 +370,7 @@ jobs:
             grep -F "test result: ok. 1 passed; 0 failed;" "$RUNNER_TEMP/gds-reservation.log"
           done
       - name: Repeat Linux shared quota and receiver credit controls 50 times
-        if: matrix.toolchain == 'stable' && matrix.features == 'rdma,cuda,io-uring,gds,metrics'
+        if: env.ORBITE_EXTENDED == 'true' && (matrix.toolchain == 'stable' && matrix.features == 'rdma,cuda,io-uring,gds,metrics')
         run: |
           test "$(findmnt -n -o FSTYPE -T /dev/shm)" = tmpfs
           binary=$(cargo test --locked --features "$ORBITE_FEATURES" --lib --no-run --message-format=json |
@@ -370,10 +384,10 @@ jobs:
           cargo build --locked --features metrics --example metrics_overhead
           "$RUNNER_TEMP/metrics-parser/bin/python" tests/metrics/scrape.py target/debug/examples/metrics_overhead
       - name: Measure CPU and TCP submission with metrics off, disabled and enabled
-        if: matrix.toolchain == 'stable' && matrix.features == 'metrics'
+        if: env.ORBITE_EXTENDED == 'true' && (matrix.toolchain == 'stable' && matrix.features == 'metrics')
         run: python3 tests/metrics/benchmark.py
       - name: Repeat metrics controls 50 times and port rebind 200 times
-        if: matrix.toolchain == 'stable' && matrix.features == 'rdma,cuda,io-uring,gds,metrics'
+        if: env.ORBITE_EXTENDED == 'true' && (matrix.toolchain == 'stable' && matrix.features == 'rdma,cuda,io-uring,gds,metrics')
         run: |
           binary=$(cargo test --locked --features "$ORBITE_FEATURES" --lib --no-run --message-format=json |
             jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
@@ -383,6 +397,7 @@ jobs:
         if: contains(matrix.features, 'rdma')
         run: cargo test --locked --features "$ORBITE_FEATURES" --example rdma_host relay_tracks_the_public_engines_current_wire
       - name: CPU trace fixture and comparator controls
+        if: matrix.features == ''
         run: |
           python3 tests/reference/run.py --rust-only --output "$RUNNER_TEMP/orbite-cpu-trace-${{ matrix.toolchain }}"
           python3 -c 'import sys; sys.path.insert(0, "benches"); from analyze_io_tail import controls; controls()'
@@ -391,16 +406,17 @@ jobs:
         if: matrix.toolchain == 'stable' && matrix.features == ''
         run: python3 -B -m unittest discover -s tests/hardware -p 'test_*.py'
       - name: Package
+        if: env.ORBITE_EXTENDED == 'true' || matrix.features == '' || matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive'
         run: cargo publish --dry-run --locked --features "$ORBITE_FEATURES"
       - name: Stress submit rejection and per-owner failover accounting
-        if: matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive'
+        if: env.ORBITE_EXTENDED == 'true' && (matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive')
         run: |
           binary=$(cargo test --locked --features "$ORBITE_FEATURES" --lib --no-run --message-format=json |
             jq -ers 'map(select(.reason == "compiler-artifact" and .target.kind == ["lib"] and .profile.test and .executable != null)) | last.executable')
           python3 tests/failover/stress.py --binary "$binary" --iterations 2500 \
             --jobs 4 --cpu-load 2 --test-threads 64 --output "$RUNNER_TEMP/failover-stress"
       - name: Preserve failover stress diagnostics
-        if: always() && matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive'
+        if: env.ORBITE_EXTENDED == 'true' && (always() && matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive')
         uses: actions/upload-artifact@v7.0.2
         with:
           name: failover-stress-${{ matrix.toolchain }}

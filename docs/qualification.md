@@ -58,8 +58,9 @@ The TCP job also runs `runtime::control_plane::tests` controls
 `async_cancel_wait_timeout_and_requester_drain_preserve_physical_owners` and
 `p10_killed_tcp_requester_retains_partial_write_until_socket_drain`, plus
 `transport::tcp::task::tests` fragmented READ and WRITE-backpressure controls.
-The full-feature jobs' `P10 CPU fault matrix and real peer kills` step repeats
-the new real-process kill controls 50 times per toolchain. This is lifetime
+The full-feature jobs' `P10 CPU fault matrix and real peer kills` step runs
+each real-process kill control once in ordinary CI, and 50 times per toolchain
+in [extended and release validation](build.md#ci-tiers). This is lifetime
 and byte evidence, not a physical-network latency or throughput claim.
 
 Fixed-port restart, close and metrics fixtures execute in isolated child
@@ -67,6 +68,7 @@ processes before opening their sockets. A deterministic fork control identifies
 the inherited listener by socket inode and reproduces `AddrInUse` despite
 `CLOEXEC` and the UDP reservation. The `CI` step
 `Repeat fixed-port handoffs 1000 times and 20 full suites under CPU load` runs
+in extended and release validation
 on stable and Rust 1.85 for `gds` and the full feature set, at `nproc` test
 threads. Shutdown assertions use owner retirement receipts; no runtime bind or
 close behavior changes.
@@ -129,12 +131,13 @@ wire interoperability.
 and historical jobs in [release evidence](#linux-ci-release-profiles).
 
 The `Python wheels` workflow builds and installs CPU + io_uring and combined-feature
-wheels for CPython 3.10–3.14 on Linux x86_64 and aarch64, with stable and Rust
-1.85. `tests/python/test_installed.py` checks the OrbiTE surface. Its real loopback and two-process transfers
+wheels on Linux x86_64 and aarch64, with stable and Rust 1.85. Ordinary CI uses
+CPython 3.13; extended and release validation cover 3.10–3.14.
+`tests/python/test_installed.py` checks the OrbiTE surface. Its real loopback and two-process transfers
 check both directions, payload guards, notifications, policy/intent/deadline
 routing, exceptions and context exits. Held TCP replies prove GIL release,
 early-drop ownership, queued cancellation and timeout retention. Four timing
-controls repeat 50 times. The source-distribution job rebuilds and installs its
+controls repeat 50 times in extended/release validation. The source-distribution job rebuilds and installs its
 wheel before repeating the same consumer controls.
 
 The specific installed tests are
@@ -153,15 +156,16 @@ The specific installed tests are
 `test_cuda_exporters.py` adds CPU-wheel unavailable checks and seven installed
 CUDA-wheel controls through a CPU driver shim, including guarded TCP bytes,
 CAI/DLPack aliases, producer/context handling, early drop and sticky cleanup.
-All seven repeat 50 times on stable CPython 3.13 on both architectures. The
+All seven repeat 50 times on stable CPython 3.13 on both architectures in
+extended/release validation. The
 Rust boundary checks the DLPack LP64 layout and bounded duplicate export leases.
 
 This evidence covers the CPU/TCP wheel profile only. Combined-feature builds
 exercise that same CPU profile and do not qualify Python GPU, RDMA, GDS or
 fabric paths. The native transports retain their installed verification queue.
 Ordinary CI produces review artifacts without publishing. The protected
-[release workflow](releases.md#maintainer-publication-procedure) reuses that
-matrix and selects only the combined stable wheels plus the rebuilt sdist.
+[release workflow](releases.md#maintainer-publication-procedure) always uses the
+complete matrix and selects only the combined stable wheels plus the rebuilt sdist.
 Its `package (stable)` / `package (1.85.0)` jobs install the Rust example from
 `cargo package`; wheel jobs run `python -I -m orbite.quickstart` after installing
 each profile and the rebuilt sdist. Both examples check two-process TCP and

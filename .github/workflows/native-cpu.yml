@@ -6,19 +6,6 @@ on:
       release_gate:
         type: boolean
         default: false
-  pull_request:
-    paths:
-      - 'src/**'
-      - 'benches/**'
-      - 'tests/faults/**'
-      - 'crates/orbite-python/**'
-      - 'tests/reference/**'
-      - 'tests/unit/transport/rdma/slice.rs'
-      - 'tests/fixtures/**'
-      - 'Cargo.toml'
-      - 'Cargo.lock'
-      - '.github/workflows/native-cpu.yml'
-      - '.github/scripts/install-native-deps.sh'
   workflow_dispatch:
     inputs:
       profile_only:

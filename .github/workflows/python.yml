@@ -6,13 +6,27 @@ on:
       release_gate:
         type: boolean
         default: false
+      extended:
+        type: boolean
+        default: false
   push:
     branches: [main]
+    paths-ignore: ['docs/**', 'README.md', 'AGENTS.md']
   pull_request:
+    paths-ignore: ['docs/**', 'README.md', 'AGENTS.md']
   workflow_dispatch:
+    inputs:
+      extended:
+        description: Test all CPython versions and repeat lifetime controls
+        type: boolean
+        default: false
 
 permissions:
   contents: read
+
+concurrency:
+  group: python-${{ inputs.release_gate && github.run_id || github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' && !inputs.release_gate }}
 
 jobs:
   wheel:
@@ -23,11 +37,12 @@ jobs:
       matrix:
         runner: [ubuntu-24.04, ubuntu-24.04-arm]
         toolchain: [stable, '1.85.0']
-        python: ['3.10', '3.11', '3.12', '3.13', '3.14']
+        python: ${{ fromJSON((inputs.release_gate || inputs.extended) && '["3.10", "3.11", "3.12", "3.13", "3.14"]' || '["3.13"]') }}
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 60
     env:
       RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}
+      ORBITE_EXTENDED: ${{ inputs.release_gate || inputs.extended }}
       LIBCLANG_PATH: /usr/lib/llvm-18/lib
       CLANG_PATH: /usr/bin/clang-18
     steps:
@@ -64,10 +79,10 @@ jobs:
       - name: Drive installed CUDA-export owners through the fallible driver table
         run: bash .github/scripts/check-python-cuda.sh "$RUNNER_TEMP/python-cuda-shim"
       - name: Repeat CUDA-export alias, drain and cleanup controls 50 times
-        if: matrix.toolchain == 'stable' && matrix.python == '3.13'
+        if: env.ORBITE_EXTENDED == 'true' && (matrix.toolchain == 'stable' && matrix.python == '3.13')
         run: bash .github/scripts/check-python-cuda.sh "$RUNNER_TEMP/python-cuda-repeat" 50
       - name: Repeat installed-wheel lifetime and GIL controls
-        if: matrix.toolchain == 'stable' && matrix.python == '3.13'
+        if: env.ORBITE_EXTENDED == 'true' && (matrix.toolchain == 'stable' && matrix.python == '3.13')
         run: bash .github/scripts/repeat-python.sh "$RUNNER_TEMP/python-repeats"
       - name: Check source distribution contents
         if: matrix.runner == 'ubuntu-24.04' && matrix.toolchain == 'stable' && matrix.python == '3.13'

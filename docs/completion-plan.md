@@ -101,9 +101,12 @@ after each:
    done. File-worker exceptional retirement now retains submitted ready jobs
    on exit and settles common GDS group accounting. Runtime-only verbs loading
    now lets the combined wheel import and run without native SDK libraries.
-   Release preparation is active: publish the RDMA/CUDA/io_uring/GDS/metrics
-   profile after the portability and clean-container gates pass and the
-   maintainer separately approves publication.
+   Release preparation and the non-publishing rehearsal passed on
+   `249d7e47` ([run](https://github.com/OrbitInfra/OrbiTE/actions/runs/42837613276));
+   publication jobs were skipped. Publish the RDMA/CUDA/io_uring/GDS/metrics
+   profile only after the maintainer separately approves publication.
+   [CI tiers](build.md#ci-tiers) keep full release coverage while reducing
+   repeated work in ordinary PRs.
 6. **NIXL plugin implementation.** Requires the upstream explicit-cancel API
    and the outcome of #1958, plus the hardware batch before the formal backend
    RFC: installed GPU/RDMA results for the current artifact and `nixlbench`

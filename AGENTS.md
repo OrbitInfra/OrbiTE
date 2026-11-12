@@ -173,9 +173,21 @@ cargo publish --dry-run --locked --features "$FEATURES"
 python3 tests/reference/run.py --rust-only --output "$OUT/cpu-trace"
 ```
 
-Run these for `FEATURES` in `''`, `rdma`, `cuda`, `rdma,cuda` and every new
-feature set, on stable and `+1.85.0`. Add new feature sets to the CI matrix in
-`.github/workflows/ci.yml`.
+Run Clippy and the complete test suite for every feature set in
+`.github/workflows/ci.yml`, on stable and `+1.85.0`. No ownership control is
+removed. Format runs once; the feature-independent CPU trace runs once per
+toolchain. Ordinary PR/main checks package the default and full builds and
+test both Python wheel profiles on CPython 3.13, both architectures/toolchains,
+including the sdist rebuild and clean-container quickstart. Docs-only changes
+run the documentation gates.
+
+`Extended validation` runs weekly or manually: all existing repetition counts,
+all per-feature package checks, the CPython 3.10–3.14 wheel matrix and both
+480-row native comparisons. Release gates always use this complete tier.
+Changes to a timing-sensitive owner also require its relevant repeat driver;
+performance changes require the paired native comparison. See
+[CI tiers and manual commands](docs/build.md#ci-tiers). Do not lower repetition
+counts to hide failures. Add new feature sets to the matrix.
 
 Docs:
 
