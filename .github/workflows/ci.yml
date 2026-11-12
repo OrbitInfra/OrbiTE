@@ -70,6 +70,11 @@ jobs:
       - name: Format
         if: matrix.toolchain == 'stable' && matrix.features == ''
         run: cargo fmt --all --check
+      - name: Release receipt controls (no registry credentials)
+        if: matrix.toolchain == 'stable' && matrix.features == '' && !inputs.release_gate
+        run: |
+          python3 -I tests/python/test_release.py -v
+          python3 -I -O tests/python/test_release.py -v
       - name: Check portable build and Linux-only features
         if: matrix.features == ''
         run: |
