@@ -36,18 +36,22 @@ for attempt in 1 2 3; do
     mirror=runner-default
     if ((attempt == 2)); then source_file=$sources; mirror=$archive_uri; fi
     echo "Native dependencies attempt $attempt/3: mirror=$mirror packages=${missing[*]} (180 s bound)"
-    # Bound update plus install together, including a download that keeps making
-    # too little progress to trip apt's per-connection timeout. Never retry tests.
+    # An expired install may leave dpkg half-configured. Repair it before the
+    # next apt call, inside the same bound; never retry tests or extend the bound.
     if sudo timeout --kill-after=10s 180 bash -c '
         set -euo pipefail
-        source_file=$1; shift
+        attempt=$1; source_file=$2; shift 2
+        if ((attempt > 1)); then
+            echo "Repair interrupted package configuration before attempt $attempt."
+            DEBIAN_FRONTEND=noninteractive dpkg --configure -a
+        fi
         options=(-o Acquire::Retries=0 -o Acquire::http::Timeout=30 -o Acquire::https::Timeout=30 -o APT::Update::Error-Mode=any)
         if [[ -n "$source_file" ]]; then
             options+=(-o "Dir::Etc::sourcelist=$source_file" -o "Dir::Etc::sourceparts=$(dirname "$source_file")/orbite-apt-sourceparts")
         fi
         apt-get "${options[@]}" update
         DEBIAN_FRONTEND=noninteractive apt-get "${options[@]}" install -y --no-install-recommends "$@"
-    ' _ "$source_file" "${missing[@]}"; then
+    ' _ "$attempt" "$source_file" "${missing[@]}"; then
         echo "Native dependencies succeeded on attempt $attempt/3 ($mirror)."
         exit 0
     else

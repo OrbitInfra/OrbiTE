@@ -3,11 +3,17 @@ name: Native runtime isolation
 on:
   push:
     branches: [main]
+    paths-ignore: ['docs/**', 'README.md', 'AGENTS.md']
   pull_request:
+    paths-ignore: ['docs/**', 'README.md', 'AGENTS.md']
   workflow_dispatch:
 
 permissions:
   contents: read
+
+concurrency:
+  group: native-runtime-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   no-native-libraries:

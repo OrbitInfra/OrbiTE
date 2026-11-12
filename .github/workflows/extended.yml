@@ -1,0 +1,21 @@
+name: Extended validation
+
+on:
+  schedule:
+    - cron: '23 2 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  gates:
+    uses: ./.github/workflows/ci.yml
+    with:
+      extended: true
+  wheels:
+    uses: ./.github/workflows/python.yml
+    with:
+      extended: true
+  oracle:
+    uses: ./.github/workflows/native-cpu.yml
