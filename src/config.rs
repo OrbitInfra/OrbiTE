@@ -8,6 +8,7 @@ use crate::{Error, Result};
 pub(crate) mod json;
 
 /// Host staging location, resolved independently by each GPU owner.
+/// This enum is non-exhaustive; consumers must handle unknown variants.
 #[cfg(feature = "cuda")]
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[non_exhaustive]

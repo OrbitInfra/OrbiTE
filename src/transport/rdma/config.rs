@@ -15,7 +15,6 @@ pub enum RdmaHostMemory {
     #[default]
     Direct,
     /// Isolate application bytes in private host staging until completion.
-    /// Copy through retained pinned host chunks; the default CUDA policy.
     Staged,
 }
 
