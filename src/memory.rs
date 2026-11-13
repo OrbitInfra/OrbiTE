@@ -60,7 +60,8 @@ pub(crate) fn checked_range(offset: usize, length: usize, capacity: usize) -> Re
 /// Stable host backing and its shared access lock.
 /// Registrations and admitted work retain this owner. Use engine close/drain
 /// and the relevant batch's [`crate::Batch::locally_drained`] receipt before
-/// reusing externally owned bytes; timeout, cancel and handle drop are not receipts. Use the same `Arc<HostMemory>`
+/// reusing externally owned bytes; timeout, cancel and handle drop are not receipts.
+/// Use the same `Arc<HostMemory>`
 /// for overlapping registrations, including registrations in different engines.
 /// Direct RDMA leases exclude conflicting access until native teardown succeeds.
 /// `HostMemory::new` does not pin pages. CUDA-pinned construction retains its
@@ -529,7 +530,7 @@ impl HostMemory {
     ///
     /// # Errors
     /// Returns [`Error::InvalidRange`] for an invalid extent, [`Error::Unavailable`]
-    /// for an unavailable NUMA node, and [`Error::Backend`] for mapping or binding failure.
+    /// for an unavailable NUMA node, and [`Error::Io`] for discovery, mapping or binding failure.
     /// A failed cleanup returns [`Error::Unquiesced`] and retains the mapping.
     #[cfg(target_os = "linux")]
     #[cfg_attr(docsrs, doc(cfg(target_os = "linux")))]
@@ -654,7 +655,6 @@ impl HostMemory {
         self.length == 0
     }
 
-    /// Returns unavailable if a conflicting direct RDMA lease is still held.
     /// Copy a checked range into a host slice under the backing access guard.
     ///
     /// # Errors
@@ -687,7 +687,6 @@ impl HostMemory {
         Ok(())
     }
 
-    /// Returns unavailable if a conflicting direct RDMA lease is still held.
     /// Copy a host slice into a checked range under the backing access guard.
     ///
     /// # Errors

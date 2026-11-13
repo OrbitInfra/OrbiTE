@@ -88,11 +88,9 @@ pub struct ReceiverCreditUpdateV1 {
     pub receiver_session_id: SourceEpoch,
     /// Application credit class, required to agree across a session.
     pub qos_class: u32,
-    /// Receiver ledger generation, distinct from the process SourceEpoch.
     /// Receiver ledger generation; distinct from the source process epoch.
     pub epoch: u64,
     /// Monotonic update order within the ledger generation.
-    /// Latest accepted cumulative update sequence.
     pub sequence: u64,
     /// Zero has no expiry. Freshness gates new reservations, not reserved work.
     pub freshness_ttl_ms: u32,

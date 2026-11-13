@@ -10,9 +10,9 @@ use crate::{Error, Result, SourceEpoch};
 
 use super::protocol::{CreditReport, CreditSnapshot};
 
-/// Receiver-owned cooperative windows. Counts cover public payload submissions,
+/// Receiver-owned cooperative windows. Counts cover admitted physical requests,
 /// not physical receive queues or authenticated tenants. Closed sessions retain
-/// tombstones until the receiver engine exits.
+/// tombstones until the receiver engine exits. Engine construction validates all windows.
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
 #[derive(serde::Deserialize)]
