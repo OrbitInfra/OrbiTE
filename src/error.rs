@@ -1,57 +1,99 @@
+#![deny(missing_docs)]
+
 use std::fmt;
 use std::io;
 
+/// A fallible OrbiTE operation. An error alone is not a physical retirement receipt.
 pub type Result<T> = std::result::Result<T, Error>;
 
+/// Configuration, admission, transfer or retirement failure.
+///
+/// Inspect [`crate::TransferFailure::remote_effect`] for a failed WRITE. An
+/// unknown effect is never replayed. Timeout and cancellation do not release
+/// backing; `Unquiesced` retains native owners and their charges.
+/// This enum is non-exhaustive; consumers must handle unknown variants.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum Error {
+    /// A typed configuration field violates its construction-time bounds.
     InvalidConfig(&'static str),
     /// The JSON loader rejected a path before starting any engine owner.
     Config {
+        /// JSON field path, or the configuration document path.
         path: String,
+        /// Explanation of the rejected value or input.
         reason: String,
     },
     /// JSON syntax/schema diagnostics, including the offending QoS field.
     InvalidQosConfig(String),
+    /// A selector rule or QP pool is invalid before admission.
     InvalidSelectorConfig(String),
+    /// A named or matched policy cannot select an eligible route.
     TransportPolicy {
+        /// Policy responsible for the rejection.
         policy: crate::PolicyName,
+        /// Missing capability, unsupported hint or exhausted candidate reason.
         reason: &'static str,
     },
+    /// Batch resources are still owned by work that has not physically drained.
     BatchBusy,
+    /// A batch is sealed for submission, freed, or no longer available.
     BatchClosed,
+    /// Waiting for a stable terminal result requires sealing the batch first.
     BatchOpen,
+    /// Requester admission has been closed.
     RequesterClosed,
     /// This endpoint/source epoch was permanently retired on this engine.
     PeerClosed,
+    /// A public task index is outside the submitted range.
     InvalidTask,
+    /// Cancellation was observed; inspect the separate retirement receipt.
     Cancelled,
     /// Native work or teardown has no proven quiescence; owners stay charged.
     Unquiesced {
+        /// Native operation whose completion or cleanup could not be proved.
         operation: &'static str,
+        /// Native status or errno retained for diagnostics.
         code: i32,
     },
+    /// A provider, native library, capability or requested operation is unavailable.
     Unavailable(&'static str),
+    /// A checked native call failed; retirement is reported separately.
     Backend {
+        /// Failing native operation.
         operation: &'static str,
+        /// Native status or errno.
         code: i32,
     },
+    /// A range is empty, overflows, or exceeds its allocation or registration.
     InvalidRange,
+    /// The registration or file does not grant the requested access.
     PermissionDenied,
+    /// No current registration contains the requested range or identifier.
     RegionNotFound,
+    /// A registration or segment belongs to another engine.
     ForeignRegistration,
+    /// A local file handle is closed or does not belong to this engine.
     FileSegmentClosed,
+    /// A resolved QoS policy belongs to another engine.
     ForeignQosPolicy,
+    /// Overlapping registrations do not share the required allocation owner.
     RegistrationConflict,
+    /// Source admission has been closed.
     SourceClosed,
+    /// A peer or credit generation differs from the authoritative expected epoch.
     EpochMismatch,
+    /// A bounded owner, byte, descriptor or queue budget cannot admit more work.
     ResourceExhausted,
+    /// A peer message, descriptor or serialized identity violates the protocol.
     Protocol(&'static str),
+    /// A deadline elapsed; this does not prove physical termination.
     Timeout,
     /// Dispatch prediction exceeded the configured local deadline threshold.
     DeadlineInfeasible,
+    /// An invariant, synchronization primitive or internal owner failed.
     Internal(&'static str),
+    /// An operating-system I/O operation failed.
     Io(io::Error),
 }
 

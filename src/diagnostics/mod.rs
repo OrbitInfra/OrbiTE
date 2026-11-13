@@ -1,47 +1,81 @@
 //! Offline build diagnostics. The version collector reads compile-time facts only.
+#![deny(missing_docs)]
+
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, fmt::Write};
 
+/// Package version embedded at build time.
 pub const BUILD_VERSION: &str = env!("CARGO_PKG_VERSION");
+/// Build revision, or the build script's unknown marker when unavailable.
 pub const BUILD_COMMIT: &str = env!("ORBITE_BUILD_COMMIT");
+/// Schema identifier for serialized diagnostic snapshots.
 pub const SCHEMA_VERSION: u32 = 1;
 
+/// Result of one offline diagnostic.
+/// This enum is non-exhaustive; consumers must handle unknown variants.
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 #[non_exhaustive]
 pub enum Outcome {
+    /// The check succeeded.
     Pass,
+    /// The check completed with a warning.
     Warn,
+    /// The check failed.
     Fail,
+    /// The check did not run.
     Skip,
 }
 
+/// One diagnostic result and suggested remedial actions.
 #[derive(Debug, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct Check {
+    /// Machine-readable check identifier.
     pub id: String,
+    /// Result severity; not a transfer completion receipt.
     pub outcome: Outcome,
+    /// Human-readable result.
     pub summary: String,
+    /// Suggested actions, in display order.
     pub remediation: Vec<String>,
 }
+/// Compile-time build identity; querying it never loads a provider.
 #[derive(Debug, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct BuildInfo {
+    /// Package version.
     pub version: String,
+    /// Build revision or unknown marker.
     pub commit: String,
+    /// Cargo profile recorded by the build script.
     pub build_type: String,
+    /// Compiler identity recorded at build time.
     pub compiler: String,
+    /// Compiled transports and features; true does not establish runtime availability.
     pub features: BTreeMap<String, bool>,
 }
+/// Offline diagnostic report; it owns metadata, not an engine or native resources.
 #[derive(Debug, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct Snapshot {
+    /// Schema identifier for consumers of the JSON form.
     pub schema_version: u32,
+    /// Diagnostic command that produced this snapshot.
     pub command: String,
+    /// Compile-time identity.
     pub build: BuildInfo,
+    /// Individual results in display order.
     pub checks: Vec<Check>,
 }
 
+/// Collect version and compiled features without starting an engine or using the network.
+///
+/// # Examples
+/// ```
+/// let snapshot = orbite::diagnostics::version_snapshot();
+/// assert_eq!(snapshot.build.version, orbite::diagnostics::BUILD_VERSION);
+/// ```
 pub fn version_snapshot() -> Snapshot {
     Snapshot {
         schema_version: SCHEMA_VERSION,
@@ -76,9 +110,14 @@ pub fn version_snapshot() -> Snapshot {
     }
 }
 impl Snapshot {
+    /// Serialize the snapshot as pretty-printed JSON.
+    ///
+    /// # Errors
+    /// Returns a `serde_json::Error` if serialization fails; no engine operation is performed.
     pub fn render_json(&self) -> serde_json::Result<String> {
         serde_json::to_string_pretty(self)
     }
+    /// Render build identity and check results for a human reader.
     pub fn render_text(&self) -> String {
         let mut out = format!(
             "OrbiTE diagnostics schema: {}\nCommand: {}\nVersion: {}\nCommit: {}\nBuild type: {}\nCompiler: {}\nFeatures:",
@@ -114,6 +153,8 @@ impl Snapshot {
         }
         out
     }
+    /// Return the CLI severity code: success 0, failed checks 1, unavailable probes 3,
+    /// internal failures 4. Warnings count as 1 only when `warnings_are_errors` is true.
     pub fn exit_code(&self, warnings_are_errors: bool) -> u8 {
         self.checks
             .iter()

@@ -1,3 +1,5 @@
+#![deny(missing_docs)]
+
 mod issuer;
 pub(crate) mod protocol;
 mod sync;
@@ -18,11 +20,14 @@ use crate::{Error, RemoteSegment, Result, SourceEpoch};
 use super::admission_queue::LocalTransferAdmissionQueue;
 
 /// Receiver ledger resources, measured in data bytes or named slot counts.
+/// This enum is non-exhaustive; consumers must handle unknown variants.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u16)]
 #[non_exhaustive]
 pub enum CreditResource {
+    /// Payload-byte authority.
     DataBytes = 1,
+    /// Physical-request authority, shared by merged aliases.
     RequestSlots = 2,
     /// A named manual ledger resource; automatic remote Pin charges its source leases separately.
     StagingSlots = 3,
@@ -42,16 +47,21 @@ impl CreditResource {
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct CreditBalance {
+    /// Cumulative authority granted in the current ledger generation.
     pub granted: u64,
+    /// Cumulative authority reserved or consumed in that generation.
     pub consumed: u64,
     /// Zero until an update is fresh and the binding remains open.
     pub available: u64,
 }
 
+/// One cumulative resource grant; this is authority, not a completion receipt.
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
 pub struct CreditAmount {
+    /// Resource whose cumulative grant is being updated.
     pub resource: CreditResource,
+    /// Total grant in bytes or slots; never a delta.
     pub grant_total: u64,
 }
 
@@ -70,14 +80,19 @@ impl CreditAmount {
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct ReceiverCreditUpdateV1 {
+    /// Update schema; retain the value supplied by the constructor.
     pub schema_version: u16,
+    /// Reserved flags; must be zero when the update is applied.
     pub flags: u16,
     /// The authoritative RemoteSegment source epoch is the receiver session.
     pub receiver_session_id: SourceEpoch,
+    /// Application credit class, required to agree across a session.
     pub qos_class: u32,
     /// Receiver ledger generation, distinct from the process SourceEpoch.
+    /// Receiver ledger generation; distinct from the source process epoch.
     pub epoch: u64,
     /// Monotonic update order within the ledger generation.
+    /// Latest accepted cumulative update sequence.
     pub sequence: u64,
     /// Zero has no expiry. Freshness gates new reservations, not reserved work.
     pub freshness_ttl_ms: u32,
@@ -108,33 +123,50 @@ impl ReceiverCreditUpdateV1 {
     }
 }
 
+/// Result of applying a cumulative update.
+/// This enum is non-exhaustive; handle unknown variants.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum CreditUpdateDisposition {
+    /// The next ordered update was installed.
     Applied,
+    /// The update was already seen or superseded; no grant was added.
     DuplicateOrOld,
+    /// An intervening update is missing; no grant was added.
     SequenceGap,
 }
 
+/// Sender-side credit snapshot; availability never implies earlier work has drained.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct ReceiverCreditStats {
+    /// Whether the receiver supplies updates over the control service.
     pub automatic: bool,
     /// Successful data groups whose actual owners have been released.
     pub completed_bytes: u64,
+    /// Successful physical requests whose owners have been released.
     pub completed_requests: u64,
+    /// Receiver ledger generation; distinct from the source process epoch.
     pub epoch: u64,
+    /// Application credit class, required to agree across a session.
     pub qos_class: u32,
+    /// Latest accepted cumulative update sequence.
     pub sequence: u64,
+    /// Whether this binding accepts new reservations.
     pub open: bool,
+    /// Whether a non-expired update authorizes new work.
     pub fresh: bool,
+    /// Admitted owners still holding a credit binding.
     pub active_owners: usize,
+    /// Owners with credits reserved, including work not yet dispatched.
     pub reserved_owners: usize,
     /// Zero while fenced or stale, even if the cumulative balance is positive.
     pub available_bytes: u64,
+    /// Unspent request authority; zero while fenced or stale.
     pub available_requests: u64,
     /// Includes reservations not yet handed to a transport.
     pub consumed_bytes: u64,
+    /// Cumulative request authority used, including reservations.
     pub consumed_requests: u64,
     balances: [CreditBalance; RESOURCES],
 }

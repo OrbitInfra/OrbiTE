@@ -1,15 +1,21 @@
 //! Multi-node NVLink capability and cooperative relocation.
+#![deny(missing_docs)]
+
 #[cfg(feature = "cuda")]
 mod runtime;
 use crate::{Error, MemoryType, Result, SourceEpoch};
 
+/// CUDA mapping export format, selected at construction.
+/// This enum is non-exhaustive; handle unknown variants.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MnnvlHandleType {
     #[default]
+    /// Fabric handle for cooperating devices in a declared domain; the default.
     Fabric,
+    /// POSIX descriptor handle restricted to cooperating processes on one host.
     PosixFd,
 }
 

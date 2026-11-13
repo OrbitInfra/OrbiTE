@@ -6,6 +6,8 @@ pub(crate) const MAX_RAILS: usize = 16;
 /// Persistent IPv4 payload lanes and their resource limits. Disabled by default;
 /// enabling HP-TCP requires disabling ordinary TCP payloads. The engine retains
 /// its separate control listener. Tasks and byte charges survive until lane drain.
+/// Engine construction validates enabled settings; listener addresses are resolved
+/// at bind. Timeout values must fit the monotonic clock.
 #[derive(Clone, Debug, serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 #[non_exhaustive]

@@ -119,6 +119,9 @@ jobs:
         run: python3 tests/hardware/build_installed.py --consumer gds-p10 --toolchain "$RUSTUP_TOOLCHAIN" --output "$RUNNER_TEMP/gds-p10-installed"
       - name: Clippy
         run: cargo clippy --workspace --locked --features "$ORBITE_FEATURES" --all-targets -- -D warnings
+      - name: Enforce core and RDMA public documentation
+        if: matrix.features == '' || matrix.features == 'rdma' || matrix.features == 'rdma-adaptive'
+        run: cargo rustdoc --locked --lib --features "$ORBITE_FEATURES" -- -D missing-docs -D rustdoc::broken_intra_doc_links -D rustdoc::invalid_html_tags
       - name: Audit the public Rust documentation
         if: matrix.features == 'rdma,cuda,io-uring,gds,metrics,rdma-adaptive'
         run: |

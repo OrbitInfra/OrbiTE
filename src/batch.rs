@@ -1,3 +1,5 @@
+#![deny(missing_docs)]
+
 use crate::notification::NotificationHook;
 use crate::runtime::admission_queue::QueueTicket;
 use crate::runtime::request_merge::{Alias, TaskMap};
@@ -17,27 +19,38 @@ use crate::{
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct BatchId(u64, crate::SourceEpoch);
 impl BatchId {
+    /// Numeric identifier for diagnostics; the engine identity remains part of this handle.
     pub fn as_u64(self) -> u64 {
         self.0
     }
 }
 
+/// Logical task outcome, independent of [`TaskStatus::locally_drained`].
+/// This enum is non-exhaustive; consumers must handle unknown variants.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum TaskState {
+    /// Admitted but awaiting dispatch or a preceding owner.
     Waiting,
+    /// A physical owner is executing the request.
     Running,
+    /// All requested bytes completed successfully.
     Completed,
+    /// The owner failed; its failure and retirement receipt are separate fields.
     Failed,
+    /// The owner observed cancellation; physical retirement may still be pending.
     Cancelled,
+    /// A predecessor prevented this task from executing.
     Skipped,
 }
 impl TaskState {
+    /// Whether the logical outcome is final, without proving buffer retirement.
     pub fn is_terminal(self) -> bool {
         !matches!(self, Self::Waiting | Self::Running)
     }
 }
 
+/// A public alias's result and the shared physical owner's retirement receipt.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct TaskStatus {
@@ -47,7 +60,9 @@ pub struct TaskStatus {
     pub transport: crate::Transport,
     /// Additional attempts, excluding the first dispatch.
     pub failover_count: usize,
+    /// Logical state; terminal states can still retain native owners.
     pub state: TaskState,
+    /// READ into local memory or WRITE from local memory.
     pub operation: TransferOp,
     /// Contiguous completed byte prefix of this public task, including a short failure.
     pub transferred_bytes: usize,
@@ -59,27 +74,41 @@ pub struct TaskStatus {
     pub failure: Option<Arc<TransferFailure>>,
 }
 
+/// Logical batch state. Check [`BatchStatus::locally_drained`] before releasing backing.
+/// This enum is non-exhaustive; consumers must handle unknown variants.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum BatchState {
     /// Additional submissions are allowed; completed tasks never regress.
     Open,
+    /// Sealed, with tasks or attached notifications still pending.
     Pending,
+    /// Sealed with no failed or cancelled task; inspect notifications separately.
     Completed,
+    /// Sealed, with at least one failed task.
     Failed,
+    /// Sealed, with cancellation and no higher-precedence failure.
     Cancelled,
 }
 
+/// Aggregate logical state and physical retirement snapshot for a batch.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct BatchStatus {
+    /// Logical aggregate; an open batch can accept more work.
     pub state: BatchState,
+    /// Number of admitted public tasks, including merged aliases.
     pub submitted_tasks: usize,
+    /// Number of individually successful public tasks, not a prefix length.
     pub completed_tasks: usize,
+    /// Sum of physical owners' successful byte prefixes, including short failures.
+    /// Merged aliases do not double count bytes.
     pub transferred_bytes: usize,
+    /// All physical owners have retired; terminal state alone is insufficient.
     pub locally_drained: bool,
 }
 impl BatchStatus {
+    /// Whether a sealed batch has a logical result, independent of physical retirement.
     pub fn is_terminal(self) -> bool {
         matches!(
             self.state,
@@ -88,14 +117,21 @@ impl BatchStatus {
     }
 }
 
+/// Result of one append operation, preserving completed-prefix accounting.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct SubmissionStatus {
+    /// Half-open public task interval belonging to this submission.
     pub tasks: Range<usize>,
+    /// Number of consecutive successful requests before the first failure.
     pub completed_requests: usize,
+    /// Bytes in that fully successful request prefix only.
     pub transferred_bytes: usize,
+    /// First failure and its affected public task interval, when known.
     pub failure: Option<Arc<TransferFailure>>,
+    /// Attached notification outcome, separate from payload success.
     pub notification: Arc<NotificationStatus>,
+    /// Whether this submission's physical owners have retired.
     pub locally_drained: bool,
 }
 
@@ -122,6 +158,9 @@ struct Group {
 /// Multiple submit groups append atomically. Seal freezes the batch's terminal
 /// status. Dropping this handle detaches accepted work while retaining its
 /// engine, buffers, registration and budget until the worker exits.
+/// Cancellation, timeout and drop do not prove retirement. Inspect
+/// [`Self::locally_drained`] or the receipt in [`TaskStatus`]. Failed native
+/// cleanup publishes [`Error::Unquiesced`] and keeps its owners and charges.
 pub struct Batch {
     engine: Option<Arc<TransferEngine>>,
     progress: Option<Arc<BatchProgress>>,
@@ -200,9 +239,17 @@ impl Batch {
     fn progress(&self) -> Result<&Arc<BatchProgress>> {
         self.progress.as_ref().ok_or(Error::BatchClosed)
     }
+    /// Return the identity used by [`TransferEngine::progress_batch`].
+    ///
+    /// # Errors
+    /// Returns [`Error::BatchClosed`] after this handle is freed.
     pub fn id(&self) -> Result<BatchId> {
         Ok(self.progress()?.reservation.id)
     }
+    /// Reserved public task slots, including slots not yet submitted.
+    ///
+    /// # Errors
+    /// Returns [`Error::BatchClosed`] after this handle is freed.
     pub fn capacity(&self) -> Result<usize> {
         Ok(self.progress()?.reservation.capacity)
     }
@@ -210,6 +257,12 @@ impl Batch {
     /// Validates every range and reserves all physical owners before enqueue.
     /// A rejected group adds no task indices and does not replay earlier groups.
     /// The deadline begins here and includes queue time.
+    ///
+    /// # Errors
+    /// [`Error::BatchClosed`] rejects a sealed/freed batch; [`Error::ResourceExhausted`]
+    /// rejects insufficient capacity. Preparation can return the admission errors
+    /// documented by [`TransferEngine::submit_and_wait`]. After admission, failures
+    /// appear in task status; an unknown WRITE effect is never replayed.
     pub fn submit<'a>(
         &mut self,
         operation: TransferOp,
@@ -229,6 +282,10 @@ impl Batch {
     /// Attach one logical notification for each distinct destination after
     /// this memory submission succeeds. Progress can retry a definitely
     /// unposted target within the submission deadline.
+    ///
+    /// # Errors
+    /// Returns the same admission errors as [`Self::submit`], and
+    /// [`Error::ResourceExhausted`] when notification targets exceed the budget.
     pub fn submit_with_notification_targets(
         &mut self,
         operation: TransferOp,
@@ -316,6 +373,7 @@ impl Batch {
     /// Submit one C-style interval spanning several targets or opcodes. Prepare
     /// every group before publishing any task. An attached notification belongs
     /// to the entire interval and fires once per distinct memory target.
+    #[doc(hidden)]
     pub fn submit_groups(
         &mut self,
         groups: &[(TransferOp, TransferTarget<'_>, &[TransferRequest])],
@@ -554,6 +612,9 @@ impl Batch {
 
     /// Stops appending. A terminal failure can retain unquiesced native work;
     /// inspect locally_drained before free. An empty sealed batch completes.
+    ///
+    /// # Errors
+    /// Returns [`Error::BatchClosed`] after this handle is freed.
     pub fn seal(&mut self) -> Result<()> {
         let progress = self.progress()?;
         progress.lock().sealed = true;
@@ -561,12 +622,22 @@ impl Batch {
         Ok(())
     }
 
+    /// Read aggregate status, allowing a proven-safe retry when configured.
+    /// This does not wait for physical retirement. Unknown WRITEs never retry.
+    ///
+    /// # Errors
+    /// Returns [`Error::BatchClosed`] after this handle is freed.
     pub fn status(&self) -> Result<BatchStatus> {
         let p = self.progress()?;
         let mut state = p.lock();
         p.observe_retry(&mut state, None);
         Ok(state.status())
     }
+    /// Read one public task, allowing its owner's configured safe retry.
+    ///
+    /// # Errors
+    /// Returns [`Error::BatchClosed`] after free or [`Error::InvalidTask`] for an
+    /// index outside the submitted range. Transfer failures are in the result.
     pub fn task_status(&self, task: usize) -> Result<TaskStatus> {
         let p = self.progress()?;
         let mut state = p.lock();
@@ -574,6 +645,10 @@ impl Batch {
         p.observe_retry(&mut state, Some(owner));
         state.public_status(task)
     }
+    /// Read all public aliases, allowing configured safe retries of their owners.
+    ///
+    /// # Errors
+    /// Returns [`Error::BatchClosed`] after free. Transfer failures remain in each status.
     pub fn task_statuses(&self) -> Result<Vec<TaskStatus>> {
         let p = self.progress()?;
         let mut s = p.lock();
@@ -583,6 +658,10 @@ impl Batch {
     /// Snapshot one public task or the entire batch without voting on a retry,
     /// waking a worker, or waiting for native retirement. A terminal state alone
     /// is not a release receipt; inspect `locally_drained` before releasing owners.
+    ///
+    /// # Errors
+    /// Returns [`Error::BatchClosed`] after free or [`Error::InvalidTask`] for
+    /// an index outside the submitted range.
     pub fn observe_tasks(&self, task: Option<usize>) -> Result<Vec<TaskStatus>> {
         let state = self.progress()?.lock();
         match task {
@@ -594,10 +673,17 @@ impl Batch {
     }
 
     /// Inspect the retirement receipt without polling a pending transport attempt.
+    ///
+    /// # Errors
+    /// Returns [`Error::BatchClosed`] after free. A `false` receipt retains backing.
     pub fn locally_drained(&self) -> Result<bool> {
         Ok(self.progress()?.lock().status().locally_drained)
     }
 
+    /// Observe append results without advancing a transport or voting on retries.
+    ///
+    /// # Errors
+    /// Returns [`Error::BatchClosed`] after free.
     pub fn submissions(&self) -> Result<Vec<SubmissionStatus>> {
         Ok(self
             .progress()?
@@ -611,12 +697,22 @@ impl Batch {
     /// Cancel a queued physical owner through any public alias. Running RDMA
     /// drops only unposted slices. A running transport without cancellation
     /// support returns Unavailable. A cancel never proves physical quiescence.
+    /// `Ok(false)` means no cancellation was accepted; merged aliases share the
+    /// physical owner's cancellation. Inspect its retirement receipt separately.
+    ///
+    /// # Errors
+    /// Returns [`Error::BatchClosed`] after free, [`Error::InvalidTask`] for an
+    /// unknown alias, or [`Error::Unavailable`] for an uncancellable running owner.
     pub fn cancel(&self, task: usize) -> Result<bool> {
         self.cancel_owners(Some(task))
     }
 
     /// Attempt every physical owner, including queued successors of a running
     /// transport that cannot cancel. Return the first unsupported operation.
+    ///
+    /// # Errors
+    /// Returns [`Error::BatchClosed`] after free or [`Error::Unavailable`] if any
+    /// running owner cannot cancel. Other owners may already have accepted cancellation.
     pub fn cancel_all(&self) -> Result<()> {
         self.cancel_owners(None).map(|_| ())
     }
@@ -700,6 +796,39 @@ impl Batch {
 
     /// Observational wait: timeout neither cancels nor frees work. Seal before
     /// waiting so a successful result is stable against later submissions.
+    /// A returned failed state can still have `locally_drained == false`.
+    ///
+    /// # Errors
+    /// Returns [`Error::BatchClosed`] after free, [`Error::BatchOpen`] before seal,
+    /// [`Error::InvalidConfig`] for an unrepresentable deadline, or [`Error::Timeout`]
+    /// while work remains. Task failures, including [`Error::Unquiesced`], stay in
+    /// task/submission status; timeout is not a release receipt.
+    ///
+    /// # Examples
+    /// ```
+    /// # fn main() -> orbite::Result<()> {
+    /// use orbite::{BatchState, EngineConfig, Permission, TransferEngine, TransferOp, TransferRequest, Transport};
+    /// use std::{sync::Arc, time::Duration};
+    /// let timeout = Duration::from_secs(5);
+    /// let source = TransferEngine::new(EngineConfig::default())?;
+    /// let exported = source.register_memory(b"KV".to_vec().into_boxed_slice(), Permission::RemoteRead)?;
+    /// let engine = Arc::new(TransferEngine::new(EngineConfig::default())?);
+    /// let local = engine.register_memory(vec![0; 2].into_boxed_slice(), Permission::LocalOnly)?;
+    /// let peer = engine.open_segment(source.endpoint(), source.source_epoch(), timeout)?;
+    /// let request = TransferRequest::new(Transport::Tcp, local.base_address(), exported.base_address(), 2);
+    /// let mut batch = engine.submit_async(TransferOp::Read, &peer, &[request], None, timeout)?;
+    /// assert_eq!(batch.wait(timeout)?.state, BatchState::Completed);
+    /// engine.close_requester(timeout)?; // physical drain before reclaiming the batch
+    /// assert!(batch.locally_drained()?);
+    /// batch.free()?;
+    /// let mut bytes = [0; 2];
+    /// local.read(0, &mut bytes)?;
+    /// assert_eq!(&bytes, b"KV");
+    /// engine.close(timeout)?;
+    /// source.close(timeout)?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn wait(&self, timeout: Duration) -> Result<BatchStatus> {
         let progress = self.progress()?;
         let mut state = progress.lock();
@@ -726,6 +855,12 @@ impl Batch {
 
     /// In event-driven mode a pending free hands ownership to deferred retirement.
     /// With the worker disabled a busy handle stays valid for retry.
+    /// Success in deferred mode invalidates this handle but is not a drain receipt.
+    /// Native cleanup failure remains retained even after the handle is gone.
+    ///
+    /// # Errors
+    /// Returns [`Error::BatchClosed`] after free or [`Error::BatchBusy`] when
+    /// deferred retirement is disabled and physical work is still retained.
     pub fn free(&mut self) -> Result<()> {
         let progress = self.progress()?;
         let drained = progress.retire(progress.defer_free)?;

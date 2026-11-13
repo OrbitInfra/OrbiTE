@@ -29,7 +29,7 @@ compatibility surfaces are out of scope.
 | Requests and outcomes | `TransferRequest`, `TransferOp`, `Transport`, `Priority`, `FileIoElement`, `BatchReport`, `TransferFailure`, `RemoteEffect`, `Error`, `Result` |
 | Registered backing | `HostMemory`, `MemoryBacking`, `RegisteredMemory`, `Permission`, `MemoryType`, `MemoryLocation`, `RangeLocation`; owned/external and range-batch registration, address resolution, unregister, guarded reads/writes |
 | Peer and file authority | `SourceEpoch`, `RemoteSegment`, `RemoteRegion`, `GpuDirectRoutes`, `TransferTarget`, `FileSegment`, `FileSegmentInfo`; endpoint/epoch discovery, open/refresh/close, file offset resolution and info |
-| Async work | `Batch`, `BatchId`, `TaskState`, `TaskStatus`, `BatchState`, `BatchStatus`, `SubmissionStatus`; allocate, append/groups, seal, observe/progress, cancel, wait, drain and free; `next_poll_delay`, `wait_before_next_poll` |
+| Async work | `Batch`, `BatchId`, `TaskState`, `TaskStatus`, `BatchState`, `BatchStatus`, `SubmissionStatus`; allocate, append, seal, observe/progress, cancel, wait, drain and free; `next_poll_delay`, `wait_before_next_poll` |
 | Notifications | `Notification`, `NotificationEffect`, `NotificationFailure`, `NotificationStatus`; attached, local and remote send, receive and delivery status |
 | Selection | `IntentType`, `PolicyName`, `SegmentType`, `SelectionPolicy`, `TransportSelectorConfig`, `QpPool`; compiled policies and named-policy resolution |
 | QoS | `QosConfig`, `QosPolicyFields`, `QosDegradedActions`, `QosTenantContract`, `QosRequestContext`, `QosUsage`, `EffectiveQosPolicy`; resolve and sample contracts |
@@ -70,11 +70,40 @@ a unique name and any count/link overrides.
 | Boundary | API decision |
 | --- | --- |
 | Primary Rust helpers | `transport_installed`, `register_memory_ranges`, `Batch::observe_tasks`, `resolve_policy_name` and `discover_peer_epoch` are documented API. Installation is not availability on a peer; observational status is not a drain receipt; discovery never replaces consumer epoch authority. |
-| Binding internals | Backing `release_owned`, registration `exclusively_held` and `shm_backing_name` are `#[doc(hidden)]`, outside the stability promise. The Python packaging crate pins the core to the exact same release because it uses these helpers. |
+| Binding internals | Backing `release_owned`, registration `exclusively_held`, `shm_backing_name` and `Batch::submit_groups` are `#[doc(hidden)]`, outside the stability promise. `TransferRequest::requiring_post_submit_cancellation` is also hidden: only internal controls use it. The Python packaging crate pins the core to the exact same release because it uses binding helpers. Use `Batch::submit` for public Rust append operations. |
 | Names | `NvlinkStats` matches `Transport::Nvlink`; `MemoryBacking` is the actual retained owner enum. `TopologyMemoryKind` describes topology entries and is distinct from registration `MemoryType`. Public TENT settings and transport-ID conversions are removed. `ReceiverCreditUpdateV1` names OrbiTE's credit-update schema. |
 | Adaptive core | The callable `rdma-adaptive` module is `#[doc(hidden)]`, unstable and outside the stability promise. It has no engine integration or consumer. Crate-private visibility creates dead-code/unused-import warnings; hiding the reference core preserves its tests without suppressing those lints. |
-| Documentation | Missing docs are not a beta publication blocker: adding documentation is non-breaking. The release-readiness audit found 668 all-feature Linux diagnostics. Before `0.1.0`, close the remaining findings and promote the CI audit to `-D missing-docs`, as required by the [release ladder](completion-plan.md#release-ladder). Ownership, receipts, epochs and units are documented at their affected entry points. |
+| Documentation | Core/runtime, memory/segments, diagnostics and CPU/RDMA settings and counters deny missing rustdoc. The [documentation audit](#documentation-closure) tracks the remaining feature-specific and Python work before `0.1.0`; it is not a hardware qualification claim. |
 | Native binding types | The deliberate cudarc stream coupling and raw owner-backed alternative below remain. Signatures may change between betas; installed GPU profiles remain unqualified. |
+
+### Documentation closure
+
+Linux audits at base `fbf21da8` and after the first documentation PR give the
+same counts on stable and Rust 1.85. Each count is a `missing_docs` diagnostic,
+including individual fields and variants. It is not a count of API invariants.
+
+| Feature set | Base | After core/RDMA documentation |
+| --- | ---: | ---: |
+| Default | 329 | 0 |
+| `rdma` | 444 | 0 |
+| `cuda` | 404 | 70 |
+| `io-uring` | 343 | 11 |
+| `gds` | 413 | 78 |
+| `metrics` | 337 | 8 |
+| `rdma,cuda,io-uring,gds,metrics,rdma-adaptive` | 550 | 97 |
+
+CI rejects missing docs for the default, `rdma` and `rdma-adaptive` builds.
+Completed owner modules also deny missing docs in combined builds; the full
+feature audit continues to report the remaining findings. The second PR closes
+CUDA/local-copy and staging owners, storage-provider counters, metrics and
+Python docstrings, then makes every feature audit fatal. The release-ladder
+item remains open until that work passes.
+
+Rustdoc includes runnable TCP construction, registration, peer-open and
+submit/wait examples. The file example compiles but does not run as a doctest:
+it needs Linux with an available io_uring facility. Owner docs separate logical
+status from physical retirement; config docs state units, defaults and
+validation points. No transfer behavior changes.
 
 ## Transfer requests
 

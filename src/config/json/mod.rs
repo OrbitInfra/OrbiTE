@@ -30,6 +30,11 @@ pub(crate) fn duration<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<D
 impl EngineConfig {
     /// Parse an OrbiTE JSON object (at most 1 MiB). Explicit input never reads
     /// ORBITE_CONF. Unknown keys, duplicate keys and wrong types are errors.
+    ///
+    /// # Errors
+    /// Returns [`Error::Config`] with a field path for malformed, oversized or non-object
+    /// JSON, duplicate/unknown keys, wrong types or rejected subsystem settings.
+    /// Provider installation is deferred to [`crate::TransferEngine::new`].
     pub fn from_json(json: &str) -> Result<Self> {
         let mut root = document::parse(json, "$")?;
         let fields = root
@@ -201,11 +206,19 @@ impl EngineConfig {
         Ok(config)
     }
     /// Read a bounded, regular UTF-8 JSON file. Does not consult the environment.
+    ///
+    /// # Errors
+    /// Returns [`Error::Config`] for an unreadable, non-regular, oversized or non-UTF-8 file,
+    /// or any document error described by [`Self::from_json`].
     pub fn from_file(path: impl AsRef<Path>) -> Result<Self> {
         Self::from_json(&document::read(path.as_ref(), "file")?)
     }
     /// Read only ORBITE_CONF: inline JSON or a file path. When absent, return
     /// typed defaults. The resulting snapshot never rereads the environment.
+    ///
+    /// # Errors
+    /// Returns [`Error::Config`] for invalid ORBITE_CONF text, a file-read failure or a
+    /// rejected JSON document. No process environment variable is modified.
     pub fn from_env() -> Result<Self> {
         let Some(input) = std::env::var_os("ORBITE_CONF") else {
             return Ok(Self::default());

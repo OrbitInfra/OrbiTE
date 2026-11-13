@@ -78,6 +78,12 @@ required profiles and evidence for each milestone.
 
 ## Current focus
 
+The active release-ladder item is [API documentation closure](#release-ladder).
+Its first PR documents core/runtime, memory/segments and CPU/RDMA APIs and
+enforces their rustdoc coverage. A second PR closes CUDA, storage-provider,
+metrics and Python documentation before the all-feature fatal audit. No
+publication or hardware verification is part of this work.
+
 Follow the maintainer's 2026-11-09 order, one PR at a time, stopping for review
 after each:
 
@@ -489,7 +495,7 @@ publish packages.
 | `0.1.0-alpha.N` | Maintainer-published milestones during early development; APIs remain unstable. The current release is `0.1.0-alpha.1`, published from main [`7cc48490`](https://github.com/OrbitInfra/OrbiTE/commit/7cc48490). |
 | `0.1.0-beta.1` | S21, S26 and per-peer retirement are complete; S24 is removed and out of scope, and S25 is deferred. The [Rust](rust-api.md#current-public-surface) and [Python](python.md#surface-and-defaults) APIs are the current beta surface, not a freeze; the [API decisions](rust-api.md#api-decisions) settle extensibility, names and hidden binding/core boundaries. TCP, HP-TCP, SHM, io_uring, configuration and Python CPU/TCP are qualified in their stated Linux CI profiles. Publication requires review of the prepared version, notes and packaging gates. Current GPU, RDMA, GDS, MNNVL/EGM, CXL and physical multi-rail profiles remain explicitly unqualified. |
 | Test consolidation (after the beta.1 surface review) | Audit `tests/unit` (about 72k lines) for repeated assertions of the same invariant through the same owner, often added by different steps; merge them into table-driven tests. Preserve every negative control and distinct failure path: timeout, cancel, partial submit, `Unquiesced`, stale epoch and each deliberate TENT difference. CPU shims and `tests/hardware` gates are out of scope. Report source/test line deltas and invariant counts before/after; the invariant count must be unchanged. Tests-only refactor: no production change and no coverage drop. |
-| API documentation closure (before `0.1.0`) | Close remaining public missing-docs findings across every feature set, then make the CI rustdoc audit enforce `-D missing-docs` on stable and Rust 1.85. Documentation additions are non-breaking and do not block beta.1. |
+| API documentation closure (before `0.1.0`) | In progress: core/runtime, memory/segments and CPU/RDMA rustdoc is complete, with fatal default/RDMA audits on stable and Rust 1.85. [Counts and remaining work](rust-api.md#documentation-closure): CUDA/local-copy/staging, storage-provider, metrics and Python docstrings still need closure. Finish by enforcing `-D missing-docs` for every feature set and the Python public-surface check. No transfer behavior change. |
 | `0.1.0` | Installed hardware verification passes for the OrbitKV-critical profiles below. The [P10 fault matrix](#p10--fault-and-physical-lifetime-acceptance) must pass on those profiles, and [P11 performance comparisons](#p11--consumers-performance-and-release) must be matched against frozen TENT. |
 | Post-0.1.0 P/D acceptance | After installed GDR/NVLink qualification, validate the [NIXL integration](nixl-backend.md) with inference consumers: decode-page abort/reuse safety, joint P/D and cache arbitration, and TTFT/ITL against NIXL+UCX and Mooncake. The backend design and upstream agreement happen earlier under [Current focus](#current-focus); OrbiTE ships no custom P/D connector. This remains a plan, not implemented or qualified integration. |
 

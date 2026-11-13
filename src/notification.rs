@@ -1,3 +1,5 @@
+#![deny(missing_docs)]
+
 use crate::runtime::control_plane::{self, Operation};
 use crate::{EngineConfig, RemoteSegment, SourceEpoch, TransferEngine};
 use std::collections::VecDeque;
@@ -13,7 +15,9 @@ use crate::{Error, Result};
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct Notification {
+    /// Application-defined routing or event name; measured in UTF-8 bytes.
     pub name: String,
+    /// Application-defined body; measured in UTF-8 bytes.
     pub message: String,
 }
 
@@ -34,6 +38,8 @@ impl Notification {
     }
 }
 
+/// Whether a failed attempt may have enqueued a notification.
+/// This enum is non-exhaustive; consumers must handle unknown variants.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum NotificationEffect {
@@ -43,10 +49,13 @@ pub enum NotificationEffect {
     Unknown,
 }
 
+/// Notification error and replay boundary, separate from transferred payload bytes.
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct NotificationFailure {
+    /// Cause of delivery failure.
     pub error: Error,
+    /// Unknown means delivery may have occurred and the attempt must not be replayed.
     pub effect: NotificationEffect,
 }
 
@@ -72,14 +81,17 @@ impl std::error::Error for NotificationFailure {
 }
 
 /// Notification completion is separate from committed transfer bytes.
+/// This enum is non-exhaustive; consumers must handle unknown variants.
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum NotificationStatus {
+    /// No notification was attached.
     NotRequested,
     /// An attached notification was skipped for an empty or failed batch.
     Skipped,
     /// The receiver enqueued the message. Application consumption is separate.
     Delivered,
+    /// Delivery failed; the nested effect distinguishes unsent from uncertain delivery.
     Failed(NotificationFailure),
 }
 

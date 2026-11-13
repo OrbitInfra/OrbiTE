@@ -1,3 +1,5 @@
+#![deny(missing_docs)]
+
 use std::net::{Ipv4Addr, SocketAddr};
 use std::time::Duration;
 
@@ -29,23 +31,32 @@ pub enum StagingLocation {
 #[serde(default, deny_unknown_fields)]
 pub struct RuntimeQueueConfig {
     /// Total queued and dispatching physical owners and their bytes.
+    /// Default 1024; nonnegative capacity, enforced on admission.
     pub max_outstanding_owners: usize,
+    /// Total queued and dispatching bytes; default 1 GiB, enforced on admission.
     pub max_outstanding_bytes: usize,
     /// Capacity which only internal staging sessions may consume.
+    /// Default zero; cannot exceed max_outstanding_owners at construction.
     pub staging_owner_reserve: usize,
+    /// Bytes reserved for staging; default zero, at most max_outstanding_bytes at construction.
     pub staging_byte_reserve: usize,
     /// Skip a dispatch reaching this predicted deadline MLU. Zero disables it.
+    /// Default zero. Must be finite; nonpositive disables dropping. Requires deadline_aware.
     pub mlu_local_threshold: f64,
     /// Promote future deadlines strictly within this slack ahead of other heads.
+    /// Nanoseconds; default zero, any u64. Used only with deadline_aware.
     pub promotion_slack_ns: u64,
     /// Maximum physical owners holding dispatch reservations simultaneously.
+    /// Default 64; must be positive at construction.
     pub max_dispatch_owners: usize,
     /// Payload bytes in the window, plus notification bytes on the first owner.
     /// An owner larger than this window is rejected before publishing tasks or doing I/O.
+    /// Default 64 MiB; must be positive at construction.
     pub max_dispatch_bytes: usize,
     /// Earliest absolute submission deadline first, with FIFO ties. False uses
     /// admission FIFO. Later groups in the same Batch wait for their predecessor.
     /// Running work is not preempted; this is independent of RDMA Priority.
+    /// Default false; validated with the queue at engine construction.
     pub deadline_aware: bool,
 }
 
@@ -66,45 +77,66 @@ impl Default for RuntimeQueueConfig {
 }
 
 /// Immutable per-engine budgets and optional provider configuration.
+/// Fields use the same names in [`Self::from_json`] unless noted otherwise.
+/// Start with [`Self::default`], then assign fields; construction validates the
+/// snapshot and never mutates the process environment.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct EngineConfig {
     /// Enable ordinary TCP payloads. The control service is independent.
+    /// Default true; selected at construction. JSON: `tcp`.
     pub tcp: bool,
+    /// Persistent CPU lanes; disabled by default, validated at construction. JSON: `hp_tcp`.
     pub hp_tcp: crate::HpTcpConfig,
+    /// Linux ring/staging settings; defaults to IoUringConfig::default, validated at construction.
     #[cfg(feature = "io-uring")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "io-uring")))]
     pub io_uring: crate::IoUringConfig,
+    /// Enable lazy Linux ring discovery on first file submission; default true.
     #[cfg(feature = "io-uring")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "io-uring")))]
     pub io_uring_enabled: bool,
+    /// Linux same-host mappings; disabled by default, validated at construction. JSON: `shm`.
     pub shm: crate::ShmConfig,
     /// Metrics snapshot; recording is opt-in through the metrics build feature.
     #[cfg(feature = "metrics")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "metrics")))]
     pub metrics: crate::metrics::MetricsConfig,
     /// Merge adjacent requests within the same pair of registered ranges.
+    /// Default true; merging preserves policy, permissions and registration identity.
     pub merge_requests: bool,
     /// Maximum additional attempts per physical owner. Zero pins the first route.
+    /// Default 3; any usize. Replay still requires proof that the previous owner retired.
     pub max_failover_attempts: usize,
     /// Status polling may advance a recoverable failure. Explicit progress and wait always can.
+    /// Default true; false makes observational polling leave retry progress to explicit calls.
     pub enable_auto_failover_on_poll: bool,
     /// Maximum number of 16 MiB slices in one cuFile batch.
     #[cfg(feature = "gds")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "gds")))]
     pub gds_batch_depth: u32,
     /// Exclude GDS from selection if cuFile permits or forces compatibility I/O.
     #[cfg(feature = "gds")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "gds")))]
     pub gds_require_native: bool,
     /// Allow lazy cuFile discovery when a file policy first considers GDS.
     /// Disabling this prevents loading libcufile or registering buffers with it.
     #[cfg(feature = "gds")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "gds")))]
     pub gds_enabled: bool,
     /// Cooperative same-host CUDA IPC. Both processes must opt in and keep the
     /// exporter alive until imports close. Handles authorize whole allocations.
     #[cfg(feature = "cuda")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "cuda")))]
     pub nvlink: bool,
     /// Single-task legacy NVLink copies strictly below this many KiB use synchronous CUDA copy.
     /// Zero selects the stream/event path for all sizes.
     #[cfg(feature = "cuda")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "cuda")))]
     pub nvlink_async_memcpy_threshold_kb: usize,
+    /// Opt-in CUDA fabric mappings; default None, mutually exclusive with nvlink at construction.
     #[cfg(feature = "cuda")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "cuda")))]
     pub mnnvl: Option<crate::MnnvlConfig>,
     /// Maximum persistent CUDA IPC imports and exports, independently per side.
     /// At capacity, cold imports reclaim the least recently used idle mapping
@@ -113,83 +145,119 @@ pub struct EngineConfig {
     /// peers to close requesters before releasing exporters. Cached exports keep
     /// their whole allocation loan until an explicit native-close receipt.
     #[cfg(feature = "cuda")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "cuda")))]
     pub nvlink_cache_entries: usize,
     /// Shared NVLink stream/event slots across actual CUDA contexts (1..=4096).
     /// Lazy creation, exclusive group leases; uncertain slots remain charged.
     #[cfg(feature = "cuda")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "cuda")))]
     pub nvlink_stream_count: usize,
     /// Per-engine lazy CUDA-pinned staging. Local copies check out one chunk;
     /// remote sessions reserve independent source and requester rings. Idle chunks are reused
     /// until engine close. Total capacity is at most 1 GiB.
     #[cfg(feature = "cuda")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "cuda")))]
     pub staging_chunk_size: usize,
+    /// Pool slots, default 64; positive with total bytes at most 1 GiB, validated at construction.
     #[cfg(feature = "cuda")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "cuda")))]
     pub staging_chunk_count: usize,
     /// Applies to engine-owned CUDA staging chunks, including both remote roles.
     #[cfg(feature = "cuda")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "cuda")))]
     pub staging_location: StagingLocation,
     /// Maximum staging slots per session and side (1..=16), bounded by the pool.
     /// The source negotiates its width. CUDA requesters reserve up to this cap
     /// before Pin, shortened by the request's local physical-chunk count.
     /// One preserves serial copies; larger values overlap CUDA work and CROSS.
     #[cfg(feature = "cuda")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "cuda")))]
     pub staging_pipeline_depth: usize,
     /// Allow incoming Pin/Delegate/Unpin sessions for this engine's CUDA ranges.
     /// Outgoing requests select remote staging independently. TCP/RDMA remain
     /// the payload transports; Direct CUDA registration can coexist with Pin.
     #[cfg(feature = "cuda")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "cuda")))]
     pub remote_staging: bool,
+    /// Linux verbs provider; None (default) avoids discovery/loading. JSON: `rdma`.
     #[cfg(feature = "rdma")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "rdma")))]
     pub rdma: Option<crate::transport::rdma::RdmaConfig>,
+    /// Control listener address, default `127.0.0.1:0`. Port zero asks the OS for a port at bind.
     pub bind_addr: SocketAddr,
+    /// Retained region budget; default 1024, valid 1..=4096 at construction.
     pub max_registered_regions: usize,
+    /// Retained registration bytes; default 1 GiB, must be positive at construction.
     pub max_registered_bytes: usize,
     /// Open or draining local file segments. Zero disables file segment opens.
+    /// Default 1024, valid 0..=4096 at construction.
     pub max_file_segments: usize,
     /// Live endpoint/epoch identities, including referenced retirement fences
     /// and failed native cleanup. Unreferenced safe entries are reclaimed; at most 4096.
     /// Also bounds each separate TCP ledger: requester lanes and source idle streams.
+    /// Default 1024, valid 1..=4096 at construction; uncertain identities stay charged.
     pub max_peer_segments: usize,
     /// Maximum descriptors in one transfer or host-registration batch.
+    /// Default 1024, must be positive at construction.
     pub max_batch_requests: usize,
+    /// Live or deferred batch slots; default 32, positive at construction.
     pub max_allocated_batches: usize,
+    /// Reserved public task slots across batches; default 32768, positive at construction.
     pub max_allocated_requests: usize,
     /// Enable event-driven batch progress. Configuring a runtime queue also enables it.
+    /// Default false; engine drop joins the optional bounded worker.
     pub enable_progress_worker: bool,
     /// Active runtime queue fallback tick. Zero disables timed wakes.
+    /// Default 50 ms; JSON `progress_fallback_interval_us` is in microseconds.
     pub progress_fallback_interval: Duration,
     /// Allow another notification provider or the control RPC after an unavailable channel.
+    /// Default true; invalid arguments never trigger fallback.
     pub notification_rpc_fallback: bool,
     /// Install the TCP notification channel. The control RPC is independent.
+    /// Default true; independent of the TCP payload switch.
     pub tcp_notifications: bool,
     /// Optional FIFO/EDF runtime queue. None preserves direct dispatch.
+    /// Default None; limits are validated at construction. JSON: `runtime_queue`.
     pub runtime_queue: Option<RuntimeQueueConfig>,
     /// Immutable typed QoS contracts. None preserves caller priorities and adds
     /// no QoS ledger. Resolved budgets cover admitted payload owners until drain.
     /// Allowing QoS delay requires runtime_queue; waiting groups still consume
     /// max_inflight_batches/bytes but acquire QoS capacity at dispatch.
+    /// Default None; names, actions and limits are compiled at construction. JSON: `qos`.
     pub qos: Option<crate::QosConfig>,
     /// Ordered transport policy. None preserves explicit routing; Unspec requests
-    /// still use default eligible NVLink -> RDMA -> TCP selection.
+    /// still use the default eligible MNNVL, NVLink, RDMA, SHM, HP-TCP, TCP order.
+    /// Default None; rules and QP pools are compiled at construction. JSON: `selector`.
     pub selector: Option<crate::TransportSelectorConfig>,
     /// Zero disables receiver credit gating. A positive limit (at most 4096)
     /// requires an activated peer session for every nonempty data submission.
     /// Bindings either accept application updates or connect to a peer issuer.
+    /// Default zero; valid 0..=4096 at construction.
     pub max_receiver_credit_sessions: usize,
     /// Receiver-side fixed cooperative windows; None allocates no issuer.
+    /// Default None; issuer windows are validated at construction. JSON: `receiver_credit`.
     pub receiver_credit: Option<crate::ReceiverCreditConfig>,
     /// Accepted outgoing calls, including queued and unquiesced submissions.
+    /// Default 32, positive at construction; timeouts do not release this charge.
     pub max_inflight_batches: usize,
+    /// Retained payload and notification bytes; default 64 MiB, positive at construction.
     pub max_inflight_bytes: usize,
+    /// Maximum bytes per request; default 8 MiB, valid 1..=64 MiB at construction.
     pub max_transfer_bytes: usize,
     /// Count and payload budgets include queued messages and incoming bodies.
+    /// Default 1024; positive at construction.
     pub max_pending_notifications: usize,
+    /// Inbox byte capacity including incoming bodies; default 1 MiB, positive at construction.
     pub max_pending_notification_bytes: usize,
     /// Combined UTF-8 bytes of a single notification name and message.
+    /// Default 64 KiB; positive, at most 64 KiB and the inbox byte budget at construction.
     pub max_notification_bytes: usize,
     /// Control workers. With incoming remote staging enabled, the source also owns
     /// up to min(handler_threads, staging_chunk_count) session workers.
+    /// Default 4; valid 1..=128 at construction.
     pub handler_threads: usize,
+    /// Per-handler I/O window, default 5 s; valid (0, 300 s] at construction.
+    /// JSON `handler_timeout_us` is in microseconds; expiry does not release live DMA.
     pub handler_timeout: Duration,
 }
 

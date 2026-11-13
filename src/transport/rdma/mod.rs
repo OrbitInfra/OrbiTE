@@ -1,11 +1,12 @@
 //! RC verbs with per-NIC contexts, shared progress and owned memory grants.
 
+#![deny(missing_docs)]
 #![allow(unsafe_code)]
 
 use crate::{Error, Result};
 
-#[cfg(feature = "rdma-adaptive")]
 /// Unstable callable reference core; no engine integration or API stability promise.
+#[cfg(feature = "rdma-adaptive")]
 #[doc(hidden)]
 pub mod adaptive_congestion_control;
 mod buffers;

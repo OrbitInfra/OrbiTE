@@ -10,6 +10,10 @@ use crate::{Error, Permission, Result, SegmentType, TransferOp};
 const DESCRIPTOR_TTL: Duration = Duration::from_secs(3600);
 
 /// An engine-local handle for a `file://` name. All aliases close together.
+/// The engine and admitted I/O own the fd; dropping this weak handle is not a
+/// drain receipt. [`crate::TransferEngine::close_file_segment`] fences aliases
+/// and waits for active borrowers. Timeout retains the fd; native cleanup
+/// failure returns [`Error::Unquiesced`] and keeps its owner.
 #[derive(Clone, Debug)]
 pub struct FileSegment(Weak<Entry>);
 
@@ -17,16 +21,23 @@ pub struct FileSegment(Weak<Entry>);
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct FileSegmentInfo {
+    /// Always the local file target kind.
     pub segment_type: SegmentType,
+    /// Local path supplied at open; the segment does not publish it to peers.
     pub path: Arc<str>,
+    /// Start offset in bytes; currently zero.
     pub offset: u64,
+    /// Snapshot file length in bytes; refresh explicitly after an external resize.
     pub length: u64,
+    /// Allowed READ/WRITE operations, fixed when the segment opens.
     pub permission: Permission,
     /// Whether a direct fd is usable. None until the first file transfer.
     #[cfg(any(feature = "io-uring", feature = "gds"))]
+    #[cfg_attr(docsrs, doc(cfg(any(feature = "io-uring", feature = "gds"))))]
     pub direct_io: Option<bool>,
     /// Effective cuFile policy at handle registration.
     #[cfg(feature = "gds")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "gds")))]
     pub gds_mode: Option<crate::GdsMode>,
 }
 
