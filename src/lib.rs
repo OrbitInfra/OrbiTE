@@ -65,7 +65,6 @@ mod runtime;
 #[cfg(not(unsupported_native_target))]
 mod segment;
 /// Transport-specific configuration and observation types.
-/// Transport-specific configuration and observation types.
 #[cfg(not(unsupported_native_target))]
 pub mod transport;
 

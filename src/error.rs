@@ -43,7 +43,7 @@ pub enum Error {
     BatchOpen,
     /// Requester admission has been closed.
     RequesterClosed,
-    /// This endpoint/source epoch was permanently retired on this engine.
+    /// This requester's retained endpoint/source-epoch identity is fenced against new work.
     PeerClosed,
     /// A public task index is outside the submitted range.
     InvalidTask,

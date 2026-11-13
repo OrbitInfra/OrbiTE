@@ -30,7 +30,7 @@ pub enum StagingLocation {
 #[derive(serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct RuntimeQueueConfig {
-    /// Total queued and dispatching physical owners and their bytes.
+    /// Total queued and dispatching physical owners.
     /// Default 1024; nonnegative capacity, enforced on admission.
     pub max_outstanding_owners: usize,
     /// Total queued and dispatching bytes; default 1 GiB, enforced on admission.
