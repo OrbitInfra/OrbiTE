@@ -8,10 +8,14 @@ use crate::{Error, Result};
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct QpPool {
+    /// Unique name, 1..=256 UTF-8 bytes. Default empty must be replaced before construction.
     pub name: String,
+    /// QP count, default 1; positive with total pool width at most 64, checked at construction.
     pub num_qp: usize,
+    /// Link service level in 0..=15; None (default) inherits RDMA settings at construction.
     #[serde(default, deserialize_with = "link_attribute")]
     pub service_level: Option<u8>,
+    /// Traffic class in 0..=255; None (default) inherits RDMA settings at construction.
     #[serde(default, deserialize_with = "link_attribute")]
     pub traffic_class: Option<u8>,
 }

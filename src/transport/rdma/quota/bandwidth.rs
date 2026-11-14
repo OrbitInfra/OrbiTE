@@ -13,21 +13,33 @@ use super::SchedulingParams;
 pub struct NicLoadStats {
     /// Failures and trial admissions on this local NIC, across peer pairs.
     pub rail_errors: u64,
+    /// Cumulative half-open trial admissions on this NIC.
     pub rail_probes: u64,
+    /// Peer rail pairs currently excluded by cooldown.
     pub open_rails: usize,
+    /// Stable topology NIC index used by device masks.
     pub device_id: usize,
+    /// Verbs provider device name.
     pub device_name: String,
+    /// Provider-reported effective link rate in Gbit/s, when known.
     pub link_speed_gbps: Option<f64>,
     /// Live slice reservations for smart selection. Round-robin keeps this zero.
     pub inflight_bytes: usize,
     /// Lifetime bytes assigned to this NIC, including retries before posting.
     pub allocated_bytes: u64,
+    /// Possibly posted payload bytes owed until validated completion or physical teardown.
     pub posted_bytes: u64,
+    /// Cumulative successfully completed payload bytes.
     pub completed_bytes: u64,
+    /// Selection bandwidth estimate in bytes/second, seeded from link or configured bandwidth.
     pub ewma_bandwidth_bps: f64,
+    /// Payload transmit bandwidth estimate in bytes/second, seeded before accepted samples.
     pub transmit_bandwidth_bps: f64,
+    /// Accepted samples used by the selection estimator.
     pub selection_samples: u64,
+    /// Accepted samples used by the transmit meter.
     pub transmit_samples: u64,
+    /// Accumulated time with payload work outstanding, including the current busy interval.
     pub busy_time: Duration,
 }
 

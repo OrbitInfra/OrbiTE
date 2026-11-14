@@ -1,3 +1,5 @@
+#![deny(missing_docs)]
+
 use std::collections::BTreeMap;
 
 #[cfg(feature = "rdma")]
@@ -6,17 +8,23 @@ mod config;
 /// Three NIC preference tiers, ordered from most preferred to fallback.
 pub const DEVICE_PRIORITY_RANKS: usize = 3;
 
+/// Network device class in a Linux topology snapshot.
+/// This enum is non-exhaustive; consumers must handle unknown variants.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum NicType {
+    /// An InfiniBand or RoCE verbs device.
     Rdma,
 }
 
 /// A host or CUDA topology location; this does not identify a registration backing.
+/// This enum is non-exhaustive; consumers must handle unknown variants.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum TopologyMemoryKind {
+    /// CPU-addressable host memory.
     Host,
+    /// NVIDIA CUDA device memory.
     Cuda,
 }
 
@@ -24,9 +32,13 @@ pub enum TopologyMemoryKind {
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct NicEntry {
+    /// Provider or location name used for topology matching.
     pub name: String,
+    /// PCI address when known; `None` does not imply locality.
     pub pci_bus_id: Option<String>,
+    /// Device or memory class.
     pub kind: NicType,
+    /// Host NUMA node when known; no placement is inferred when absent.
     pub numa_node: Option<u32>,
     /// Namespaced transport metadata; only rdma.selected marks a validated path.
     pub device_attrs: BTreeMap<String, String>,
@@ -37,10 +49,15 @@ pub struct NicEntry {
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct MemEntry {
+    /// Provider or location name used for topology matching.
     pub name: String,
+    /// PCI address when known; `None` does not imply locality.
     pub pci_bus_id: Option<String>,
+    /// Device or memory class.
     pub kind: TopologyMemoryKind,
+    /// Host NUMA node when known; no placement is inferred when absent.
     pub numa_node: Option<u32>,
+    /// NIC indices per preference tier, from preferred to fallback.
     pub device_list: [Vec<usize>; DEVICE_PRIORITY_RANKS],
 }
 
@@ -48,7 +65,9 @@ pub struct MemEntry {
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct Topology {
+    /// Discovered or configured NICs, indexed by each memory entry.
     pub nic_list: Vec<NicEntry>,
+    /// Memory locations and their ranked eligible NIC indices.
     pub mem_list: Vec<MemEntry>,
 }
 

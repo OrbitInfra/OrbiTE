@@ -1,3 +1,5 @@
+#![deny(missing_docs)]
+
 mod buffer_registry;
 mod client;
 mod config;

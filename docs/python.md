@@ -9,15 +9,19 @@ alias. Rust remains the primary interface.
 Wheels target CPython 3.10–3.14 on Linux x86_64 and aarch64. The maintainer
 publishes releases; CI builds installable review artifacts. Python beta.1 is
 `0.1.0b1`. The published profile includes RDMA, CUDA, io_uring, GDS and
-metrics (plus the hidden adaptive reference core). Wheels bundle the verbs
-runtime and its libnl dependencies; CUDA and cuFile are runtime-loaded.
+metrics (plus the hidden adaptive reference core). Verbs, CUDA and cuFile are
+loaded from the host only when requested; wheels do not bundle these native
+libraries or require them at import.
 CPU-only hosts can run the [installed quickstart](getting-started.md#installed-quickstart).
 CPU + io_uring wheels remain separate CI artifacts, not a second PyPI variant.
 A source build uses the same combined profile and needs the
 [Linux build prerequisites](build.md); it never qualifies a GPU profile.
 
 This page lists the current API, not a freeze. Breaking changes remain allowed
-between betas. The local CUDA copy API, including `LocalCopyOptions`, CTA caps
+between betas. Python signatures and ownership behavior are unchanged by the
+[core/RDMA documentation PR](rust-api.md#documentation-closure); module/stub
+docstrings and their public-surface check are in the second closure PR.
+The local CUDA copy API, including `LocalCopyOptions`, CTA caps
 and background thresholds, remains Rust-only. Python's `EngineConfig` can set
 `rdma.gpu_direct_registration` with the RDMA feature present; CUDA exports keep
 the native allocation/device checks and retained-exporter contract.

@@ -1,4 +1,6 @@
 //! First-match policy selection, resolved once before submission admission.
+#![deny(missing_docs)]
+
 mod config;
 pub(crate) mod qp_pools;
 
@@ -116,6 +118,10 @@ impl SelectionContext<'_> {
 pub struct PolicyName(Arc<str>);
 
 impl PolicyName {
+    /// Copy a bounded name; the engine resolves it to a compiled policy before admission.
+    ///
+    /// # Errors
+    /// Returns [`Error::InvalidConfig`] if the name is empty or exceeds 256 UTF-8 bytes.
     pub fn new(name: &str) -> Result<Self> {
         if name.is_empty() || name.len() > 256 {
             return Err(Error::InvalidConfig(
@@ -125,6 +131,7 @@ impl PolicyName {
         Ok(Self(Arc::from(name)))
     }
 
+    /// Borrow the name without allocating or resolving a policy.
     pub fn as_str(&self) -> &str {
         &self.0
     }

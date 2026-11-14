@@ -1,3 +1,5 @@
+#![deny(missing_docs)]
+
 use std::collections::{BTreeSet, HashMap, VecDeque};
 use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, OnceLock};
@@ -15,9 +17,11 @@ use super::receiver_credit::CreditReservation;
 pub struct RuntimeQueueStats {
     /// Includes physical owners waiting for earlier submissions in the same Batch.
     pub queued_owners: usize,
+    /// Bytes retained by queued physical owners, including queued batch predecessors.
     pub queued_bytes: usize,
     /// Includes window reservations waiting for their Batch worker to run.
     pub dispatching_owners: usize,
+    /// Bytes charged to the dispatch window until the corresponding owner retires.
     pub dispatching_bytes: usize,
     /// Physical owners dropped before payload dispatch.
     pub deadline_infeasible_drops: u64,

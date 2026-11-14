@@ -1,3 +1,5 @@
+#![deny(missing_docs)]
+
 use std::cmp::Reverse;
 use std::fmt;
 use std::fs::File;
@@ -10,10 +12,13 @@ pub(crate) use file::FileSegments;
 pub use file::{FileSegment, FileSegmentInfo};
 
 /// Target for both synchronous and asynchronous transfer submissions.
+/// This enum is non-exhaustive; consumers must handle unknown variants.
 #[derive(Clone, Copy)]
 #[non_exhaustive]
 pub enum TransferTarget<'a> {
+    /// A peer descriptor snapshot with authoritative source epoch.
     Memory(&'a RemoteSegment),
+    /// A local file handle; addresses are zero-based file byte offsets.
     File(&'a FileSegment),
 }
 
@@ -35,6 +40,8 @@ pub(crate) use metadata::SegmentMetadata;
 use crate::{Error, MemoryType, Permission, Result};
 
 /// Random source-instance identity, not an authentication credential.
+/// Display emits hexadecimal text; parsing malformed text returns [`Error::Protocol`].
+/// Pin the value obtained from the authoritative owner for the peer lifetime.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct SourceEpoch(pub(crate) [u8; 16]);
 
@@ -169,18 +176,23 @@ impl RemoteRegion {
         self.memory_type
     }
 
+    /// Source registration identity, meaningful only within its source epoch.
     pub fn id(&self) -> u64 {
         self.id
     }
+    /// Registered remote extent in bytes.
     pub fn len(&self) -> usize {
         self.length
     }
+    /// Whether the descriptor has no bytes.
     pub fn is_empty(&self) -> bool {
         self.length == 0
     }
+    /// Access granted by the source at descriptor publication.
     pub fn permission(&self) -> Permission {
         self.permission
     }
+    /// Remote virtual base address; never dereference it in the requester process.
     pub fn base_address(&self) -> u64 {
         self.address
     }
@@ -195,6 +207,11 @@ impl RemoteRegion {
 /// A requester-owned descriptor snapshot. Clones retain its admission identity.
 /// Refresh explicitly with the same authoritative epoch. To use another engine,
 /// call that engine's `open_segment`; a borrowed snapshot cannot create admission.
+/// The handle retains this requester's identity/fence entry, not the peer's
+/// allocation. Each admitted transfer acquires its own source authority.
+/// [`crate::TransferEngine::close_segment`] fences admission and drains cached
+/// owners; timeout or uncertain cleanup returns [`Error::Unquiesced`]. Dropping
+/// a descriptor is not a drain receipt.
 #[derive(Clone, Debug)]
 pub struct RemoteSegment {
     pub(crate) identity: Option<crate::runtime::segment_manager::PeerHandle>,
@@ -205,12 +222,15 @@ pub struct RemoteSegment {
 }
 
 impl RemoteSegment {
+    /// Control endpoint bound to this requester-owned snapshot.
     pub fn endpoint(&self) -> SocketAddr {
         self.endpoint
     }
+    /// Source-instance epoch supplied by the authoritative consumer registry.
     pub fn source_epoch(&self) -> SourceEpoch {
         self.epoch
     }
+    /// Registration descriptors captured at open time; refresh by reopening the same epoch.
     pub fn regions(&self) -> &[RemoteRegion] {
         &self.regions
     }
@@ -219,6 +239,10 @@ impl RemoteSegment {
     /// snapshot. Uses the first containing buffer in ascending address order,
     /// preferring the longer buffer at equal bases.
     /// This lookup does not acquire a source grant or refresh authority.
+    ///
+    /// # Errors
+    /// Returns [`Error::InvalidRange`] for an empty or overflowing range and
+    /// [`Error::RegionNotFound`] when no descriptor contains it.
     pub fn resolve_address(&self, address: u64, length: usize) -> Result<(RemoteRegion, usize)> {
         if length == 0 || address.checked_add(length as u64).is_none() {
             return Err(Error::InvalidRange);

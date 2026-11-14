@@ -75,6 +75,11 @@ impl QosConfig {
     /// Missing/null QoS, an empty object, or version alone returns None.
     /// Unknown wrapper keys and unknown/unimplemented QoS fields fail.
     /// At most 1 MiB is accepted. No engine state or files are changed.
+    ///
+    /// # Errors
+    /// Returns [`Error::InvalidQosConfig`] for malformed/oversized JSON, unknown fields
+    /// or unsupported actions; [`Error::InvalidConfig`] for invalid names or too many
+    /// contracts, and [`Error::ResourceExhausted`] for count overflow.
     pub fn from_json(json: &str) -> Result<Option<Self>> {
         if json.len() > MAX_JSON_BYTES {
             return Err(Error::InvalidQosConfig("JSON exceeds 1 MiB".into()));
@@ -121,6 +126,11 @@ impl QosConfig {
 
     /// Read at most 1 MiB plus an overflow sentinel, then load the `qos` section.
     /// Relative paths use the caller's working directory; no environment is read.
+    ///
+    /// # Errors
+    /// Returns [`Error::Io`] when reading fails or [`Error::InvalidQosConfig`] when the
+    /// document is too large or violates the QoS schema. Also forwards the name and
+    /// contract-count errors of [`Self::from_json`].
     pub fn from_json_file(path: impl AsRef<Path>) -> Result<Option<Self>> {
         let mut json = String::new();
         File::open(path)?

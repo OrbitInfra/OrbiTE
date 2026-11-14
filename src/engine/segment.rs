@@ -30,6 +30,11 @@ impl TransferEngine {
     /// while admitted work drains. Once native cleanup has started, its result
     /// is final: uncertain destroys are never retried. The timeout bounds waits,
     /// not native provider calls that cannot be preempted.
+    ///
+    /// # Errors
+    /// Returns [`Error::InvalidConfig`] on deadline overflow, [`Error::ResourceExhausted`]
+    /// if a new fence cannot be charged, and [`Error::Unquiesced`] when drain or native
+    /// cleanup is unproven. Failed cleanup stays charged; other peers remain unaffected.
     pub fn close_segment(
         &self,
         endpoint: SocketAddr,

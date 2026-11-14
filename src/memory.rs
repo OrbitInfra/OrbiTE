@@ -1,3 +1,5 @@
+#![deny(missing_docs)]
+
 use std::cmp::Reverse;
 use std::collections::BTreeMap;
 use std::fmt;
@@ -15,13 +17,19 @@ use crate::{Error, RemoteRegion, Result, SourceEpoch};
 mod location;
 pub use location::{MemoryLocation, MemoryType, RangeLocation};
 
+/// Source-enforced remote access for a registration. Local access still follows its loans.
+/// This enum is non-exhaustive; handle unknown variants.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u8)]
 #[non_exhaustive]
 pub enum Permission {
+    /// Keep the range local; peers cannot read or write it.
     LocalOnly = 0,
+    /// Allow peers to read, but not write, the range.
     RemoteRead = 1,
+    /// Allow peers to write, but not read, the range.
     RemoteWrite = 2,
+    /// Allow both remote operations.
     RemoteReadWrite = 3,
 }
 
@@ -49,7 +57,11 @@ pub(crate) fn checked_range(offset: usize, length: usize, capacity: usize) -> Re
     Ok(offset..end)
 }
 
-/// Stable host backing and its shared access lock. Use the same `Arc<HostMemory>`
+/// Stable host backing and its shared access lock.
+/// Registrations and admitted work retain this owner. Use engine close/drain
+/// and the relevant batch's [`crate::Batch::locally_drained`] receipt before
+/// reusing externally owned bytes; timeout, cancel and handle drop are not receipts.
+/// Use the same `Arc<HostMemory>`
 /// for overlapping registrations, including registrations in different engines.
 /// Direct RDMA leases exclude conflicting access until native teardown succeeds.
 /// `HostMemory::new` does not pin pages. CUDA-pinned construction retains its
@@ -236,6 +248,9 @@ impl HostMemory {
     /// Inspect a bounded range without touching payload bytes or waiting for
     /// producers. Ordinary/external DRAM placement remains unknown; CUDA-pinned
     /// memory is still CPU memory and only a bound mapping claims a NUMA node.
+    ///
+    /// # Errors
+    /// Returns [`Error::InvalidRange`] for an invalid view.
     pub fn location(&self, offset: usize, length: usize) -> Result<RangeLocation> {
         checked_range(offset, length, self.length)?;
         Ok(RangeLocation {
@@ -334,6 +349,7 @@ impl HostMemory {
     /// `Arc<HostMemory>`. A pre-capture admission error leaves work caller-owned;
     /// unproven capture/completion fences and retains the actual native owners.
     #[cfg(feature = "cuda")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "cuda")))]
     #[allow(unsafe_code)]
     pub unsafe fn record_producer_stream(
         &self,
@@ -492,6 +508,10 @@ impl HostMemory {
             .map_err(|_| Error::Unavailable("SHM mapping still has live owners"))?
             .retire()
     }
+    /// Take ownership of nonempty ordinary host bytes without pinning pages.
+    ///
+    /// # Errors
+    /// Returns [`Error::InvalidRange`] for an empty allocation.
     pub fn new(bytes: Box<[u8]>) -> Result<Self> {
         if bytes.is_empty() {
             return Err(Error::InvalidRange);
@@ -507,7 +527,13 @@ impl HostMemory {
 
     /// Allocate on an explicit allowed Linux NUMA node. Failure to bind returns
     /// an error before publishing the pointer.
+    ///
+    /// # Errors
+    /// Returns [`Error::InvalidRange`] for an invalid extent, [`Error::Unavailable`]
+    /// for an unavailable NUMA node, and [`Error::Io`] for discovery, mapping or binding failure.
+    /// A failed cleanup returns [`Error::Unquiesced`] and retains the mapping.
     #[cfg(target_os = "linux")]
+    #[cfg_attr(docsrs, doc(cfg(target_os = "linux")))]
     pub fn new_on_node(length: usize, node: u32) -> Result<Self> {
         use crate::platform::numa::{MappedMemory, NATIVE};
         if !(NATIVE.nodes)()?.contains(&node) {
@@ -572,6 +598,10 @@ impl HostMemory {
     /// DMA leases; no live Rust reference may conflict with them. Concurrent
     /// aliases must share one `Arc<HostMemory>` instead of independent locks.
     /// A device pointer without host access does not satisfy this contract.
+    ///
+    /// # Errors
+    /// Returns [`Error::InvalidRange`] for a zero, overflowing or non-addressable extent.
+    /// It cannot verify the caller's ownership or aliasing contract.
     #[allow(unsafe_code)]
     pub unsafe fn from_raw_parts(
         address: NonNull<u8>,
@@ -611,17 +641,27 @@ impl HostMemory {
         })
     }
 
+    /// Base address of this view, valid only while its backing remains owned.
+    /// Reading the number does not grant permission to dereference it.
     pub fn base_address(&self) -> u64 {
         self.address
     }
+    /// Length of this view in bytes.
     pub fn len(&self) -> usize {
         self.length
     }
+    /// Whether this view has no bytes.
     pub fn is_empty(&self) -> bool {
         self.length == 0
     }
 
-    /// Returns unavailable if a conflicting direct RDMA lease is still held.
+    /// Copy a checked range into a host slice under the backing access guard.
+    ///
+    /// # Errors
+    /// Returns [`Error::InvalidRange`] for an empty or out-of-bounds range,
+    /// [`Error::Unavailable`] for a conflicting native loan, and [`Error::Internal`]
+    /// for a poisoned access lock. Native backing access can return [`Error::Backend`]
+    /// or [`Error::Unquiesced`]; the latter keeps the backing fenced and retained.
     #[allow(unsafe_code)]
     pub fn read(&self, offset: usize, destination: &mut [u8]) -> Result<()> {
         let range = checked_range(offset, destination.len(), self.length)?;
@@ -647,7 +687,13 @@ impl HostMemory {
         Ok(())
     }
 
-    /// Returns unavailable if a conflicting direct RDMA lease is still held.
+    /// Copy a host slice into a checked range under the backing access guard.
+    ///
+    /// # Errors
+    /// Returns [`Error::InvalidRange`] for an empty or out-of-bounds range,
+    /// [`Error::Unavailable`] for a conflicting native loan, and [`Error::Internal`]
+    /// for a poisoned access lock. Native backing access can return [`Error::Backend`]
+    /// or [`Error::Unquiesced`]; failure is not a receipt allowing backing reuse.
     #[allow(unsafe_code)]
     pub fn write(&self, offset: usize, source: &[u8]) -> Result<()> {
         let range = checked_range(offset, source.len(), self.length)?;
@@ -727,6 +773,11 @@ impl Drop for DmaLease {
 
 /// One registered range. Clones and admitted operations retain its backing and
 /// shared allocation lock. Cloning does not add an explicit registration reference.
+/// Clones share backing, native registrations and charges. Unregister fences
+/// new users but existing handles and admitted work keep the allocation alive.
+/// Use [`crate::TransferEngine::close_source`] for source work and
+/// [`crate::Batch::locally_drained`] for a requester batch. Native cleanup failure
+/// returns [`Error::Unquiesced`] where reportable and retains the actual owners.
 #[derive(Clone)]
 pub struct RegisteredMemory(pub(crate) Arc<Registration>);
 
@@ -801,6 +852,11 @@ impl RegisteredMemory {
 
     /// Location of exactly this registration, never the larger backing range.
     /// The registration retains its owner; the returned metadata is a snapshot.
+    ///
+    /// # Errors
+    /// Returns [`Error::InvalidRange`] for an invalid view. Native CUDA-backed location
+    /// checks can return [`Error::Backend`], [`Error::Unavailable`] or [`Error::Unquiesced`]
+    /// when context access or restoration fails.
     pub fn location(&self) -> Result<RangeLocation> {
         match &self.0.allocation {
             MemoryBacking::Host(memory) => memory.location(self.0.allocation_offset, self.len()),
@@ -809,18 +865,24 @@ impl RegisteredMemory {
         }
     }
 
+    /// Registration identity within its source engine epoch.
     pub fn id(&self) -> u64 {
         self.0.descriptor.id
     }
+    /// Length of this view in bytes.
     pub fn len(&self) -> usize {
         self.0.descriptor.length
     }
+    /// Whether this view has no bytes.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
     }
+    /// Base address of this view, valid only while its backing remains owned.
+    /// Reading the number does not grant permission to dereference it.
     pub fn base_address(&self) -> u64 {
         self.0.descriptor.address
     }
+    /// Remote access permission fixed by the first registration of this view.
     pub fn permission(&self) -> Permission {
         self.0.descriptor.permission
     }
@@ -933,6 +995,13 @@ impl RegisteredMemory {
         }
     }
 
+    /// Copy a checked range into a host slice under the backing access guard.
+    ///
+    /// # Errors
+    /// Returns [`Error::InvalidRange`] for an empty or out-of-bounds range,
+    /// [`Error::Unavailable`] for a conflicting native loan, and [`Error::Internal`]
+    /// for a poisoned access lock. Native backing access can return [`Error::Backend`]
+    /// or [`Error::Unquiesced`]; the latter keeps the backing fenced and retained.
     pub fn read(&self, offset: usize, destination: &mut [u8]) -> Result<()> {
         checked_range(offset, destination.len(), self.len())?;
         self.0
@@ -940,6 +1009,13 @@ impl RegisteredMemory {
             .read(self.0.allocation_offset + offset, destination)
     }
 
+    /// Copy a host slice into a checked range under the backing access guard.
+    ///
+    /// # Errors
+    /// Returns [`Error::InvalidRange`] for an empty or out-of-bounds range,
+    /// [`Error::Unavailable`] for a conflicting native loan, and [`Error::Internal`]
+    /// for a poisoned access lock. Native backing access can return [`Error::Backend`]
+    /// or [`Error::Unquiesced`]; failure is not a receipt allowing backing reuse.
     pub fn write(&self, offset: usize, source: &[u8]) -> Result<()> {
         checked_range(offset, source.len(), self.len())?;
         self.0
@@ -951,11 +1027,14 @@ impl RegisteredMemory {
 /// Retained host or CUDA allocation used by range-batch registration.
 /// Clones share the real allocation owner; unregistering a view does not release
 /// it while admitted work can still access the bytes.
+/// This enum is non-exhaustive; consumers must handle unknown variants.
 #[derive(Clone)]
 #[non_exhaustive]
 pub enum MemoryBacking {
+    /// Shared host owner, including pinned or externally retained allocations.
     Host(Arc<HostMemory>),
     #[cfg(feature = "cuda")]
+    /// Shared CUDA owner with driver-validated range and context identity.
     Cuda(Arc<crate::cuda::CudaMemory>),
 }
 

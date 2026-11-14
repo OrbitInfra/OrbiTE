@@ -10,24 +10,33 @@ use crate::{Error, Result, SourceEpoch};
 
 use super::protocol::{CreditReport, CreditSnapshot};
 
-/// Receiver-owned cooperative windows. Counts cover public payload submissions,
+/// Receiver-owned cooperative windows. Counts cover admitted physical requests,
 /// not physical receive queues or authenticated tenants. Closed sessions retain
-/// tombstones until the receiver engine exits.
+/// tombstones until the receiver engine exits. Engine construction validates all windows.
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
 #[derive(serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct ReceiverCreditConfig {
+    /// Retained sender sessions including closed tombstones; default 128, valid 1..=4096.
     pub max_sessions: usize,
+    /// Total byte authority; default 64 MiB, must fit a positive bytes_per_sender window.
     pub max_bytes: u64,
+    /// Total physical-request authority; default 1024, must fit requests_per_sender.
     pub max_requests: u64,
+    /// Fixed byte window per sender; default 1 MiB, positive and at most max_bytes.
     pub bytes_per_sender: u64,
+    /// Fixed physical-request window per sender; default 16, positive and at most max_requests.
     pub requests_per_sender: u64,
     /// Remote Pin owner windows. All four zero disables this resource gate.
     /// These authorize concurrent owners; the shared physical pool can still fill.
+    /// Default zero. If enabled, must be positive and fit staging_slots_per_sender.
     pub max_staging_slots: u64,
+    /// Total consumer-slot authority; default zero (off), positive when resource windows are enabled.
     pub max_consumer_slots: u64,
+    /// Per-sender staging slots; default zero, positive and within max_staging_slots when enabled.
     pub staging_slots_per_sender: u64,
+    /// Per-sender consumer slots; default zero, positive and within max_consumer_slots when enabled.
     pub consumer_slots_per_sender: u64,
 }
 
@@ -95,20 +104,29 @@ impl ReceiverCreditConfig {
     }
 }
 
+/// Receiver-owned window charges. A sender timeout never returns outstanding credit.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct ReceiverCreditIssuerStats {
+    /// Sessions still open for reports and new reservations.
     pub active_senders: usize,
+    /// Closed session tombstones retained against stale reports.
     pub retired_senders: usize,
+    /// Byte capacity reserved for sender windows, including closing sessions.
     pub reserved_bytes: u64,
+    /// Physical-request capacity reserved for sender windows.
     pub reserved_requests: u64,
+    /// Staging capacity promised to sender windows.
     pub reserved_staging_slots: u64,
+    /// Consumer capacity promised to sender windows.
     pub reserved_consumer_slots: u64,
     /// Borrowed slots, including construction and retained owners.
     pub active_staging_slots: u64,
+    /// Borrowed consumer slots, including construction and retained owners.
     pub active_consumer_slots: u64,
     /// Subsets of active slots whose cleanup remains unproven.
     pub retained_staging_slots: u64,
+    /// Active consumer slots whose cleanup has not been proven.
     pub retained_consumer_slots: u64,
 }
 

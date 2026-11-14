@@ -7,6 +7,7 @@ pub(crate) mod mnnvl;
 #[cfg(feature = "cuda")]
 pub(crate) mod nvlink;
 #[cfg(feature = "rdma")]
+#[cfg_attr(docsrs, doc(cfg(all(target_os = "linux", feature = "rdma"))))]
 pub mod rdma;
 pub(crate) mod shm;
 pub(crate) mod tcp;

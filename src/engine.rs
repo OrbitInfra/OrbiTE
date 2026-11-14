@@ -1,3 +1,5 @@
+#![deny(missing_docs)]
+
 mod admission;
 mod failover;
 #[cfg(any(feature = "io-uring", feature = "gds"))]
@@ -46,21 +48,28 @@ use crate::{
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[allow(clippy::exhaustive_enums)]
 pub enum TransferOp {
+    /// Copy from the peer or file into the registered local destination.
     Read,
+    /// Copy from the registered local source into the peer or file.
     Write,
 }
 
 /// Byte transport or policy selection. An explicit hint must be eligible for the first attempt.
+/// This enum is non-exhaustive; consumers must handle unknown variants.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum Transport {
+    /// CPU socket payloads; configured CUDA ranges use retained host staging.
     Tcp = 0,
     /// Persistent CPU socket lanes with request IDs and framed READ/WRITE replies.
     HpTcp = 1,
     /// Same-host CPU copies through source-granted shared mappings.
     Shm = 2,
+    /// Linux verbs transport with direct or staged registered-memory owners.
     Rdma = 3,
+    /// Cooperative same-host legacy CUDA IPC copies.
     Nvlink = 5,
+    /// Cooperative CUDA fabric mappings, including optional host-NUMA memory.
     Mnnvl = 6,
     /// Linux io_uring for local regular files and registered memory.
     IoUring = 7,
@@ -104,22 +113,32 @@ impl Transport {
 
 /// Request priority; smaller discriminants are served first by RDMA workers.
 /// High is the default. TCP and NVLink accept every priority as advisory.
+/// This enum is non-exhaustive; consumers must handle unknown variants.
 #[derive(Clone, Copy, Debug, Default, Eq, Ord, PartialEq, PartialOrd)]
 #[repr(u8)]
 #[non_exhaustive]
 pub enum Priority {
     #[default]
+    /// First priority tier; the default.
     High = 0,
+    /// Second priority tier.
     Medium = 1,
+    /// Last priority tier.
     Low = 2,
 }
 
 /// One file-ordered element of a vectored READ or WRITE.
+/// This enum is non-exhaustive; consumers must handle unknown variants.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum FileIoElement {
     /// A nonempty range in one local host or CUDA registration.
-    Range { address: u64, length: usize },
+    Range {
+        /// Absolute address in a retained local registration.
+        address: u64,
+        /// Nonzero extent in bytes.
+        length: usize,
+    },
     /// Write zeros or read and discard this many bytes. Needs no registration.
     Padding(usize),
 }
@@ -168,16 +187,44 @@ pub struct TransferRequest {
     /// The source must enable EngineConfig::remote_staging. False uses the
     /// selected transport's ordinary memory policy, including local staging.
     pub remote_staging: bool,
+    /// Explicit route, or Unspec for compiled selection; eligibility is checked before admission.
     pub transport: Transport,
+    /// Absolute address within a local registration, resolved and retained before I/O.
     pub local_address: u64,
     pub(crate) file_ranges: Option<Arc<[FileIoElement]>>,
     pub(crate) require_cancellation: bool,
+    /// Absolute peer address or zero-based local-file byte offset.
     pub remote_address: u64,
+    /// Total payload bytes, including vector padding; must fit the configured transfer budget.
     pub length: usize,
 }
 
 impl TransferRequest {
     /// Request an ordinary transfer at the default priority without a QoS override.
+    ///
+    /// # Examples
+    /// A CPU/TCP READ retains both registrations until the completion receipt.
+    /// ```
+    /// # fn main() -> orbite::Result<()> {
+    /// use orbite::{EngineConfig, Permission, TransferEngine, TransferOp, TransferRequest, Transport};
+    /// use std::time::Duration;
+    /// let timeout = Duration::from_secs(5);
+    /// let source = TransferEngine::new(EngineConfig::default())?;
+    /// let exported = source.register_memory(b"KV".to_vec().into_boxed_slice(), Permission::RemoteRead)?;
+    /// let requester = TransferEngine::new(EngineConfig::default())?;
+    /// let local = requester.register_memory(vec![0; 2].into_boxed_slice(), Permission::LocalOnly)?;
+    /// let peer = requester.open_segment(source.endpoint(), source.source_epoch(), timeout)?;
+    /// let request = TransferRequest::new(Transport::Tcp, local.base_address(), exported.base_address(), 2);
+    /// let result = requester.submit_and_wait(TransferOp::Read, &peer, &[request], timeout)?;
+    /// assert!(result.is_complete() && result.locally_drained);
+    /// let mut bytes = [0; 2];
+    /// local.read(0, &mut bytes)?;
+    /// assert_eq!(&bytes, b"KV");
+    /// requester.close(timeout)?;
+    /// source.close(timeout)?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn new(
         transport: Transport,
         local_address: u64,
@@ -201,7 +248,8 @@ impl TransferRequest {
     }
 
     /// Require a direct route that can cancel unposted native work after submission.
-    /// A classic scatter interval owns its dispatch and disables transport retries.
+    /// Internal callers own dispatch and disable transport retries.
+    #[doc(hidden)]
     pub fn requiring_post_submit_cancellation(mut self) -> Self {
         self.require_cancellation = true;
         self
@@ -211,6 +259,11 @@ impl TransferRequest {
     /// Accepts registered `(address, length)` pairs or [`FileIoElement`]s with explicit
     /// padding. Every element must be nonempty. All elements, including padding, count
     /// toward the 1024-element limit, the engine's descriptor budget and the file extent.
+    ///
+    /// # Errors
+    /// Returns [`Error::InvalidRange`] for empty elements or overflowing addresses/lengths,
+    /// and [`Error::ResourceExhausted`] above the vector limit. Registration, permission
+    /// and file bounds are checked at submission, before any payload I/O.
     pub fn file_vectored(
         transport: Transport,
         file_offset: u64,
@@ -243,6 +296,8 @@ impl TransferRequest {
         Ok(request)
     }
 
+    /// Set an absolute monotonic deadline; submission also applies its own timeout.
+    /// Expiry never authorizes release or replay.
     #[must_use]
     pub fn with_deadline(mut self, deadline: Instant) -> Self {
         self.deadline = Some(deadline);
@@ -250,11 +305,16 @@ impl TransferRequest {
     }
 
     /// Bind to a named selector rule. Allocate the bounded name at request construction.
+    ///
+    /// # Errors
+    /// Returns [`Error::InvalidConfig`] for an empty name or one longer than 256 bytes.
+    /// An unknown name is rejected as [`Error::TransportPolicy`] during preparation.
     pub fn with_policy_name(mut self, name: impl AsRef<str>) -> Result<Self> {
         self.policy_name = Some(crate::PolicyName::new(name.as_ref())?);
         Ok(self)
     }
 
+    /// Set the existing intent vocabulary used by compiled selection and merge eligibility.
     #[must_use]
     pub fn with_intent(mut self, intent: crate::IntentType) -> Self {
         self.intent = intent;
@@ -303,6 +363,7 @@ pub(crate) struct PreparedTransfer {
 }
 
 /// Whether the failed request may have modified remote memory.
+/// This enum is non-exhaustive; consumers must handle unknown variants.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum RemoteEffect {
@@ -313,14 +374,18 @@ pub enum RemoteEffect {
     Unknown,
 }
 
+/// Failure of a physical owner or affected span, with an explicit WRITE replay boundary.
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct TransferFailure {
+    /// First affected public request index in the submitted slice.
     pub request_index: usize,
     /// Consecutive requests affected by the failure, beginning at request_index.
     /// For concurrent file I/O the span includes later requests submitted to the kernel.
     pub affected_requests: usize,
+    /// Logical failure cause; Unquiesced additionally reports retained native ownership.
     pub error: Error,
+    /// Unknown prohibits replay, even if the local caller has timed out or cancelled.
     pub remote_effect: RemoteEffect,
 }
 
@@ -330,9 +395,13 @@ pub struct TransferFailure {
 #[derive(Debug)]
 #[non_exhaustive]
 pub struct BatchReport {
+    /// Consecutive fully successful public requests preceding the first failure.
     pub completed_requests: usize,
+    /// Bytes in that fully successful request prefix; not a sum of later completed SQEs.
     pub transferred_bytes: usize,
+    /// First failed owner or span; None means payload completion succeeded.
     pub failure: Option<TransferFailure>,
+    /// Independent delivery outcome; enqueue success is not application consumption.
     pub notification: NotificationStatus,
     /// False means native work/resources are retained and free/drain must wait.
     pub locally_drained: bool,
@@ -352,24 +421,41 @@ impl BatchReport {
 pub struct EngineStats {
     /// Freed batches awaiting physical completion, and batches with no safe release path.
     pub deferred_batches: usize,
+    /// Batches retained because no safe physical-release path remains.
     pub quarantined_batches: usize,
     /// Device name entries missing or outside the policy mask at construction.
     pub unresolved_policy_devices: usize,
+    /// cuFile mode, registration, completion and retained-owner counters.
     #[cfg(feature = "gds")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "gds")))]
     pub gds: crate::GdsStats,
+    /// IPC cache and slot charges, when an NVLink or MNNVL owner is installed.
     #[cfg(feature = "cuda")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "cuda")))]
     pub nvlink: Option<crate::NvlinkStats>,
+    /// Ring, staging and completion counters, when the file provider is installed.
     #[cfg(feature = "io-uring")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "io-uring")))]
     pub io_uring: Option<crate::IoUringStats>,
+    /// Lazy CUDA staging pool capacity and outstanding borrowers.
     #[cfg(feature = "cuda")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "cuda")))]
     pub staging: crate::StagingStats,
+    /// Reserved batch handles, including deferred retirement.
     pub allocated_batches: usize,
+    /// Public task capacity reserved by those batch handles.
     pub allocated_requests: usize,
+    /// Live per-batch workers; zero does not prove all native owners retired.
     pub requester_workers: usize,
+    /// Verbs-owner counters, when RDMA is installed.
     #[cfg(feature = "rdma")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "rdma")))]
     pub rdma: Option<crate::transport::rdma::RdmaStats>,
+    /// Registered ranges whose backing is still charged, including retired views.
     pub retained_regions: usize,
+    /// Backing bytes charged to retained registrations.
     pub retained_bytes: usize,
+    /// Admitted source handlers that have not released their ownership.
     pub active_source_operations: usize,
     /// Whole-submission dispatch reservations; None when the queue is disabled.
     pub runtime_queue: Option<RuntimeQueueStats>,
@@ -385,15 +471,23 @@ pub struct EngineStats {
     pub reclaimed_peer_segments: u64,
     /// Submission, Describe and notification owners that have not drained.
     pub active_peer_operations: usize,
+    /// Outgoing submission charges, including queued or unquiesced work.
     pub inflight_batches: usize,
+    /// Outgoing bytes charged until physical retirement.
     pub inflight_bytes: usize,
+    /// Complete messages currently available in the inbox.
     pub queued_notifications: usize,
     /// Queued messages plus incoming bodies that reserved inbox capacity.
     pub retained_notifications: usize,
+    /// Inbox bytes including incoming bodies that reserved capacity.
     pub retained_notification_bytes: usize,
 }
 
-/// Engine, source registry and bounded control-service handler ownership.
+/// Owns the source registry, requester budgets, provider caches and bounded workers.
+/// Admitted work retains its backing through completion even after timeout, cancel
+/// or a dropped handle. [`Self::close`] fences both sides and waits for physical
+/// retirement; [`Error::Unquiesced`] retains failed native owners and charges.
+/// Hardware evidence is tracked in the [qualification guide](https://orbitinfra.github.io/OrbiTE/qualification.html).
 pub struct TransferEngine {
     tcp: TcpTransport,
     hp_tcp: Option<crate::transport::hp_tcp::HpTcpTransport>,
@@ -419,6 +513,27 @@ pub struct TransferEngine {
 }
 
 impl TransferEngine {
+    /// Construct the configured providers and bounded control service.
+    /// Unconfigured native providers are not loaded. The configuration is copied into
+    /// an immutable engine snapshot; validation precedes publication.
+    ///
+    /// # Errors
+    /// Returns [`Error::InvalidConfig`], [`Error::Config`] or
+    /// [`Error::InvalidSelectorConfig`] for rejected settings; [`Error::Unavailable`]
+    /// for a missing requested provider; [`Error::Io`] for listener or worker startup
+    /// failure. Native setup can return [`Error::Backend`] or [`Error::Unquiesced`];
+    /// uncertain rollback retains any native owners. Poisoned bookkeeping returns
+    /// [`Error::Internal`].
+    ///
+    /// # Examples
+    /// ```
+    /// # fn main() -> orbite::Result<()> {
+    /// let engine = orbite::TransferEngine::new(orbite::EngineConfig::default())?;
+    /// assert_ne!(engine.endpoint().port(), 0);
+    /// engine.close(std::time::Duration::from_secs(5))?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn new(config: EngineConfig) -> Result<Self> {
         #[cfg(any(feature = "rdma", feature = "io-uring", feature = "metrics"))]
         let config = config.resolve_subsystems()?;
@@ -622,6 +737,7 @@ impl TransferEngine {
     }
 
     /// Effective configuration captured by this engine at construction.
+    /// Borrow the immutable, resolved construction snapshot; it never rereads environment variables.
     pub fn config(&self) -> &EngineConfig {
         &self.config
     }
@@ -674,6 +790,10 @@ impl TransferEngine {
 
     /// Advance one dispatch or completion for this batch, then observe its status.
     /// Native I/O stays on the worker that owns the admitted submission.
+    ///
+    /// # Errors
+    /// Returns [`Error::BatchClosed`] for an unknown, foreign or freed batch ID;
+    /// [`Error::Internal`] if progress bookkeeping is poisoned. Task failures remain in status.
     pub fn progress_batch(&self, id: BatchId) -> Result<crate::BatchStatus> {
         let batch = self.allocations.lookup(id).ok_or(Error::BatchClosed)?;
         batch.progress_public()
@@ -712,6 +832,9 @@ impl TransferEngine {
 
     /// Resolves names once and returns an immutable policy handle for reuse in
     /// requests. Repeated resolutions share the same configured budget slot.
+    ///
+    /// # Errors
+    /// Returns [`Error::InvalidConfig`] if tenant or intent names exceed the bounded size.
     pub fn resolve_qos(
         &self,
         context: &crate::QosRequestContext,
@@ -724,6 +847,14 @@ impl TransferEngine {
     /// and confirmation of every committed charge.
     /// A recreated binding after deactivation requires a fresh administrative
     /// epoch and fenced old updates. This API does not authenticate a receiver.
+    ///
+    /// # Errors
+    /// Returns [`Error::Unavailable`] when credits are disabled, [`Error::ResourceExhausted`]
+    /// at ledger capacity, [`Error::EpochMismatch`] for an older generation, and
+    /// [`Error::BatchBusy`] while old owners remain. Foreign or fenced peer handles return
+    /// [`Error::ForeignRegistration`] or [`Error::PeerClosed`]. [`Error::InvalidConfig`]
+    /// rejects zero epochs, class changes or manual activation of automatic bindings;
+    /// [`Error::Cancelled`] rejects a closed generation.
     pub fn activate_receiver_credit(
         &self,
         peer: &RemoteSegment,
@@ -739,6 +870,12 @@ impl TransferEngine {
 
     /// Applies an application-delivered cumulative update and wakes eligible
     /// data owners. Remains usable during requester close to drain accepted work.
+    ///
+    /// # Errors
+    /// Returns [`Error::Unavailable`] if credits are disabled, [`Error::Protocol`] for an
+    /// invalid update or class mismatch, [`Error::EpochMismatch`] for the wrong
+    /// session/generation, and [`Error::Cancelled`] for a closed binding.
+    /// [`Error::InvalidConfig`] rejects manual updates to automatic bindings or TTL overflow.
     pub fn apply_receiver_credit(
         &self,
         peer: &RemoteSegment,
@@ -754,6 +891,11 @@ impl TransferEngine {
     /// owners drain and every committed charge has a completion receipt. Repeat
     /// with the same epoch to retire it. Started groups may
     /// finish, and Unquiesced owners keep the binding busy.
+    ///
+    /// # Errors
+    /// Returns [`Error::Unavailable`] when disabled, [`Error::EpochMismatch`] for a wrong
+    /// generation, or [`Error::BatchBusy`] until all committed owners have release receipts.
+    /// [`Error::InvalidConfig`] rejects zero epochs or manual deactivation of automatic bindings.
     pub fn deactivate_receiver_credit(&self, peer: &RemoteSegment, epoch: u64) -> Result<()> {
         self.receiver_credits
             .as_ref()
@@ -761,6 +903,7 @@ impl TransferEngine {
             .deactivate(peer, epoch)
     }
 
+    /// Observe the sender ledger for this peer, or None if disabled or not activated.
     pub fn receiver_credit_stats(&self, peer: &RemoteSegment) -> Option<ReceiverCreditStats> {
         self.receiver_credits
             .as_ref()
@@ -770,6 +913,12 @@ impl TransferEngine {
     /// Negotiates a receiver-owned fixed window for this sender instance.
     /// Subsequent credit shortages synchronize completed ownership automatically.
     /// A failed initial exchange remains pending; retry this same peer and class.
+    ///
+    /// # Errors
+    /// Returns the admission errors of [`Self::activate_receiver_credit`],
+    /// [`Error::RequesterClosed`] after requester fencing, [`Error::Timeout`] on expiry,
+    /// [`Error::InvalidConfig`] on deadline overflow, or [`Error::Io`]/[`Error::Protocol`]
+    /// on exchange failure. Failed exchange does not reclaim outstanding authority.
     pub fn connect_receiver_credit(
         &self,
         peer: &RemoteSegment,
@@ -793,6 +942,11 @@ impl TransferEngine {
     /// Permanently fences this binding and returns its window only after all
     /// data owners completed successfully and dropped. Busy/uncertain bindings
     /// stay fenced; retry after clean drain. Closed identities cannot reopen.
+    ///
+    /// # Errors
+    /// Returns [`Error::Unavailable`] when disabled, [`Error::BatchBusy`] while committed
+    /// owners lack receipts, [`Error::Timeout`] on expiry, or [`Error::Io`]/[`Error::Protocol`]
+    /// on exchange failure. [`Error::InvalidConfig`] reports deadline overflow.
     pub fn disconnect_receiver_credit(
         &self,
         peer: &RemoteSegment,
@@ -804,6 +958,7 @@ impl TransferEngine {
             .disconnect_automatic(peer, deadline(timeout)?)
     }
 
+    /// Observe receiver-owned windows, or None if the issuer is disabled.
     pub fn receiver_credit_issuer_stats(&self) -> Option<crate::ReceiverCreditIssuerStats> {
         self.source
             .credit_issuer
@@ -811,16 +966,24 @@ impl TransferEngine {
             .map(|issuer| issuer.stats())
     }
 
+    /// Bound control endpoint to publish with [`Self::source_epoch`] through your own registry.
     pub fn endpoint(&self) -> SocketAddr {
         self.control.endpoint()
     }
+    /// Identity of this source instance; an authoritative consumer must pin it at discovery.
     pub fn source_epoch(&self) -> SourceEpoch {
         self.source.epoch
     }
 
     /// Snapshot for native consumers without starting a verbs worker or creating
     /// a CUDA context. Prefer the ranked live provider topology when installed.
+    ///
+    /// # Errors
+    /// Returns [`Error::Internal`] for poisoned live-provider state. CUDA topology
+    /// discovery can return [`Error::Unavailable`], [`Error::Backend`] or
+    /// [`Error::Unquiesced`]. Unavailable host NUMA discovery yields an empty list.
     #[cfg(target_os = "linux")]
+    #[cfg_attr(docsrs, doc(cfg(target_os = "linux")))]
     pub fn local_topology_snapshot(&self) -> Result<crate::Topology> {
         #[cfg(feature = "rdma")]
         if let Some(topology) = self.topology()? {
@@ -851,7 +1014,11 @@ impl TransferEngine {
 
     /// Snapshot of the selected RDMA topology; None before lazy RDMA initialization.
     /// This never probes devices or refreshes an existing context's route.
+    ///
+    /// # Errors
+    /// Returns [`Error::Internal`] for poisoned RDMA topology state; None means no provider is installed.
     #[cfg(feature = "rdma")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "rdma")))]
     pub fn topology(&self) -> Result<Option<crate::Topology>> {
         self.source
             .rdma
@@ -862,7 +1029,11 @@ impl TransferEngine {
     }
 
     /// Local payload bandwidth estimates for available NICs, without discovery.
+    ///
+    /// # Errors
+    /// Returns [`Error::Internal`] for poisoned device state; an empty vector means no installed RDMA owner.
     #[cfg(feature = "rdma")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "rdma")))]
     pub fn nic_load_stats(&self) -> Result<Vec<crate::transport::rdma::NicLoadStats>> {
         self.source
             .rdma
@@ -870,6 +1041,12 @@ impl TransferEngine {
             .map_or_else(|| Ok(Vec::new()), |runtime| runtime.nic_load_stats())
     }
 
+    /// Sample resource counters. Counters are not a physical retirement receipt.
+    ///
+    /// # Errors
+    /// Returns [`Error::Internal`] if an accounting lock is poisoned.
+    /// On Linux, SHM retirement sweeping can return [`Error::Unquiesced`];
+    /// unresolved exports remain retained.
     pub fn stats(&self) -> Result<EngineStats> {
         #[cfg(target_os = "linux")]
         if let Some(shm) = &self.source.shm {
@@ -942,6 +1119,12 @@ impl TransferEngine {
     }
 
     /// Allocate named shared host storage. Register one or more ranges with register_host_memory.
+    ///
+    /// # Errors
+    /// Returns [`Error::Unavailable`] when SHM is disabled or not supported on this OS,
+    /// [`Error::SourceClosed`] after fencing, [`Error::InvalidRange`] for an invalid length,
+    /// and [`Error::ResourceExhausted`] on capacity pressure. Native mapping errors return
+    /// [`Error::Backend`]; uncertain cleanup returns [`Error::Unquiesced`].
     pub fn allocate_shm_memory(&self, length: usize) -> Result<Arc<HostMemory>> {
         let _admission = self.source.admit()?;
         #[cfg(target_os = "linux")]
@@ -960,6 +1143,11 @@ impl TransferEngine {
     }
     /// Release the last allocation handle and report native retirement. Registrations and
     /// admitted peers keep their owners; dropping the last handle also performs cleanup.
+    ///
+    /// # Errors
+    /// Returns [`Error::Unavailable`] when SHM is disabled, the backing is not a SHM
+    /// allocation or other owners remain. [`Error::Unquiesced`] retains a mapping whose
+    /// native retirement failed; [`Error::Internal`] reports poisoned bookkeeping.
     pub fn free_shm_memory(&self, memory: Arc<HostMemory>) -> Result<()> {
         #[cfg(target_os = "linux")]
         {
@@ -977,6 +1165,29 @@ impl TransferEngine {
     }
     /// Registers owned host bytes, preparing configured host Direct RDMA MRs
     /// in every usable context, including paused ports, before exposing the range.
+    ///
+    /// # Errors
+    /// Returns [`Error::SourceClosed`] after source fencing, [`Error::InvalidRange`]
+    /// for an invalid extent, [`Error::ResourceExhausted`] for retained-budget pressure,
+    /// [`Error::RegistrationConflict`] for overlapping ranges with distinct owners,
+    /// and [`Error::Unavailable`] if a required native route cannot register it.
+    /// Native failures return [`Error::Backend`]; uncertain rollback returns
+    /// [`Error::Unquiesced`] and keeps its backing and charges. Poisoned registry
+    /// locks return [`Error::Internal`].
+    ///
+    /// # Examples
+    /// ```
+    /// # fn main() -> orbite::Result<()> {
+    /// let engine = orbite::TransferEngine::new(orbite::EngineConfig::default())?;
+    /// let memory = engine.register_memory(vec![42; 4].into_boxed_slice(), orbite::Permission::RemoteRead)?;
+    /// let mut bytes = [0; 4];
+    /// memory.read(0, &mut bytes)?;
+    /// assert_eq!(bytes, [42; 4]);
+    /// engine.unregister_memory(&memory)?;
+    /// engine.close(std::time::Duration::from_secs(5))?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn register_memory(
         &self,
         bytes: Box<[u8]>,
@@ -1003,6 +1214,15 @@ impl TransferEngine {
     /// a registration reference and retain the first permission.
     /// Overlapping ranges must share the same HostMemory access lock. Configured
     /// host Direct RDMA prepares usable contexts, including paused ports, before publication.
+    ///
+    /// # Errors
+    /// Returns [`Error::SourceClosed`] after source fencing, [`Error::InvalidRange`]
+    /// for an invalid extent, [`Error::ResourceExhausted`] for retained-budget pressure,
+    /// [`Error::RegistrationConflict`] for overlapping ranges with distinct owners,
+    /// and [`Error::Unavailable`] if a required native route cannot register it.
+    /// Native failures return [`Error::Backend`]; uncertain rollback returns
+    /// [`Error::Unquiesced`] and keeps its backing and charges. Poisoned registry
+    /// locks return [`Error::Internal`].
     pub fn register_host_memory(
         &self,
         allocation: Arc<HostMemory>,
@@ -1028,6 +1248,15 @@ impl TransferEngine {
     /// is atomic: failure publishes no ranges or duplicate references. Each
     /// element adds one explicit reference; exact duplicates keep the first
     /// permission and share one retained-range charge.
+    ///
+    /// # Errors
+    /// Returns [`Error::SourceClosed`] after source fencing, [`Error::InvalidRange`]
+    /// for an invalid extent, [`Error::ResourceExhausted`] for retained-budget pressure,
+    /// [`Error::RegistrationConflict`] for overlapping ranges with distinct owners,
+    /// and [`Error::Unavailable`] if a required native route cannot register it.
+    /// Native failures return [`Error::Backend`]; uncertain rollback returns
+    /// [`Error::Unquiesced`] and keeps its backing and charges. Poisoned registry
+    /// locks return [`Error::Internal`].
     pub fn register_host_memory_batch(
         &self,
         ranges: &[(Arc<HostMemory>, usize, usize)],
@@ -1118,6 +1347,7 @@ impl TransferEngine {
     /// registry and address lookup as host memory. Producers must hand off ready
     /// bytes; this profile synchronizes copies and restores the calling context.
     #[cfg(feature = "cuda")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "cuda")))]
     pub fn register_cuda_memory_batch(
         &self,
         ranges: &[(Arc<crate::cuda::CudaMemory>, usize, usize)],
@@ -1153,6 +1383,9 @@ impl TransferEngine {
     /// Resolve an engine-compiled policy identity for a dynamically supplied request.
     /// Unknown names fail before admission. Clone the returned name into requests;
     /// it retains the compiled spelling without allocating on the submit path.
+    ///
+    /// # Errors
+    /// Returns [`Error::InvalidConfig`] when no configured policy has that name.
     pub fn resolve_policy_name(&self, name: &str) -> Result<crate::PolicyName> {
         self.selector
             .as_ref()
@@ -1191,6 +1424,15 @@ impl TransferEngine {
     /// registrations until physical drain, even after unregister.
     /// `route` limits the advertised transport (`Unspec` permits eligible routes);
     /// `internal` hides the registration from peer Describe replies.
+    ///
+    /// # Errors
+    /// Returns [`Error::SourceClosed`] after source fencing, [`Error::InvalidRange`]
+    /// for an invalid extent, [`Error::ResourceExhausted`] for retained-budget pressure,
+    /// [`Error::RegistrationConflict`] for overlapping ranges with distinct owners,
+    /// and [`Error::Unavailable`] if a required native route cannot register it.
+    /// Native failures return [`Error::Backend`]; uncertain rollback returns
+    /// [`Error::Unquiesced`] and keeps its backing and charges. Poisoned registry
+    /// locks return [`Error::Internal`].
     pub fn register_memory_ranges(
         &self,
         ranges: &[(crate::MemoryBacking, usize, usize)],
@@ -1218,6 +1460,10 @@ impl TransferEngine {
 
     /// Resolves an absolute local address to an owned registered range and offset.
     /// Searches by ascending base address, preferring the longer range at equal bases.
+    ///
+    /// # Errors
+    /// Returns [`Error::InvalidRange`] for zero/overflowing length, [`Error::RegionNotFound`]
+    /// if no registration contains the range, or [`Error::Internal`] for a poisoned registry.
     pub fn resolve_local_address(
         &self,
         address: u64,
@@ -1233,6 +1479,12 @@ impl TransferEngine {
     /// destroyed here; failure returns `Unquiesced` after lookup visibility has
     /// already been removed. Admitted borrowers finish retiring it on release.
     /// Call `close_source` to establish source-handler quiescence first.
+    ///
+    /// # Errors
+    /// Returns [`Error::ForeignRegistration`] for a foreign registration or
+    /// [`Error::RegionNotFound`] for an already removed registration,
+    /// [`Error::Internal`] for poisoned bookkeeping, and [`Error::Unquiesced`] if native
+    /// retirement is uncertain. The latter keeps owners; do not retry a failed destroy.
     pub fn unregister_memory(&self, memory: &RegisteredMemory) -> Result<()> {
         let _last = self.source.registry.unregister(memory)?;
         #[cfg(target_os = "linux")]
@@ -1274,6 +1526,7 @@ impl TransferEngine {
     /// transfer drain receipt; callers still need their registration's release
     /// receipt. A failed native cleanup retains the buffer and its pool charge.
     #[cfg(feature = "cuda")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "cuda")))]
     pub fn trim_idle_staging_buffers(&self) -> Result<()> {
         self.source.proxy.trim_idle()
     }
@@ -1281,6 +1534,12 @@ impl TransferEngine {
     /// Discover an initial P2P identity at a trusted endpoint.
     /// The caller must trust the endpoint at first lookup and pin the result
     /// for the lifetime of the handle. Never call this to refresh a stale handle.
+    ///
+    /// # Errors
+    /// Returns [`Error::RequesterClosed`] after requester fencing, [`Error::PeerClosed`] for
+    /// a retired identity, [`Error::ResourceExhausted`] at capacity, [`Error::Timeout`]
+    /// when the deadline expires, and [`Error::Io`] or [`Error::Protocol`] on handshake failure.
+    /// An overflowing deadline returns [`Error::InvalidConfig`].
     pub fn discover_peer_epoch(
         &self,
         endpoint: SocketAddr,
@@ -1300,6 +1559,29 @@ impl TransferEngine {
     /// The returned descriptor and its clones belong to this requester. A retired
     /// identity can reopen only after all old references are gone and cleanup has
     /// succeeded; this explicit open still validates the supplied epoch remotely.
+    ///
+    /// # Errors
+    /// Returns [`Error::EpochMismatch`] for a changed source, [`Error::PeerClosed`] for
+    /// a fenced identity, [`Error::RequesterClosed`] or [`Error::SourceClosed`] for closed admission, and
+    /// [`Error::ResourceExhausted`] at capacity. [`Error::Io`], [`Error::Protocol`] and
+    /// [`Error::Timeout`] report handshake failure; [`Error::InvalidConfig`] reports
+    /// an overflowing deadline. Uncertain cached cleanup returns [`Error::Unquiesced`].
+    ///
+    /// # Examples
+    /// The source supplies its epoch through the consumer's trusted discovery channel.
+    /// ```
+    /// # fn main() -> orbite::Result<()> {
+    /// let source = orbite::TransferEngine::new(orbite::EngineConfig::default())?;
+    /// let requester = orbite::TransferEngine::new(orbite::EngineConfig::default())?;
+    /// let timeout = std::time::Duration::from_secs(5);
+    /// let peer = requester.open_segment(source.endpoint(), source.source_epoch(), timeout)?;
+    /// assert_eq!(peer.source_epoch(), source.source_epoch());
+    /// requester.close_segment(peer.endpoint(), peer.source_epoch(), timeout)?;
+    /// requester.close(timeout)?;
+    /// source.close(timeout)?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn open_segment(
         &self,
         endpoint: SocketAddr,
@@ -1330,6 +1612,34 @@ impl TransferEngine {
 
     /// Opens a local `file://` name with fixed access. Descriptor lookup is lazy.
     /// Reopening the same name and permission shares the handle until close.
+    ///
+    /// # Errors
+    /// Returns [`Error::InvalidConfig`] for a malformed file name, [`Error::PermissionDenied`]
+    /// for local-only or changed access, [`Error::FileSegmentClosed`] for a draining alias,
+    /// [`Error::RequesterClosed`] after fencing, or [`Error::ResourceExhausted`] at capacity.
+    ///
+    /// # Examples
+    /// Not run: payload I/O needs Linux, the `io-uring` feature and a kernel permitting rings.
+    /// ```no_run
+    /// # fn main() -> orbite::Result<()> {
+    /// use orbite::{EngineConfig, Permission, TransferEngine, TransferOp, TransferRequest, Transport};
+    /// let engine = TransferEngine::new(EngineConfig::default())?;
+    /// let timeout = std::time::Duration::from_secs(5);
+    /// let path = std::env::temp_dir().join(format!("orbite-example-{}", engine.source_epoch()));
+    /// std::fs::write(&path, b"KV")?;
+    /// let file = engine.open_file_segment(&format!("file://{}", path.display()), Permission::RemoteRead)?;
+    /// let memory = engine.register_memory(vec![0; 2].into_boxed_slice(), Permission::LocalOnly)?;
+    /// let request = TransferRequest::new(Transport::IoUring, memory.base_address(), 0, 2);
+    /// assert!(engine.submit_and_wait(TransferOp::Read, &file, &[request], timeout)?.is_complete());
+    /// let mut bytes = [0; 2];
+    /// memory.read(0, &mut bytes)?;
+    /// assert_eq!(&bytes, b"KV");
+    /// engine.close_file_segment(&file, timeout)?;
+    /// engine.close(timeout)?;
+    /// std::fs::remove_file(path)?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn open_file_segment(&self, name: &str, permission: Permission) -> Result<FileSegment> {
         let _admission = self.admit_batch(0)?;
         self.files
@@ -1337,18 +1647,31 @@ impl TransferEngine {
     }
 
     /// Returns the cached descriptor of the regular file, opening it on first use.
+    ///
+    /// # Errors
+    /// Returns [`Error::FileSegmentClosed`] for an invalid handle, [`Error::RequesterClosed`]
+    /// after fencing, [`Error::Io`] for filesystem errors, [`Error::InvalidConfig`] for
+    /// a non-regular file, or [`Error::Internal`] for poisoned descriptor state.
     pub fn file_segment_info(&self, segment: &FileSegment) -> Result<FileSegmentInfo> {
         let _admission = self.admit_batch(0)?;
         self.files.info(segment, false)
     }
 
     /// Refreshes the descriptor from the open file, including after a resize or unlink.
+    ///
+    /// # Errors
+    /// Returns the same descriptor and admission errors as [`Self::file_segment_info`].
     pub fn refresh_file_segment(&self, segment: &FileSegment) -> Result<FileSegmentInfo> {
         let _admission = self.admit_batch(0)?;
         self.files.info(segment, true)
     }
 
     /// Checks access and bounds and returns the starting file byte offset. No payload I/O occurs.
+    ///
+    /// # Errors
+    /// Returns [`Error::InvalidRange`] for an empty, overflowing or out-of-file extent,
+    /// [`Error::PermissionDenied`] for disallowed access, and the descriptor/admission
+    /// errors of [`Self::file_segment_info`].
     pub fn resolve_file_offset(
         &self,
         segment: &FileSegment,
@@ -1364,6 +1687,12 @@ impl TransferEngine {
 
     /// Closes admission through every alias, then waits for admitted file users to drain.
     /// After a timeout, retry close on the same handle.
+    ///
+    /// # Errors
+    /// Returns [`Error::FileSegmentClosed`] for a foreign handle, [`Error::Timeout`] while
+    /// I/O is still admitted, [`Error::InvalidConfig`] on deadline overflow,
+    /// [`Error::Internal`] for poisoned state, or [`Error::Unquiesced`] for uncertain
+    /// native retirement. A timeout retains the fd; a failed native destroy is not retried.
     pub fn close_file_segment(&self, segment: &FileSegment, timeout: Duration) -> Result<()> {
         let deadline = Instant::now()
             .checked_add(timeout)
@@ -1382,7 +1711,17 @@ impl TransferEngine {
     /// Remote staging, Direct RDMA and CUDA IPC can change local READ or remote
     /// WRITE bytes before a final receipt, including on failure. Inspect locally_drained
     /// and remote_effect before releasing owners or considering a retry.
-    /// WRITE success requires source acknowledgement. No automatic retries.
+    /// WRITE success requires source acknowledgement. Uncertain WRITEs are never replayed.
+    ///
+    /// # Errors
+    /// Returns [`Error::InvalidRange`], [`Error::RegionNotFound`] or
+    /// [`Error::PermissionDenied`] for invalid ranges/access; [`Error::TransportPolicy`] or
+    /// [`Error::Unavailable`] for an ineligible route; [`Error::ForeignQosPolicy`] or
+    /// [`Error::InvalidConfig`] for a request from the wrong engine or invalid timeout.
+    /// [`Error::PeerClosed`], [`Error::EpochMismatch`], [`Error::RequesterClosed`] and [`Error::SourceClosed`] fence
+    /// stale or closed owners. [`Error::ResourceExhausted`] reports admission pressure.
+    /// Execution errors are in [`BatchReport::failure`], including [`Error::Unquiesced`]
+    /// when physical release is unproven. [`RemoteEffect::Unknown`] WRITEs are never replayed.
     pub fn submit_and_wait<'a>(
         &self,
         operation: TransferOp,
@@ -1396,6 +1735,16 @@ impl TransferEngine {
     /// Sends one notification to this peer after every request completes.
     /// Empty or failed batches do not notify. Data and notification completion
     /// share one deadline, but their results are reported separately.
+    ///
+    /// # Errors
+    /// Returns [`Error::InvalidRange`], [`Error::RegionNotFound`] or
+    /// [`Error::PermissionDenied`] for invalid ranges/access; [`Error::TransportPolicy`] or
+    /// [`Error::Unavailable`] for an ineligible route; [`Error::ForeignQosPolicy`] or
+    /// [`Error::InvalidConfig`] for a request from the wrong engine or invalid timeout.
+    /// [`Error::PeerClosed`], [`Error::EpochMismatch`], [`Error::RequesterClosed`] and [`Error::SourceClosed`] fence
+    /// stale or closed owners. [`Error::ResourceExhausted`] reports admission pressure.
+    /// Execution errors are in [`BatchReport::failure`], including [`Error::Unquiesced`]
+    /// when physical release is unproven. [`RemoteEffect::Unknown`] WRITEs are never replayed.
     pub fn submit_and_notify<'a>(
         &self,
         operation: TransferOp,
@@ -2188,6 +2537,10 @@ impl TransferEngine {
 
     /// Allocates a bounded batch and retains this engine until explicit free or
     /// the final detached worker exits. Submission reserves actual backing.
+    ///
+    /// # Errors
+    /// Returns [`Error::ResourceExhausted`] for zero/excessive capacity or aggregate slot pressure,
+    /// [`Error::RequesterClosed`] after requester fencing, or [`Error::Internal`] for poisoned accounting.
     pub fn allocate_batch(self: &Arc<Self>, capacity: usize) -> Result<Batch> {
         let _admission = self.admit_batch(0)?;
         Batch::allocate(
@@ -2202,6 +2555,11 @@ impl TransferEngine {
 
     /// Creates and seals a single asynchronous submission. Polling and waiting
     /// observe worker progress; a dropped handle cannot release active owners.
+    ///
+    /// # Errors
+    /// Returns the allocation errors of [`Self::allocate_batch`] and the preparation
+    /// errors of [`Self::submit_and_wait`]. Execution failures appear in task status.
+    /// An uncertain owner-start failure returns [`Error::Unquiesced`] and retains charges.
     pub fn submit_async<'a>(
         self: &Arc<Self>,
         operation: TransferOp,
@@ -2217,6 +2575,10 @@ impl TransferEngine {
     }
 
     /// Delivers to this engine's inbox without requiring a transport connection.
+    ///
+    /// # Errors
+    /// Returns [`Error::SourceClosed`] after source fencing, [`Error::ResourceExhausted`]
+    /// for message/inbox limits, or [`Error::Internal`] for poisoned inbox state.
     pub fn send_local_notification(&self, notification: &Notification) -> Result<()> {
         let _admission = self.source.admit()?;
         self.source.notifications.push(notification)
@@ -2225,6 +2587,11 @@ impl TransferEngine {
     /// A successful receipt means enqueued, not application-consumed. An unknown
     /// outcome must not be automatically retried; deliberate repeated messages
     /// are distinct deliveries.
+    ///
+    /// # Errors
+    /// Returns [`NotificationFailure`] containing admission, epoch, timeout, I/O or
+    /// protocol errors. [`crate::NotificationEffect::Unknown`] means delivery may have
+    /// occurred; never replay that attempt automatically. Invalid input does not fall back.
     pub fn send_notification(
         &self,
         peer: &RemoteSegment,
@@ -2241,6 +2608,10 @@ impl TransferEngine {
     /// Atomically drains this engine's shared inbox in enqueue order. An empty
     /// poll returns an empty vector; concurrent receivers never share a message.
     /// Already queued messages remain drainable after source admission closes.
+    ///
+    /// # Errors
+    /// Returns [`Error::Internal`] for a poisoned inbox or the first receive-provider
+    /// error after trying every channel; successful channels are still drained.
     pub fn receive_notifications(&self) -> Result<Vec<Notification>> {
         self.notification_routes.receive(&self.source.notifications)
     }
@@ -2288,6 +2659,13 @@ impl TransferEngine {
     /// admitted to release backing references. Timeout leaves admission closed;
     /// a later call may wait again. It does not claim that a remote requester
     /// received a WRITE acknowledgement. Requester operations remain available.
+    ///
+    /// # Errors
+    /// Returns [`Error::Timeout`] when drain exceeds the deadline; admission remains
+    /// closed and backing remains retained. [`Error::Unquiesced`] reports uncertain
+    /// native cleanup, which is sticky and never retried as a destroy.
+    /// [`Error::InvalidConfig`] reports deadline overflow; [`Error::Internal`] reports
+    /// poisoned accounting. Native provider errors may also be returned.
     pub fn close_source(&self, timeout: Duration) -> Result<()> {
         let deadline = Instant::now()
             .checked_add(timeout)
@@ -2334,6 +2712,7 @@ impl TransferEngine {
     /// retain close obligations, and a later flush retries only safe receipts.
     /// Native close cannot be preempted. Disabled caching is a no-op.
     #[cfg(feature = "cuda")]
+    #[cfg_attr(docsrs, doc(cfg(feature = "cuda")))]
     pub fn flush_nvlink_cache(&self, timeout: Duration) -> Result<()> {
         if let Some(transport) = &self.source.nvlink {
             transport.close_imports(self.source.epoch, deadline(timeout)?)?;
@@ -2344,6 +2723,13 @@ impl TransferEngine {
     /// Permanently closes outgoing admission and waits for accepted calls,
     /// including queued async work, to release physical owners. Timeout leaves
     /// admission closed and permits another wait. Source admission is separate.
+    ///
+    /// # Errors
+    /// Returns [`Error::Timeout`] when drain exceeds the deadline; admission remains
+    /// closed and backing remains retained. [`Error::Unquiesced`] reports uncertain
+    /// native cleanup, which is sticky and never retried as a destroy.
+    /// [`Error::InvalidConfig`] reports deadline overflow; [`Error::Internal`] reports
+    /// poisoned accounting. Native provider errors may also be returned.
     pub fn close_requester(&self, timeout: Duration) -> Result<()> {
         let deadline = Instant::now()
             .checked_add(timeout)
@@ -2411,6 +2797,13 @@ impl TransferEngine {
     /// Native teardown failure retains its owner and is never retried, including
     /// by Drop or another close caller. The deadline bounds drain waits, not a
     /// native provider call that cannot be preempted.
+    ///
+    /// # Errors
+    /// Returns [`Error::Timeout`] when drain exceeds the deadline; admission remains
+    /// closed and backing remains retained. [`Error::Unquiesced`] reports uncertain
+    /// native cleanup, which is sticky and never retried as a destroy.
+    /// [`Error::InvalidConfig`] reports deadline overflow; [`Error::Internal`] reports
+    /// poisoned accounting. Native provider errors may also be returned.
     pub fn close(&self, timeout: Duration) -> Result<()> {
         let deadline = Instant::now()
             .checked_add(timeout)

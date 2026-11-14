@@ -1,5 +1,19 @@
 # Release notes
 
+## Unreleased
+
+- Public documentation closure, part 1: runtime, engine, host memory, segments,
+  diagnostics and CPU/RDMA configuration and counters now have rustdoc with
+  errors, units and retirement contracts. CPU/TCP examples run as doctests;
+  see the [before/after audit](rust-api.md#documentation-closure). CUDA,
+  storage-provider, metrics and Python documentation closure remains pending.
+- Public documentation surface reduction: `Batch::submit_groups` is hidden for
+  the release-pinned Python binding; Rust callers use `Batch::submit`.
+  `TransferRequest::requiring_post_submit_cancellation` is hidden for internal
+  controls. Neither appears in guides or examples. Both implementations and
+  all ownership behavior are unchanged; hidden helpers are outside the public
+  stability promise.
+
 ## 0.1.0-beta.1 — preparation
 
 This is the first beta publication candidate, not a publication record.

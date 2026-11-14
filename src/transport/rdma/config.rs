@@ -5,6 +5,7 @@ use super::discovery;
 use crate::{Error, Result};
 
 /// Host-memory registration policy.
+/// This enum is non-exhaustive; consumers must handle unknown variants.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[non_exhaustive]
 #[derive(serde::Deserialize)]
@@ -18,12 +19,14 @@ pub enum RdmaHostMemory {
 }
 
 /// NVIDIA device-memory policy. Direct requires native GPU registration support.
+/// This enum is non-exhaustive; consumers must handle unknown variants.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[non_exhaustive]
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RdmaCudaMemory {
     #[default]
+    /// Copy through retained pinned host chunks; the default CUDA policy.
     Staged,
     /// Register actual device ranges. Failure never silently selects staging.
     /// Set MLX5_SCATTER_TO_CQE=0 before process startup and keep it unchanged.
@@ -32,24 +35,30 @@ pub enum RdmaCudaMemory {
 
 /// Native CUDA MR route. Auto prefers dma-buf, then a loaded NVIDIA/MLNX_OFED peermem
 /// module. A failed native export/registration never retries the other route.
+/// This enum is non-exhaustive; consumers must handle unknown variants.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Deserialize)]
 #[non_exhaustive]
 #[serde(rename_all = "lowercase")]
 pub enum GpuDirectRegistration {
     #[default]
+    /// Prefer available dma-buf, otherwise available peermem; a failed attempt never changes route.
     Auto,
+    /// Require driver export and the dma-buf verbs entry point; fail closed if absent.
     Dmabuf,
+    /// Require an NVIDIA/MLNX_OFED peermem module; register the device pointer directly.
     Peermem,
 }
 
 /// Shared completion-queue progress policy. Polling is the default; both modes
 /// keep posted work owned until completion or a physical retirement receipt.
+/// This enum is non-exhaustive; consumers must handle unknown variants.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[non_exhaustive]
 #[derive(serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RdmaProgressMode {
     #[default]
+    /// Poll shared CQs on the existing transport workers; the default.
     Polling,
     /// Arm both CQs before polling; native events wake the existing data worker.
     EventDriven,
@@ -62,13 +71,18 @@ pub enum RdmaProgressMode {
 #[serde(default, deny_unknown_fields)]
 pub struct RdmaConfig {
     /// None discovers an accessible provider device; Some is a strict pin.
+    /// Default None; names must contain 1..=128 bytes with no slash or NUL at construction.
     pub device: Option<String>,
     /// None prefers active ports but retains valid paused ports; zero is invalid.
+    /// Default None; a pinned value must be nonzero and exist on the selected device.
     pub port: Option<u8>,
     /// None ranks valid GIDs again on recovery; Some(0) strictly pins GID zero.
+    /// Default None; a pin must identify a usable GID at provider installation.
     pub gid_index: Option<u8>,
     /// Applied before opening a device. A nonempty whitelist supersedes blacklist.
+    /// Default empty; device names obey the same construction-time bounds as device.
     pub rdma_whitelist: Vec<String>,
+    /// Excluded devices; empty by default, ignored when the whitelist is nonempty.
     pub rdma_blacklist: Vec<String>,
     /// Location -> [preferred NIC names, available NIC names] JSON, at most 1 MiB.
     /// Defaults to None. Overrides custom topology input and resolves once against
@@ -81,16 +95,19 @@ pub struct RdmaConfig {
     /// Defaults to None; overrides custom_json_path when priority_matrix is absent.
     pub custom_topology_json: Option<String>,
     /// Explicit memory-location hint; discovery never assumes allocation placement.
+    /// Default None; any u32 hint. This does not place or migrate allocations.
     pub preferred_numa_node: Option<u32>,
     /// Exclude known cross-NUMA NICs when true; false by default. Unknown locality
     /// remains eligible; device masks still apply independently.
     pub strict_local_numa: bool,
     /// Allowed topology NIC IDs for dispatch (up to 64); never compacts context slots.
+    /// Default all bits set; zero is rejected at construction.
     pub device_mask: u64,
     /// Errors within rail_error_window that open a local/remote NIC pair's circuit.
     /// Must be positive; defaults to 3. Opening a rail does not release in-flight work.
     pub rail_error_threshold: u32,
     /// Error accumulation window per rail; defaults to 10 seconds.
+    /// JSON `rail_error_window_us`; Duration is applied at installation.
     #[serde(
         rename = "rail_error_window_us",
         deserialize_with = "crate::config::json::duration"
@@ -98,12 +115,14 @@ pub struct RdmaConfig {
     pub rail_error_window: Duration,
     /// Initial exclusion period before probing a failed rail; defaults to 30 seconds.
     /// Recovery backoff is capped at 300 seconds and never reuses an uncertain QP.
+    /// JSON `rail_cooldown_us`; Duration is applied at installation.
     #[serde(
         rename = "rail_cooldown_us",
         deserialize_with = "crate::config::json::duration"
     )]
     pub rail_cooldown: Duration,
     /// Minimum interval between recovery probes; defaults to one second.
+    /// JSON `rail_probe_interval_us`; Duration is applied at installation.
     #[serde(
         rename = "rail_probe_interval_us",
         deserialize_with = "crate::config::json::duration"
@@ -115,6 +134,7 @@ pub struct RdmaConfig {
     /// Defaults to None, using discovered routes.
     pub rail_topology: Option<String>,
     /// Bandwidth-aware NIC selection and the separate payload transmit-rate meter.
+    /// Defaults to SchedulingParams::default; numeric bounds are validated at construction.
     #[serde(deserialize_with = "crate::runtime::config::object")]
     pub scheduling: super::SchedulingParams,
     /// Reorder ready payloads within a priority
@@ -122,6 +142,7 @@ pub struct RdmaConfig {
     pub deadline_bw_arbitration: bool,
     /// Priority aging threshold from the original enqueue; defaults to 10 ms.
     /// Must fit in u64 nanoseconds. Promotion changes order, not retained charges.
+    /// JSON `priority_promotion_timeout_us`; zero allows immediate promotion.
     #[serde(
         rename = "priority_promotion_timeout_us",
         deserialize_with = "crate::config::json::duration"
@@ -130,26 +151,38 @@ pub struct RdmaConfig {
     /// False (the default) promotes only the tier head; true checks every queued entry.
     pub priority_promotion_per_entry: bool,
     /// Optional POSIX shared-memory name, e.g. /orbite-rdma-slots. Disabled by default.
+    /// A nonempty name is checked at construction; all local participants must share slot timing.
     pub shared_quota_shm_path: Option<String>,
     /// Shared High / High+Medium / all rotation; matching participants must agree.
+    /// Default 2 ms; positive and representable in u64 nanoseconds at construction.
+    /// JSON: `slot_rotation_interval_us`.
     #[serde(
         rename = "slot_rotation_interval_us",
         deserialize_with = "crate::config::json::duration"
     )]
     pub slot_rotation_interval: Duration,
+    /// CQ progress strategy; defaults to Polling, fixed when the provider is installed.
     pub progress_mode: RdmaProgressMode,
     /// Transport workers and send/receive completion-queue pairs per context.
     /// Defaults to 1; range 1..=64. Each lane owns its posted work through drain.
     pub num_lanes: usize,
+    /// Link service level, default 0, valid 0..=15 at construction; pools can override it.
     pub service_level: u8,
+    /// Traffic class, default 0, valid 0..=255; pools can override it.
     pub traffic_class: u8,
+    /// Global route hop limit, default 1; must be nonzero at construction.
     pub hop_limit: u8,
     /// Aggregate physical QP limit, independent of grant concurrency.
+    /// Default 64; valid 1..=4096 at construction.
     pub max_endpoints: usize,
     /// Whole-parent grant slots, retained until every child drains (1..=4096).
+    /// Default 64; checked at construction.
     pub max_grants: usize,
+    /// Retained host staging byte budget; default 64 MiB, positive at construction.
     pub max_staging_bytes: usize,
+    /// Host registration strategy; defaults to Direct, fixed at installation.
     pub host_memory: RdmaHostMemory,
+    /// Device registration strategy; defaults to Staged, fixed at installation.
     pub cuda_memory: RdmaCudaMemory,
     /// Registration route for Direct CUDA memory; Auto by default. This does not
     /// enable Direct mode or change the staged-memory policy.
@@ -158,28 +191,39 @@ pub struct RdmaConfig {
     /// Disabled by default. Direct GPU sources use isolated per-grant PDs unless opted in.
     pub gpu_source_reuse: bool,
     /// Disable direct device registration. An explicit Direct policy then fails validation.
+    /// Default false; checked against cuda_memory at construction.
     pub disable_gpu_direct_rdma: bool,
     /// Log the selected local and peer NIC for each planned slice at debug level.
+    /// Default false; has no effect on scheduling or retained ownership.
     pub log_slice_affinity: bool,
+    /// Retained direct-range byte budget; default 64 MiB, positive at construction.
     pub max_direct_bytes: usize,
     /// Base slice size in bytes; defaults to 64 KiB, range 1..=64 MiB.
     /// Large requests use larger slices to stay within the bounded slice count.
     pub block_size: usize,
     /// Maximum unresolved sends per QP (1..=64). RQ depth uses max_cqes.
+    /// Default 16; checked at construction and clamped to provider capability.
     pub max_send_wr: usize,
     /// Signal every Nth payload WR and the tail of every post. Capped at half the SQ depth.
+    /// Default 1 (every WR); positive at construction, capped at QP creation.
     pub signal_interval: usize,
     /// Initiator and responder READ depths, clamped to the local HCA at QP creation.
+    /// Default 16; zero disables initiator READ depth. Provider-clamped at QP creation.
     pub max_rd_atomic: u8,
+    /// Responder READ depth, default 16; zero disables it, provider-clamped at QP creation.
     pub max_dest_rd_atomic: u8,
     /// Each CQ capacity and aggregate SQ/RQ debt limits (1..=4096), charged separately.
+    /// Default 1024; checked at construction.
     pub max_cqes: usize,
     /// Aggregate physical MR copies, including usable paused contexts/capabilities.
     /// Published host Direct registrations are pinned until unregister or close.
+    /// Default 64; positive at construction. Unquiesced MRs retain their slots.
     pub max_cached_mrs: usize,
     /// Aggregate full-view bytes of every physical MR copy.
+    /// Default 64 MiB; positive at construction, charged until deregistration succeeds.
     pub max_cached_mr_bytes: usize,
     /// Historical MW and named GPU key indices retained until the PD is destroyed.
+    /// Default 65536; valid 1..=16777216 at construction.
     pub max_window_key_indices: usize,
 }
 

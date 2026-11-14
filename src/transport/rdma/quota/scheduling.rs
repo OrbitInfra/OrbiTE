@@ -11,21 +11,36 @@ use crate::{Error, Result};
 #[derive(serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct SchedulingParams {
+    /// Enable bandwidth/load-based slice selection; default true, false selects round-robin.
     pub smart_selection: bool,
+    /// Positive finite distance weights; default [1, 5, 10], checked at construction.
     pub numa_tier_weights: [f64; 3],
+    /// Positive finite tie tolerance; default 1e-12, checked at construction.
     pub score_epsilon: f64,
+    /// Old-estimate weight for selection, default 0.01; finite 0..=1 at construction.
     pub bandwidth_learning_rate: f64,
+    /// Old-estimate weight for payload rate, default 0.9; finite 0..=1 at construction.
     pub transmit_bandwidth_learning_rate: f64,
+    /// Fallback link rate in Gbit/s, default 400; within min/max at construction.
     pub default_bandwidth_gbps: f64,
+    /// Minimum accepted link rate in Gbit/s, default 10; positive finite at construction.
     pub min_bandwidth_gbps: f64,
+    /// Maximum accepted link rate in Gbit/s, default 800; positive finite at construction.
     pub max_bandwidth_gbps: f64,
+    /// Lower learned-rate multiple of the seed, default 0.1; positive and <= max at construction.
     pub ewma_min_multiplier: f64,
+    /// Upper learned-rate multiple of the seed, default 10; finite positive at construction.
+    /// Scaled rate bounds must remain finite and at least one byte/second.
     pub ewma_max_multiplier: f64,
+    /// Payload observation window, default 10 ms; positive at construction.
+    /// JSON `transmit_meter_interval_us` is in microseconds.
     #[serde(
         rename = "transmit_meter_interval_us",
         deserialize_with = "crate::config::json::duration"
     )]
     pub transmit_meter_interval: Duration,
+    /// Maximum observation gap, default 50 ms; at least the interval at construction.
+    /// JSON `transmit_meter_max_interval_us` is in microseconds.
     #[serde(
         rename = "transmit_meter_max_interval_us",
         deserialize_with = "crate::config::json::duration"

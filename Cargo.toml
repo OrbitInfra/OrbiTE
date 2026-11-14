@@ -70,7 +70,8 @@ socket2 = { version = "0.6.4", optional = true }
 [build-dependencies]
 # Generate private verbs layouts from host headers; ibverbs-sys unconditionally links
 # libibverbs. Runtime symbols are resolved by our fallible table, never vendored.
-bindgen = { version = "0.71.1", optional = true }
+# Clang 22 requires 0.72.1 to resolve forward declarations to complete layouts.
+bindgen = { version = "0.72.1", optional = true }
 cc = { version = "1.9.0", optional = true }
 
 [lib]

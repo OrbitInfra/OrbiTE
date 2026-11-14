@@ -6,27 +6,38 @@ use serde_json::Value;
 use crate::runtime::config::Object;
 use crate::{Error, MemoryType, Priority, Result, Transport};
 
+/// Target kind for a compiled selection policy.
+/// This enum is non-exhaustive; handle unknown variants.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "lowercase")]
 #[non_exhaustive]
 pub enum SegmentType {
     #[default]
+    /// Registered peer memory; the default target kind.
     Memory,
     /// Local file policy. Requires a Linux file provider.
     File,
 }
 
 /// Business intent attached to a transfer, independent of its QoS contract.
+/// This enum is non-exhaustive; consumers must handle unknown variants.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum IntentType {
     #[default]
+    /// No application intent; the default.
     Unspec,
+    /// A foreground read needed by the consumer.
     ForegroundGet,
+    /// Speculative transfer that may yield to foreground work.
     BackgroundPrefetch,
+    /// Relocation of existing data.
     Migration,
+    /// Persistence or write-back of application state.
     Checkpoint,
+    /// Loading model weights.
     WeightLoading,
+    /// An internal staging transfer eligible for staging reserves.
     StagingInternal,
 }
 
@@ -65,29 +76,43 @@ fn intent<'de, D: Deserializer<'de>>(d: D) -> std::result::Result<Option<IntentT
 #[serde(deny_unknown_fields)]
 #[non_exhaustive]
 pub struct SelectionPolicy {
+    /// Unique nonempty policy name, at most 256 UTF-8 bytes; default `memory_default`.
     #[serde(default = "default_name")]
     pub name: String,
+    /// Target kind; defaults to memory in Rust. Required in selector JSON.
     pub segment_type: SegmentType,
+    /// Local backing filter; `None` (default) accepts CPU and CUDA.
     #[serde(default, deserialize_with = "memory")]
     pub local_memory: Option<MemoryType>,
+    /// Peer backing filter; `None` (default) accepts CPU and CUDA.
     #[serde(default, deserialize_with = "memory")]
     pub remote_memory: Option<MemoryType>,
+    /// Inclusive minimum bytes; `None` (default) has no lower bound.
     #[serde(default, deserialize_with = "present")]
     pub min_size: Option<usize>,
+    /// Inclusive maximum bytes; `None` (default) has no upper bound; must be at least min_size.
     #[serde(default, deserialize_with = "present")]
     pub max_size: Option<usize>,
+    /// Effective-priority filter; `None` (default) accepts every priority.
     #[serde(default, deserialize_with = "priority")]
     pub priority: Option<Priority>,
+    /// Intent filter; `None` (default) accepts every intent.
     #[serde(default, deserialize_with = "intent")]
     pub intent_type: Option<IntentType>,
+    /// Boot-identity locality filter, never inferred from IP; `None` (default) accepts either.
     #[serde(default, deserialize_with = "present")]
     pub same_machine: Option<bool>,
+    /// RDMA device names, resolved once at construction; empty (default) allows all.
+    /// Unresolved names are counted; if none resolve, all devices remain eligible.
     #[serde(default)]
     pub devices: Vec<String>,
+    /// RDMA pool name, at most 256 bytes; `None` (default) or an unknown name uses all QPs.
     #[serde(default, deserialize_with = "pool_name")]
     pub qp_pool: Option<String>,
+    /// Optional diagnostic SL in 0..=15; default None. QPs use their pool settings.
     #[serde(default, deserialize_with = "sl")]
     pub service_level: Option<u8>,
+    /// Optional diagnostic traffic class in 0..=255; default None. QPs use their pool settings.
     #[serde(default, deserialize_with = "tc")]
     pub traffic_class: Option<u8>,
     /// Candidate order. Empty uses the registered routes for this segment type.
@@ -122,9 +147,16 @@ impl Default for SelectionPolicy {
 #[serde(from = "Root")]
 #[non_exhaustive]
 pub struct TransportSelectorConfig {
+    /// Restrict memory targets to TCP; false by default. JSON: `transports.force_tcp`.
     pub force_tcp: bool,
+    /// Flat RDMA QP count, 1..=64; None inherits RDMA num_lanes (one without RDMA).
+    /// JSON: `transports.rdma.endpoint.qp_mul_factor`; ignored when pools are nonempty.
     pub qp_mul_factor: Option<usize>,
+    /// Named contiguous QP groups; empty by default. Validated at engine construction.
+    /// JSON: `transports.rdma.endpoint.qp_pools`.
     pub qp_pools: Vec<super::QpPool>,
+    /// First-match rules, at most 256; empty by default. Names and ranges are validated
+    /// at construction. JSON: `policy`.
     pub policy: Vec<SelectionPolicy>,
 }
 
@@ -172,6 +204,11 @@ impl From<Root> for TransportSelectorConfig {
 
 impl TransportSelectorConfig {
     /// Read the selector and RDMA endpoint sections of a JSON object of at most 1 MiB.
+    ///
+    /// # Errors
+    /// Returns [`Error::InvalidSelectorConfig`] for malformed JSON, unknown fields,
+    /// invalid rule values or names; [`Error::InvalidConfig`] if there are too many rules.
+    /// Engine construction additionally validates the QP layout and resolves devices.
     pub fn from_json(json: &str) -> Result<Self> {
         if json.len() > 1 << 20 {
             return Err(Error::InvalidSelectorConfig("JSON exceeds 1 MiB".into()));
