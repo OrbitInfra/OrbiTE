@@ -11,6 +11,16 @@ from unittest.mock import patch
 from urllib.error import HTTPError, URLError
 
 ROOT = Path(__file__).resolve().parents[2]
+VERSION_SOURCES = ("Cargo.toml", "Cargo.lock", "crates/orbite-python/Cargo.toml", "pyproject.toml", "README.md", "docs/releases.md", "LICENSE")
+
+
+def copy_version_sources(directory):
+    root = Path(directory)
+    for name in VERSION_SOURCES:
+        dest = root / name
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / name, dest)
+    return root
 
 
 def load(name):
@@ -28,11 +38,25 @@ prepare = load("prepare-release")
 
 class ReleaseControls(unittest.TestCase):
     def test_github_notes_have_tagged_links_and_no_publication_instructions(self):
-        text = "[API](rust-api.md#current-public-surface) [site](https://example.com/api.md)\n## Maintainer publication procedure\nPRIVATE INSTRUCTIONS"
-        result = prepare.release_notes(text, "0.1.0-beta.1")
-        self.assertIn("https://github.com/OrbitInfra/OrbiTE/blob/v0.1.0-beta.1/docs/rust-api.md#current-public-surface", result)
-        self.assertIn("[site](https://example.com/api.md)", result)
-        self.assertNotIn("PRIVATE INSTRUCTIONS", result)
+        for suffix in ("", " — preparation"):
+            text = ("# Release notes\n\n## Unreleased\nFUTURE CHANGES\n\n"
+                    f"## 0.1.0-beta.1{suffix}\n"
+                    "[API](rust-api.md#current-public-surface) [site](https://example.com/api.md)\n"
+                    "### Changes\nCURRENT CHANGES\n\n## 0.1.0-alpha.1\nOLD CHANGES\n"
+                    "## Maintainer publication procedure\nPRIVATE INSTRUCTIONS")
+            with self.subTest(suffix=suffix):
+                result = prepare.release_notes(text, "0.1.0-beta.1")
+                self.assertIn("https://github.com/OrbitInfra/OrbiTE/blob/v0.1.0-beta.1/docs/rust-api.md#current-public-surface", result)
+                self.assertIn("[site](https://example.com/api.md)", result)
+                self.assertIn("CURRENT CHANGES", result)
+                for excluded in ("FUTURE CHANGES", "OLD CHANGES", "PRIVATE INSTRUCTIONS"):
+                    self.assertNotIn(excluded, result)
+
+    def test_github_notes_reject_missing_or_duplicate_version_sections(self):
+        for text in ("## Unreleased\nChanges", "## 0.0.1\nOld changes",
+                     "## 0.1.0-beta.1\nFirst\n## 0.1.0-beta.1 — preparation\nDuplicate"):
+            with self.subTest(text=text), self.assertRaises(ValueError):
+                prepare.release_notes(text, "0.1.0-beta.1")
 
     def test_versions_and_tag_gate(self):
         rust, python = release.versions()
@@ -46,14 +70,9 @@ class ReleaseControls(unittest.TestCase):
                 release.selection(rust, ref, event, dry)
 
     def test_every_version_source_is_checked(self):
-        paths = ("Cargo.toml", "Cargo.lock", "crates/orbite-python/Cargo.toml", "pyproject.toml", "README.md", "docs/releases.md", "LICENSE")
-        for fault in paths[:-1]:
+        for fault in VERSION_SOURCES[:-1]:
             with tempfile.TemporaryDirectory() as directory:
-                root = Path(directory)
-                for name in paths:
-                    dest = root / name
-                    dest.parent.mkdir(parents=True, exist_ok=True)
-                    shutil.copyfile(ROOT / name, dest)
+                root = copy_version_sources(directory)
                 path = root / fault
                 text = path.read_text()
                 if fault == "pyproject.toml":
@@ -62,6 +81,20 @@ class ReleaseControls(unittest.TestCase):
                     text = text.replace("0.1.0-beta.1", "0.0.1")
                 path.write_text(text)
                 with self.subTest(fault=fault), self.assertRaises(ValueError):
+                    release.versions(root)
+
+    def test_release_notes_require_the_current_version_as_first_release(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = copy_version_sources(directory)
+            notes = root / "docs/releases.md"
+            for suffix in ("", " — preparation"):
+                notes.write_text(f"## Unreleased\nChanges\n## 0.1.0-beta.1{suffix}\nCurrent\n## 0.1.0-alpha.1\nOld")
+                with self.subTest(suffix=suffix):
+                    self.assertEqual(release.versions(root), ("0.1.0-beta.1", "0.1.0b1"))
+            for text in ("## Unreleased\nNo version", "## 0.0.1\nWrong version\n## 0.1.0-beta.1\nOld",
+                         "## 0.1.0-beta.1 — invalid\nWrong state"):
+                notes.write_text(text)
+                with self.subTest(text=text), self.assertRaises(ValueError):
                     release.versions(root)
 
     def test_package_outputs_are_rejected_even_if_tracked(self):

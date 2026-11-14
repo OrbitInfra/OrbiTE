@@ -36,6 +36,7 @@
 #![cfg_attr(docsrs, feature(doc_cfg))]
 #![deny(unsafe_code)]
 #![deny(unsafe_op_in_unsafe_fn)]
+#![deny(missing_docs)]
 
 #[cfg(unsupported_native_target)]
 compile_error!("OrbiTE's `cuda`, `rdma`, `io-uring`, and `gds` features require a Linux target");

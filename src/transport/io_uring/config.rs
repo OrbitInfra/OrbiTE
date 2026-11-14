@@ -1,13 +1,18 @@
 use crate::{Error, Result};
 
+/// Optional reusable file-I/O staging pool; disabled by default.
+/// With the pool enabled, its total rounded capacity must not exceed 1 GiB.
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
 #[derive(serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct IoUringConfig {
+    /// Enable reusable staging slots (default false). CUDA builds try pinned memory;
+    /// host-only operation can use an aligned pageable slab when CUDA is unavailable.
     pub pinned_staging: bool,
-    /// KiB per slot, rounded up to a 4 KiB boundary.
+    /// KiB per slot, rounded up to 4 KiB; positive when enabled, defaults to 4096.
     pub staging_slot_kb: usize,
+    /// Number of slots; 1..=4096 when enabled, defaults to 32.
     pub staging_slots: usize,
 }
 impl Default for IoUringConfig {

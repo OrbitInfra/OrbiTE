@@ -32,7 +32,9 @@ def versions(root=ROOT):
     readme = (root / "README.md").read_text()
     require(re.search(r"cargo install orbite --version (\S+)", readme)[1] == version, "README Rust version mismatch")
     require(re.search(r"pip install orbite==(\S+)", readme)[1] == python, "README Python version mismatch")
-    require(re.search(r"## (\S+) — preparation", (root / "docs/releases.md").read_text())[1] == version, "release notes version mismatch")
+    heading = re.search(r"^## ([0-9][^\n]*)$", (root / "docs/releases.md").read_text(), re.MULTILINE)
+    require(heading is not None, "missing release notes version heading")
+    require(heading[1] in (version, version + " — preparation"), "release notes version mismatch")
     for package in (manifest["package"], binding["package"]):
         require(package["license"] == "Apache-2.0", "license drift")
         require(package["repository"] == "https://github.com/OrbitInfra/OrbiTE", "repository drift")

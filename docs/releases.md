@@ -2,11 +2,18 @@
 
 ## Unreleased
 
-- Public documentation closure, part 1: runtime, engine, host memory, segments,
-  diagnostics and CPU/RDMA configuration and counters now have rustdoc with
-  errors, units and retirement contracts. CPU/TCP examples run as doctests;
-  see the [before/after audit](rust-api.md#documentation-closure). CUDA,
-  storage-provider, metrics and Python documentation closure remains pending.
+- Public documentation closure: all public Rust owners, including CUDA/local-copy,
+  staging, storage and metrics, document errors, units and retirement contracts.
+  Every CI feature set denies missing docs and invalid rustdoc links/HTML.
+  Python classes, fields, methods and typed exceptions have runtime docstrings
+  checked in installed wheels and rebuilt sdists, with a missing-contract negative
+  control. CPU/TCP examples run as doctests; see the
+  [before/after audit](rust-api.md#documentation-closure). No transfer semantics change.
+- RDMA build bindings require bindgen 0.72.1 for complete Clang 22 layouts.
+  Native layout assertions and runtime-only loading remain unchanged.
+- Release checks accept preparation and published headings while requiring the
+  latest versioned section to match the manifests. Generated GitHub notes contain
+  only the selected version; unreleased changes and older releases stay separate.
 - Public documentation surface reduction: `Batch::submit_groups` is hidden for
   the release-pinned Python binding; Rust callers use `Batch::submit`.
   `TransferRequest::requiring_post_submit_cancellation` is hidden for internal
@@ -14,12 +21,14 @@
   all ownership behavior are unchanged; hidden helpers are outside the public
   stability promise.
 
-## 0.1.0-beta.1 — preparation
+## 0.1.0-beta.1
 
-This is the first beta publication candidate, not a publication record.
-The maintainer publishes and approves the tag separately. The last published
-Rust milestone is `0.1.0-alpha.1` from `7cc48490`; **beta.1** is `0.1.0b1` on
-PyPI. No Python release predates it. OrbiTE is a transfer engine for LLM
+Published November 12, 2026 from `81c8d7b4`: [GitHub release](https://github.com/OrbitInfra/OrbiTE/releases/tag/v0.1.0-beta.1),
+[Rust crate](https://crates.io/crates/orbite/0.1.0-beta.1) and
+[Python `0.1.0b1`](https://pypi.org/project/orbite/0.1.0b1/).
+It supersedes Rust alpha.1; no Python release predates it. Documentation updates
+on current `main` are listed under Unreleased and do not qualify new hardware.
+OrbiTE is a transfer engine for LLM
 inference on NVIDIA; [scope and non-goals](architecture.md#scope-and-non-goals)
 separate byte movement from the consumer's cache and discovery policy.
 
@@ -124,9 +133,10 @@ uncertain WRITE is never replayed.
 
 ## Maintainer publication procedure
 
-This section configures a future publication. This PR creates no tag, package
-publication or GitHub Release. Source versions stay `0.1.0-beta.1` and
-`0.1.0b1`. Only the maintainer approves publication.
+This is the maintainer-controlled procedure used for beta.1 and retained for
+future releases. The examples name the existing beta tag; do not recreate it
+or republish its artifacts. Choose a new reviewed version for a new release.
+Only the maintainer approves publication; documentation updates publish nothing.
 
 ### One-time setup
 

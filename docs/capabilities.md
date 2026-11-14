@@ -1,8 +1,8 @@
 # Capabilities
 
-This page summarizes the current source on `main`. The `0.1.0-alpha.1` crate on
-crates.io is published for early development; its API is unstable. The source
-is preparing `0.1.0-beta.1`, which is not published by this change; see
+This page summarizes current `main`, including unreleased documentation updates.
+`0.1.0-beta.1` was published on November 12, 2026; its API remains unstable.
+Source updates do not retroactively change that artifact's evidence; see
 [release notes](releases.md).
 
 | Status | Meaning |
@@ -84,7 +84,7 @@ qualification; GPU/RDMA/GDS installed fault fixtures remain queued.
 
 | Capability | Status | Limits |
 | --- | --- | --- |
-| Rust API | Current beta surface inventoried; breaking changes allowed before 0.1.0 | [Surface inventory and decisions](rust-api.md#api-decisions); [core/RDMA documentation closure](rust-api.md#documentation-closure) is enforced, remaining feature/Python docs are pending |
+| Rust API | Current beta surface inventoried; breaking changes allowed before 0.1.0 | [Surface inventory and decisions](rust-api.md#api-decisions); [documentation closure](rust-api.md#documentation-closure) covers all Rust feature sets and the installed Python public surface with fatal omission checks |
 | NIXL backend and native bridge | Planned; design only | [South Bound API and owner mapping](nixl-backend.md). No plugin or C bridge is implemented or qualified. The [implementation prerequisites](completion-plan.md#current-focus) include upstream explicit cancel/lifetime agreement and current-artifact hardware evidence before the formal RFC. |
 | TENT C ABI (S19) | Removed; out of scope | No installed C interface |
 | TENT C++ and classic TE (S20) | Removed; out of scope | No source adapters or classic-TE shim |

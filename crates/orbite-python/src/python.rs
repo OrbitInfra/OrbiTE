@@ -12,39 +12,48 @@ use std::{
     time::{Duration, Instant},
 };
 
-create_exception!(orbite, Error, PyException);
-macro_rules! exception { ($($name:ident),* $(,)?) => {$(create_exception!(orbite, $name, Error);)*}; }
+create_exception!(
+    orbite,
+    Error,
+    PyException,
+    "Base native failure. Timeout, cancellation and errors do not release undrained owners."
+);
+macro_rules! exception {
+    ($($name:ident => $doc:literal),* $(,)?) => {
+        $(create_exception!(orbite, $name, Error, $doc);)*
+    };
+}
 exception!(
-    InvalidConfigError,
-    ConfigError,
-    InvalidQosConfigError,
-    InvalidSelectorConfigError,
-    TransportPolicyError,
-    BatchBusyError,
-    BatchClosedError,
-    BatchOpenError,
-    RequesterClosedError,
-    PeerClosedError,
-    InvalidTaskError,
-    CancelledError,
-    UnquiescedError,
-    UnavailableError,
-    BackendError,
-    InvalidRangeError,
-    PermissionDeniedError,
-    RegionNotFoundError,
-    ForeignRegistrationError,
-    FileSegmentClosedError,
-    ForeignQosPolicyError,
-    RegistrationConflictError,
-    SourceClosedError,
-    EpochMismatchError,
-    ResourceExhaustedError,
-    ProtocolError,
-    TimeoutError,
-    DeadlineInfeasibleError,
-    InternalError,
-    IoError
+    InvalidConfigError => "A typed configuration field violates its construction-time bounds.",
+    ConfigError => "The configuration loader rejected a JSON field, document or file.",
+    InvalidQosConfigError => "The QoS configuration violates its syntax or schema.",
+    InvalidSelectorConfigError => "A transport selection rule or QP pool is invalid.",
+    TransportPolicyError => "A named or matched policy cannot select an eligible route.",
+    BatchBusyError => "Batch resources remain owned by work that has not physically drained.",
+    BatchClosedError => "A batch is sealed for submission, freed or unavailable.",
+    BatchOpenError => "A stable terminal result requires sealing the batch first.",
+    RequesterClosedError => "Requester admission has closed; new submissions are rejected.",
+    PeerClosedError => "The requester's endpoint/epoch identity is fenced against new work.",
+    InvalidTaskError => "A task index is outside the batch's submitted range.",
+    CancelledError => "Cancellation was observed; physical retirement must still be checked.",
+    UnquiescedError => "Native completion or cleanup is uncertain; backing and charges stay retained.",
+    UnavailableError => "A provider, library, native capability or operation is unavailable.",
+    BackendError => "A native call failed; the error does not prove physical retirement.",
+    InvalidRangeError => "A range or binding argument is empty, invalid, overflowing or out of bounds.",
+    PermissionDeniedError => "The registered range or file does not grant the requested access.",
+    RegionNotFoundError => "No current registration contains the requested range or identifier.",
+    ForeignRegistrationError => "A registration or segment belongs to another engine.",
+    FileSegmentClosedError => "The file handle is closed or belongs to another engine.",
+    ForeignQosPolicyError => "The resolved QoS policy belongs to another engine.",
+    RegistrationConflictError => "Overlapping registrations do not share the required backing owner.",
+    SourceClosedError => "Source admission has closed; new source work is rejected.",
+    EpochMismatchError => "A peer or credit generation differs from the authoritative expected epoch.",
+    ResourceExhaustedError => "A bounded resource budget is full or backing still has native owners.",
+    ProtocolError => "A peer message, descriptor or serialized identity violates the protocol.",
+    TimeoutError => "A deadline elapsed; pending work and its owners may still be retained.",
+    DeadlineInfeasibleError => "Dispatch prediction exceeded the configured deadline threshold.",
+    InternalError => "An internal invariant, synchronization primitive or owner failed.",
+    IoError => "An operating-system I/O operation failed."
 );
 fn error(code: Code, operation: &str) -> PyErr {
     native_error(code.error(), operation)

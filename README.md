@@ -37,7 +37,7 @@ Memory, registrations and staging stay retained until [physical retirement](docs
 
 ## Quick Start
 
-On Linux (Rust 1.85+, or CPython 3.10–3.14), after beta.1 publication:
+Install beta.1 on Linux (Rust 1.85+, or CPython 3.10–3.14):
 
 ```sh
 cargo install orbite --version 0.1.0-beta.1 --locked --features io-uring --example orbite-quickstart

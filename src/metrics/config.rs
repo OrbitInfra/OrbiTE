@@ -7,11 +7,15 @@ use crate::{Error, Result};
 #[derive(serde::Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct MetricsConfig {
+    /// Create metrics recording and services for this engine; defaults to true.
     pub enabled: bool,
+    /// HTTP bind IP or hostname; defaults to `0.0.0.0`. No authentication is added.
     pub http_host: String,
+    /// Nonzero HTTP port; defaults to 9100. Bind failure leaves log-only metrics.
     pub http_port: u16,
+    /// Bounded HTTP service threads, 1..=64; defaults to two.
     pub http_server_threads: u16,
-    /// Zero disables periodic log summaries.
+    /// Log-summary interval in seconds; defaults to 30, zero disables periodic reports.
     pub report_interval_seconds: u32,
 }
 

@@ -24,6 +24,12 @@ pub struct PinnedHostRegistration {
     _owner: Arc<dyn Send + Sync>,
 }
 impl PinnedHostRegistration {
+    /// Retain the identity and owner of an existing CUDA host registration.
+    ///
+    /// # Errors
+    /// Returns [`Error::InvalidRange`] for an empty, oversized or overflowing range.
+    /// This constructor does not query CUDA to verify the caller's registration.
+    ///
     /// # Safety
     /// `base..base+length` must be one live CUDA host registration. The owner must
     /// keep it registered and stationary. All its suballocations must share this
@@ -57,10 +63,13 @@ impl PinnedHostRegistration {
     }
 }
 
+/// Payload direction between a descriptor's pinned host and device views.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum CopyDirection {
+    /// Copy pinned host bytes into the device view.
     HostToDevice,
+    /// Copy device bytes into the pinned host view.
     DeviceToHost,
 }
 impl CopyDirection {
@@ -71,19 +80,26 @@ impl CopyDirection {
         }
     }
 }
+/// Local copy selection; the caller's stream order is preserved by every backend.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum LocalCopyBackend {
+    /// Select DMA or the mapped-host kernel from validated geometry and policy.
     Auto,
+    /// Require CUDA copy operations, including supported strided or batched copies.
     Dma,
+    /// Require the mapped-host kernel; unavailable prerequisites fail explicitly.
     Kernel,
 }
 
+/// Per-stream copy budgets and backend policy, validated at [`LocalCopyEngine::bind`].
+/// Defaults allow 4096 descriptors, four flights and 256 MiB of charged bytes.
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
 pub struct LocalCopyConfig {
+    /// Selection mode; defaults to [`LocalCopyBackend::Auto`].
     pub backend: LocalCopyBackend,
-    /// Minimum number of DMA operations after contiguous and strided coalescing.
+    /// Minimum number of DMA operations after coalescing; positive, defaults to 128.
     pub kernel_threshold: usize,
     /// Higher Auto threshold for background device-to-host copies, in compiled
     /// DMA operations. `usize::MAX` keeps these copies on DMA pending calibration.
@@ -91,8 +107,9 @@ pub struct LocalCopyConfig {
     /// Maximum blocks in one kernel launch, not an SM reservation. `None` keeps
     /// the existing device-derived budget. Checked against the device at bind.
     pub kernel_cta_limit: Option<NonZeroU32>,
-    /// Bounds input descriptors and expanded rows in one submission.
+    /// Bounds input descriptors and expanded rows; 1..=65536, defaults to 4096.
     pub max_descriptors: usize,
+    /// Simultaneously retained flight slots; 1..=64, defaults to four.
     pub max_inflight: usize,
     /// Total payload bytes plus reserved device and pinned kernel descriptor slots.
     pub max_bytes: usize,
@@ -116,8 +133,11 @@ impl Default for LocalCopyConfig {
 #[derive(Clone, Default)]
 #[non_exhaustive]
 pub struct LocalCopyOptions {
+    /// Workload intent used by Auto; defaults to [`IntentType::Unspec`].
     pub intent: IntentType,
+    /// Advisory class for policy and counters; does not reorder the caller stream.
     pub priority: Priority,
+    /// Optional already-recorded producer event retained through this copy's receipt.
     pub ready: Option<ProducerEvent>,
 }
 
@@ -125,11 +145,17 @@ pub struct LocalCopyOptions {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum LocalCopyFallback {
+    /// Coalesced work is below the applicable kernel threshold.
     Threshold,
+    /// Work is below the higher device-to-host threshold for this background intent.
     Intent,
+    /// Overlapping descriptor ranges prevent parallel kernel copying.
     Overlap,
+    /// The kernel image or required driver capabilities are unavailable.
     ImageUnavailable,
+    /// A host range cannot supply the required device mapping.
     MappingUnavailable,
+    /// Reserving kernel descriptor storage would exhaust the configured byte budget.
     DescriptorBudget,
 }
 
@@ -138,22 +164,32 @@ pub enum LocalCopyFallback {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct LocalCopyClassStats {
+    /// Host/device payload direction of this counter class.
     pub direction: CopyDirection,
+    /// Intent supplied by the caller for this class.
     pub intent: IntentType,
+    /// Advisory priority supplied by the caller for this class.
     pub priority: Priority,
+    /// Submissions that selected DMA; not a count of completed copies.
     pub dma_submissions: u64,
     /// Native batch-DMA enqueue calls that returned success.
     /// Like kernel launches, these are not physical completion receipts.
     pub dma_batch_calls: u64,
+    /// Submissions that selected the mapped-host kernel; not completion receipts.
     pub kernel_submissions: u64,
     /// Sum of blocks from successful native kernel launches (not completed work).
     pub kernel_ctas: u64,
     /// Blocks launched by the latest submission; zero if none launched successfully.
     pub last_kernel_ctas: u32,
+    /// Backend chosen for the latest admitted submission in this class.
     pub last_backend: LocalCopyBackend,
+    /// Reason the latest Auto decision used DMA, if applicable.
     pub last_fallback: Option<LocalCopyFallback>,
 }
 
+/// Retained device and pinned-host views plus byte geometry for a local copy.
+/// Construction clones the registration handles; submission validates bounds,
+/// access conflicts, context, overlap and the backing's host-registration identity.
 #[derive(Clone, Debug)]
 pub struct LocalCopyDesc {
     device: RegisteredMemory,
@@ -166,6 +202,8 @@ pub struct LocalCopyDesc {
     host_pitch: usize,
 }
 impl LocalCopyDesc {
+    /// Describe one `width`-byte row at the two byte offsets, without submitting it.
+    /// Geometry is checked by [`LocalCopyEngine::submit`], not this constructor.
     pub fn new(
         device: &RegisteredMemory,
         device_offset: usize,
@@ -202,6 +240,11 @@ pub struct ProducerEvent {
     _owner: Arc<dyn Send + Sync>,
 }
 impl ProducerEvent {
+    /// Retain one already-recorded producer generation without synchronizing it.
+    ///
+    /// # Errors
+    /// Returns [`Error::InvalidConfig`] for a null event handle.
+    ///
     /// # Safety
     /// The event must be live, already recorded, and represent the intended
     /// producer generation. The owner retains the event and producer inputs.
@@ -217,16 +260,24 @@ impl ProducerEvent {
     }
 }
 
+/// Bounded copy owner bound to one retained caller stream and CUDA context.
+/// Completion events retain loans and scratch independently of handle lifetime.
+/// Use [`Self::close`] to observe drain and cleanup errors before dropping it.
 pub struct LocalCopyEngine {
     inner: Arc<Inner>,
 }
 
+/// Copy-owner charges and cumulative selection counters; no synchronization implied.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct LocalCopyStats {
+    /// Occupied flight slots, including quarantined submissions.
     pub active: usize,
+    /// Occupied slots whose cleanup/completion is uncertain and retained permanently.
     pub retained: usize,
+    /// Payload bytes charged to occupied flight slots, including retained slots.
     pub payload_bytes: usize,
+    /// Reserved kernel descriptor bytes in device and pinned host storage.
     pub descriptor_bytes: usize,
     /// Only classes with a submitted decision, bounded by direction × intent × priority.
     /// These counters survive retirement and close; inspecting them makes no CUDA calls.
@@ -236,6 +287,11 @@ pub struct LocalCopyStats {
 impl LocalCopyEngine {
     /// Bind one bounded copy owner to a caller stream. Kernel scratch is reserved here,
     /// outside submission. The device registration supplies the exact execution context.
+    ///
+    /// # Errors
+    /// Returns configuration, context/capture, driver or scratch-budget errors.
+    /// Explicit kernel mode fails if its prerequisites are unavailable; Auto may
+    /// select DMA. Failed native cleanup returns [`Error::Unquiesced`].
     ///
     /// # Safety
     /// The stream must be valid in the device registration's context, and `owner`
@@ -329,6 +385,11 @@ impl LocalCopyEngine {
 
     /// Enqueue in caller stream order. A partial enqueue error is reported by
     /// the completion after its marker. A missing marker returns Unquiesced.
+    /// The stream is not synchronized; the returned completion owns the receipt.
+    ///
+    /// # Errors
+    /// Returns admission/geometry/access errors before enqueue, or native errors.
+    /// [`Error::Unquiesced`] retains all potentially accessed owners and charges.
     pub fn submit(
         &self,
         direction: CopyDirection,
@@ -349,6 +410,11 @@ impl LocalCopyEngine {
         })
     }
     /// Poll abandoned submissions and return current ownership charges.
+    ///
+    /// # Errors
+    /// Returns a quarantined-flight, cleanup or poisoned-lock error. Ordinary
+    /// copy failures after successful retirement are reported by their individual
+    /// completions, not aggregated here. Uncertain flights remain retained.
     pub fn progress(&self) -> Result<LocalCopyStats> {
         let mut pool = self
             .inner
@@ -359,6 +425,9 @@ impl LocalCopyEngine {
         Ok(pool.stats())
     }
     /// Inspect live and quarantined charges without advancing a CUDA event.
+    ///
+    /// # Errors
+    /// Returns [`Error::Internal`] if the pool lock is poisoned.
     pub fn stats(&self) -> Result<LocalCopyStats> {
         let pool = self
             .inner
@@ -369,11 +438,18 @@ impl LocalCopyEngine {
     }
     /// Stop admission and wait up to the timeout for event receipts. A timeout
     /// retains all active loans. Teardown can be called again after a timeout.
+    ///
+    /// # Errors
+    /// Returns [`Error::Timeout`] while receipts are pending, or native cleanup
+    /// errors. [`Error::Unquiesced`] is sticky and never permits native destroy retry.
     pub fn close(&self, timeout: Duration) -> Result<()> {
         self.inner.close(timeout)
     }
 }
 
+/// Receipt for one local copy and its retained registrations, event and producer.
+/// Dropping this handle leaves pending work with the copy owner; it is not a cancel
+/// or release receipt. Only successful observation authorizes normal byte reuse.
 #[must_use = "observe the completion before reusing payload bytes"]
 pub struct LocalCopyCompletion {
     inner: Arc<Inner>,
@@ -382,10 +458,17 @@ pub struct LocalCopyCompletion {
     backend: LocalCopyBackend,
 }
 impl LocalCopyCompletion {
+    /// Backend selected for this submission; observing it does not poll the event.
     pub fn backend(&self) -> LocalCopyBackend {
         self.backend
     }
     /// Query only the event recorded immediately after this submission.
+    /// Returns `false` while pending and `true` after successful physical retirement.
+    ///
+    /// # Errors
+    /// Returns a submission/completion error once observed; uncertain native state
+    /// returns [`Error::Unquiesced`] and retains owners. A failed result is not a
+    /// general permission to replay a partially submitted copy.
     pub fn poll(&self) -> Result<bool> {
         let mut pool = self
             .inner
@@ -397,6 +480,12 @@ impl LocalCopyCompletion {
         }
         self.signal.status().map(|s| s.is_some())
     }
+    /// Poll this receipt until completion or the bounded timeout, without synchronizing
+    /// unrelated work on the caller stream.
+    ///
+    /// # Errors
+    /// Returns [`Error::Timeout`] without releasing pending owners, a deadline
+    /// overflow error, or the errors from [`Self::poll`].
     pub fn wait(&self, timeout: Duration) -> Result<()> {
         wait_for(timeout, || self.poll())
     }

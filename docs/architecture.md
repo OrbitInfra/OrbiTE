@@ -19,9 +19,10 @@ breaking changes remain allowed before 0.1.0. Public enums and field records are
 helpers are stable candidates. Hidden owner helpers are release-private, so the
 Python packaging crate pins the exact core version. The hidden adaptive core
 has no stability promise. [Documentation closure](rust-api.md#documentation-closure)
-now enforces core/RDMA coverage and documents retirement separately from task
-outcomes; feature-specific and Python closure remains before `0.1.0`. Source
-readiness does not qualify a native device.
+enforces every Rust feature set and the installed Python public surface, with
+retirement documented separately from task outcomes. Feature counters state
+whether they count attempts, enqueues, completion or retained charges. Source
+readiness and documentation coverage do not qualify a native device.
 API, configuration and wire compatibility are out of scope. Provenance lives
 in the [owner and settings map](tent-parity.md#owner-correspondence); public
 setting docs describe OrbiTE's units, defaults, bounds and ownership effects.
