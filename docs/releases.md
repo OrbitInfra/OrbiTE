@@ -11,6 +11,9 @@
   [before/after audit](rust-api.md#documentation-closure). No transfer semantics change.
 - RDMA build bindings require bindgen 0.72.1 for complete Clang 22 layouts.
   Native layout assertions and runtime-only loading remain unchanged.
+- Release checks accept preparation and published headings while requiring the
+  latest versioned section to match the manifests. Generated GitHub notes contain
+  only the selected version; unreleased changes and older releases stay separate.
 - Public documentation surface reduction: `Batch::submit_groups` is hidden for
   the release-pinned Python binding; Rust callers use `Batch::submit`.
   `TransferRequest::requiring_post_submit_cancellation` is hidden for internal

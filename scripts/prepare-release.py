@@ -16,7 +16,12 @@ spec.loader.exec_module(release)
 
 
 def release_notes(text, version):
-    notes = text.split("## Maintainer publication procedure", 1)[0]
+    headings = list(re.finditer(r"^## (.+)$", text, re.MULTILINE))
+    selected = [i for i, h in enumerate(headings) if h[1] in (version, version + " — preparation")]
+    release.require(len(selected) == 1, "missing/ambiguous release notes version heading")
+    index = selected[0]
+    end = headings[index + 1].start() if index + 1 < len(headings) else len(text)
+    notes = text[headings[index].start():end]
     # A Release body has no docs/ base directory. Link to the approved tag.
     return re.sub(r"\]\(([^():\s]+\.md(?:#[^()\s]+)?)\)",
                   lambda m: f"](https://github.com/OrbitInfra/OrbiTE/blob/v{version}/docs/{m[1]})",
