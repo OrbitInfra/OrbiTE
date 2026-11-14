@@ -42,15 +42,25 @@ static RETAINED_IPC: AtomicUsize = AtomicUsize::new(0);
 static RETAINED_EXPORT: AtomicUsize = AtomicUsize::new(0);
 static RETAINED_CONTEXT: AtomicUsize = AtomicUsize::new(0);
 
+/// Process-wide counts of native resources retained after uncertain cleanup.
+/// These independent atomic observations are not a live-allocation inventory
+/// or a physical completion receipt. Retained resources are not retried or freed.
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
 pub struct RetainedResources {
+    /// Device allocations whose release could not be proved safe.
     pub device_allocations: usize,
+    /// Imported IPC mappings retained after uncertain close or outstanding use.
     pub ipc_mappings: usize,
+    /// IPC exports retained while a remote user may still access the backing.
     pub ipc_exports: usize,
+    /// Pinned host allocations retained after uncertain native cleanup.
     pub pinned_allocations: usize,
+    /// Context references retained after failed release or binding restoration.
     pub contexts: usize,
+    /// Copy streams retained after failed native cleanup.
     pub streams: usize,
+    /// CUDA events retained after failed native cleanup.
     pub events: usize,
 }
 
@@ -454,6 +464,13 @@ impl CudaMemory {
         Err(Error::Unavailable("unsupported CUDA pointer type"))
     }
 
+    /// Allocate and zero `length` device bytes on the zero-based device ordinal.
+    /// Initialization is synchronized before returning; IPC export is disabled.
+    ///
+    /// # Errors
+    /// Returns [`Error::InvalidRange`] for an empty or oversized allocation,
+    /// driver/allocation errors, or [`Error::Unquiesced`] if initialization cannot
+    /// prove completion. Uncertain backing remains retained.
     pub fn allocate(device: i32, length: usize) -> Result<Self> {
         Self::allocate_owned(device, length, false)
     }
@@ -461,6 +478,10 @@ impl CudaMemory {
     /// Explicitly allow cooperative CUDA IPC export of this whole allocation.
     /// The physical allocation is rounded to 2 MiB and zeroed, including padding.
     /// IPC cannot enforce range permissions or revoke a previously shared handle.
+    ///
+    /// # Errors
+    /// Returns the errors from [`Self::allocate`], including range overflow when
+    /// rounding the physical extent. A failed synchronization retains the backing.
     pub fn allocate_ipc(device: i32, length: usize) -> Result<Self> {
         Self::allocate_owned(device, length, true)
     }
@@ -530,6 +551,13 @@ impl CudaMemory {
         })
     }
 
+    /// Wrap externally owned device bytes without taking over their native free.
+    /// Driver attributes validate the range and retain its exact context.
+    ///
+    /// # Errors
+    /// Returns [`Error::InvalidRange`] for invalid bounds, an unavailable or
+    /// unsupported allocation error, or the native probing error.
+    ///
     /// # Safety
     /// The actual owner must retain the stable writable device allocation AND
     /// its CUDA context through the last registration/operation. Coordinate
@@ -584,20 +612,36 @@ impl CudaMemory {
         })
     }
 
+    /// Device address of the first byte; this is not a CPU-dereferenceable pointer.
     pub fn base_address(&self) -> u64 {
         self.address
     }
+    /// Logical size in bytes, excluding any physical IPC padding.
     pub fn len(&self) -> usize {
         self.length
     }
+    /// Whether the logical view is empty; successful constructors require nonempty views.
     pub fn is_empty(&self) -> bool {
         self.length == 0
     }
 
+    /// Copy a checked device range into host bytes and wait for the copy receipt.
+    /// Producer readiness and conflicting native range loans are checked first.
+    ///
+    /// # Errors
+    /// Returns range or conflicting-access errors, [`Error::ResourceExhausted`]
+    /// above the 64 MiB per-call staging limit, or a native copy error.
+    /// [`Error::Unquiesced`] retains backing and staging after uncertain completion.
     pub fn read(&self, offset: usize, destination: &mut [u8]) -> Result<()> {
         checked_range(offset, destination.len(), self.length)?;
         self.copy(offset, destination, None)
     }
+    /// Copy host bytes into a checked device range and wait for the copy receipt.
+    /// External consumers must follow the allocation's producer/access contract.
+    ///
+    /// # Errors
+    /// Returns the range, staging-budget, access and native errors from [`Self::read`].
+    /// An uncertain copy retains its owners and does not authorize a retry.
     pub fn write(&self, offset: usize, source: &[u8]) -> Result<()> {
         checked_range(offset, source.len(), self.length)?;
         self.copy(offset, &mut [], Some(source))

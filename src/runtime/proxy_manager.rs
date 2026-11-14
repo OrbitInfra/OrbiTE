@@ -19,11 +19,15 @@ use crate::platform::numa::{NATIVE, Numa, page_round};
 use crate::runtime::receiver_credit::ReceiverResourceLease;
 use crate::{Error, RegisteredMemory, Result, StagingLocation};
 
+/// Shared staging worker, buffer and protocol counters for one engine.
+/// Live charges include failed cleanup; cumulative counts do not prove that all
+/// outstanding transfers have drained. Worker and buffer snapshots are sampled separately.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct StagingStats {
     /// Live shared staging threads, including idle shards.
     pub worker_shards: usize,
+    /// Cumulative successful worker-shard starts.
     pub opened_worker_shards: u64,
     /// Sessions waiting for a shard; no Pin or payload has started.
     pub queued_tasks: usize,
@@ -33,17 +37,29 @@ pub struct StagingStats {
     pub cancelled_tasks: u64,
     /// Includes construction, checked-out chunks and failed cleanup.
     pub reserved_chunks: usize,
+    /// Bytes charged to all reserved chunks, including allocation padding.
     pub reserved_bytes: usize,
+    /// Cached chunks available for reuse in their matching context and NUMA node.
     pub idle_chunks: usize,
+    /// Chunks being constructed, borrowed or cleaned up.
     pub active_chunks: usize,
+    /// Chunks permanently charged after uncertain use or failed cleanup.
     pub retained_chunks: usize,
+    /// Cumulative newly allocated chunks, including replacements for a different location.
     pub allocations: u64,
+    /// Cumulative acquisitions of matching cached chunks.
     pub reuses: u64,
+    /// Cumulative successful staging copy chunks.
     pub completed_chunks: u64,
+    /// Cumulative payload bytes copied by completed staging chunks.
     pub copied_bytes: u64,
+    /// Cumulative completed remote PinRead/PinWrite protocol operations.
     pub remote_pins: u64,
+    /// Cumulative completed remote Delegate protocol operations.
     pub remote_delegates: u64,
+    /// Cumulative completed remote Cross protocol operations.
     pub remote_crosses: u64,
+    /// Cumulative completed remote Unpin protocol operations.
     pub remote_unpins: u64,
 }
 

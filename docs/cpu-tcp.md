@@ -150,8 +150,11 @@ only destinations still eligible for retry.
 | One notification | 64 KiB | Name plus message bytes, enforced at both ends |
 
 The protocol is plain TCP for trusted environments: epochs fence restarts but
-do not authenticate peers. There is one connection per request and sequential
-batch execution. `stats()` samples registration, admission and notification
+do not authenticate peers. Bounded endpoint/epoch caches reuse clean connections
+after complete frames; partial or uncertain streams retire instead of returning
+to the cache. Each leased connection executes one operation at a time. See
+[connection ownership](architecture.md#engine-and-transport-boundary).
+`stats()` samples registration, admission and notification
 counters under separate locks. These budgets cover registered ranges, not an
 external allocator's own footprint.
 
@@ -159,7 +162,7 @@ external allocator's own footprint.
 
 OrbiTE uses its own pre-release control protocol; see the
 [wire policy](tent-parity.md#wire-and-consumer-boundaries). Integers are
-unsigned big-endian and each connection carries one operation. Both headers
+unsigned big-endian and each request/reply exchange carries one operation. Both headers
 begin with the eight-byte `ORBITTE\0` magic, a two-byte version, a one-byte
 operation or status and one zero reserved byte.
 

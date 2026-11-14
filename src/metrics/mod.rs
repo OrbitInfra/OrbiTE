@@ -67,6 +67,7 @@ impl Metrics {
     pub fn http_port(&self) -> u16 {
         self.port
     }
+    /// Whether event sampling is enabled; owner gauges remain observable while paused.
     pub fn enabled(&self) -> bool {
         self.recorder().enabled.load(Relaxed)
     }
@@ -78,12 +79,18 @@ impl Metrics {
     pub fn write_prometheus(&self, writer: impl std::io::Write) -> std::io::Result<()> {
         self.scrape.write_prometheus(writer)
     }
+    /// Export one JSON snapshot to a fallible sink.
+    ///
+    /// # Errors
+    /// Returns the sink/serialization error and counts the failed JSON response.
     pub fn write_json(&self, writer: impl std::io::Write) -> std::io::Result<()> {
         self.scrape.write_json(writer)
     }
+    /// Render a Prometheus snapshot, including current owner gauges and pipeline health.
     pub fn prometheus(&self) -> String {
         self.scrape.prometheus()
     }
+    /// Build a JSON snapshot with metric values summed across labels and current owner gauges.
     pub fn json(&self) -> serde_json::Value {
         self.scrape.json()
     }

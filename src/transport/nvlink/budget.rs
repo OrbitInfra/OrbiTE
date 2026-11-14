@@ -6,10 +6,15 @@ use crate::{Error, Result};
 #[derive(Clone, Copy, Debug, Default)]
 #[non_exhaustive]
 pub struct NvlinkStats {
+    /// Charged export mappings, including construction and retained exports.
     pub exports: usize,
+    /// Charged import mappings, including construction and retained imports.
     pub imports: usize,
+    /// Physical extent bytes charged across imports and exports, including padding.
     pub allocation_bytes: usize,
+    /// Export mappings whose charge is retained permanently after uncertain cleanup.
     pub retained_exports: usize,
+    /// Import mappings whose charge is retained permanently after uncertain cleanup.
     pub retained_imports: usize,
     /// Charged stream/event slots, including construction and uncertain cleanup.
     pub stream_slots: usize,

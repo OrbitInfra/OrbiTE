@@ -39,11 +39,14 @@ ordinary Python, `-O` and `PYTHONOPTIMIZE=2`; invalid metadata cannot bypass it.
 The [API decisions](rust-api.md#api-decisions) keep native qualification
 separate from this API review.
 The [documentation audit](rust-api.md#documentation-closure) records the
-per-feature baseline and remaining work. CI's `Enforce core and RDMA public
-documentation` step denies missing docs and invalid rustdoc links/HTML on both
-toolchains. CPU/TCP doctests run in `Test CPU TCP and ownership`; the file
-example is compile-only. These are documentation controls, not new device
-qualification evidence.
+per-feature baseline and zero remaining missing-docs diagnostics. CI's `Enforce
+public Rust documentation for every feature set` step denies missing docs and
+invalid rustdoc links/HTML for all 14 feature sets on both toolchains. CPU/TCP
+doctests run in `Test CPU TCP and ownership`; the file example is compile-only.
+The installed-wheel `test_public_documentation` checks classes, record fields,
+methods and exceptions, with a missing-contract negative control. These checks
+run for both wheel profiles and the rebuilt sdist. They are documentation
+controls, not new device qualification evidence.
 
 The following records accepted historical CI evidence, limited to its artifact.
 The configuration and Python compatibility interfaces have since been replaced;

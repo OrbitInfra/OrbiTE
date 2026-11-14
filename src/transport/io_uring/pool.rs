@@ -5,15 +5,24 @@ use std::sync::{Arc, Mutex};
 use super::{IoUringConfig, task::Bounce};
 use crate::{Error, Result};
 
+/// File staging pool snapshot; outstanding loans remain charged until native drain.
 #[derive(Clone, Copy, Debug, Default)]
 #[non_exhaustive]
 pub struct IoUringStats {
+    /// Rounded bytes per configured slot; zero when the reusable pool is disabled.
     pub slot_bytes: usize,
+    /// Configured reusable slot capacity, including slots not yet allocated.
     pub slots: usize,
+    /// Currently borrowed slots, including loans retained by unquiesced I/O.
     pub active_slots: usize,
+    /// Whether the initialized staging slab uses CUDA-pinned host memory.
+    /// This value survives close and does not prove that the slab is still live.
     pub pinned: bool,
+    /// Cumulative successful reusable-slot acquisitions.
     pub slot_acquisitions: u64,
+    /// Cumulative enabled-pool attempts without an available compatible slot.
     pub slot_misses: u64,
+    /// Outstanding bytes charged for per-operation pageable fallback buffers.
     pub pageable_bytes: usize,
 }
 

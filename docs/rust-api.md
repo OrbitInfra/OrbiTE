@@ -73,31 +73,33 @@ a unique name and any count/link overrides.
 | Binding internals | Backing `release_owned`, registration `exclusively_held`, `shm_backing_name` and `Batch::submit_groups` are `#[doc(hidden)]`, outside the stability promise. `TransferRequest::requiring_post_submit_cancellation` is also hidden: only internal controls use it. The Python packaging crate pins the core to the exact same release because it uses binding helpers. Use `Batch::submit` for public Rust append operations. |
 | Names | `NvlinkStats` matches `Transport::Nvlink`; `MemoryBacking` is the actual retained owner enum. `TopologyMemoryKind` describes topology entries and is distinct from registration `MemoryType`. Public TENT settings and transport-ID conversions are removed. `ReceiverCreditUpdateV1` names OrbiTE's credit-update schema. |
 | Adaptive core | The callable `rdma-adaptive` module is `#[doc(hidden)]`, unstable and outside the stability promise. It has no engine integration or consumer. Crate-private visibility creates dead-code/unused-import warnings; hiding the reference core preserves its tests without suppressing those lints. |
-| Documentation | Core/runtime, memory/segments, diagnostics and CPU/RDMA settings and counters deny missing rustdoc. The [documentation audit](#documentation-closure) tracks the remaining feature-specific and Python work before `0.1.0`; it is not a hardware qualification claim. |
+| Documentation | All public Rust owners, settings and counters deny missing rustdoc. The [documentation audit](#documentation-closure) and installed Python public-surface control prevent new omissions; they are not hardware qualification claims. |
 | Native binding types | The deliberate cudarc stream coupling and raw owner-backed alternative below remain. Signatures may change between betas; installed GPU profiles remain unqualified. |
 
 ### Documentation closure
 
-Linux audits at base `fbf21da8` and after the first documentation PR give the
-same counts on stable and Rust 1.85. Each count is a `missing_docs` diagnostic,
+Linux audits at base `fbf21da8`, after the core/RDMA PR and after full closure give
+the same counts on stable and Rust 1.85. Each count is a `missing_docs` diagnostic,
 including individual fields and variants. It is not a count of API invariants.
 
-| Feature set | Base | After core/RDMA documentation |
-| --- | ---: | ---: |
-| Default | 329 | 0 |
-| `rdma` | 444 | 0 |
-| `cuda` | 404 | 70 |
-| `io-uring` | 343 | 11 |
-| `gds` | 413 | 78 |
-| `metrics` | 337 | 8 |
-| `rdma,cuda,io-uring,gds,metrics,rdma-adaptive` | 550 | 97 |
+| Feature set | Base | After core/RDMA | Current |
+| --- | ---: | ---: | ---: |
+| Default | 329 | 0 | 0 |
+| `rdma` | 444 | 0 | 0 |
+| `cuda` | 404 | 70 | 0 |
+| `io-uring` | 343 | 11 | 0 |
+| `gds` | 413 | 78 | 0 |
+| `metrics` | 337 | 8 | 0 |
+| `rdma,cuda,io-uring,gds,metrics,rdma-adaptive` | 550 | 97 | 0 |
 
-CI rejects missing docs for the default, `rdma` and `rdma-adaptive` builds.
-Completed owner modules also deny missing docs in combined builds; the full
-feature audit continues to report the remaining findings. The second PR closes
-CUDA/local-copy and staging owners, storage-provider counters, metrics and
-Python docstrings, then makes every feature audit fatal. The release-ladder
-item remains open until that work passes.
+The crate denies missing docs, and CI runs fatal missing-docs, broken-link and
+invalid-HTML checks for all 14 feature sets on both toolchains. CUDA/local-copy,
+staging, storage-provider counters and metrics document their units and retention
+contracts. Counters distinguish native attempts, successful enqueues and completed
+bytes; neither counters nor compatibility-mode observations qualify a hardware route.
+The [installed Python check](python.md#public-documentation-check) covers the
+runtime classes, record fields, methods and typed exceptions. These checks detect
+omissions; source review is still required to verify the contracts themselves.
 
 Rustdoc includes runnable TCP construction, registration, peer-open and
 submit/wait examples. The file example compiles but does not run as a doctest:

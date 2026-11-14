@@ -15,23 +15,32 @@ pub(crate) enum Quarantine {
 }
 pub(crate) use registration::{BufferLease, BufferSlot, FileHandle};
 
+/// Effective cuFile compatibility policy, not proof of an individual I/O's route.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum GdsMode {
     /// Effective driver configuration disables compatibility I/O.
     NativeOnly,
+    /// The driver may use compatibility I/O; native routing is not guaranteed.
     CompatAllowed,
+    /// The driver's configuration forces compatibility I/O.
     CompatForced,
 }
 
+/// GDS provider observations. Native-route qualification requires separate hardware evidence.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct GdsStats {
+    /// Effective driver mode, or `None` if it has not initialized successfully.
     pub mode: Option<GdsMode>,
+    /// Whether initialized driver policy satisfies this engine's native-mode requirement.
     pub available: bool,
     /// Clean cuFile buffer registration failures that left the CUDA region usable.
     pub buffer_registration_failures: u64,
+    /// Cumulative native batch-submit attempts, including failed/partial submissions.
     pub submitted_batches: u64,
+    /// Retained batch or buffer-release entries. Failed native cleanup can keep
+    /// an entry and its owners permanently; this gauge need not return to zero.
     pub quarantined_batches: usize,
 }
 

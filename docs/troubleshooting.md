@@ -6,11 +6,12 @@ are separate checks.
 
 ## The crates.io package does not expose the documented API
 
-The last published crate is the early-development `0.1.0-alpha.1`. The current
-docs describe the beta.1 candidate, not that older artifact. Until the
-maintainer publishes it, use source or the checked CI artifacts described in
-the [release procedure](releases.md#review-and-dry-run). After publication,
-use the pinned versions in the [installed quickstart](getting-started.md#installed-quickstart).
+The published beta.1 supersedes the early-development alpha.1 API. Use the
+pinned versions in the [installed quickstart](getting-started.md#installed-quickstart).
+These docs track current `main`; [release notes](releases.md) distinguish its
+unreleased documentation/build updates from the published artifact. To inspect
+those updates, use source or the reviewed CI artifacts described in the
+[release procedure](releases.md#review-and-dry-run).
 
 ## RDMA bindings fail to compile
 
@@ -18,6 +19,8 @@ Reproduce with Ubuntu 24.04, GCC/G++ and Clang/libclang 18, matching CI.
 Confirm that `LIBCLANG_PATH` resolves the selected libclang and that an inherited
 `CLANG_PATH` does not select a conflicting installation. The build needs a C
 compiler, pkg-config and libibverbs headers. See the [build guide](build.md).
+With Clang 22, bindgen older than 0.72.1 can generate incomplete verbs layouts.
+Current `main` requires 0.72.1; preserve layout checks when diagnosing this error.
 
 ## libibverbs not found
 
