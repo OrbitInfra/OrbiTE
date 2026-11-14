@@ -27,13 +27,13 @@ pub struct NicLoadStats {
     pub inflight_bytes: usize,
     /// Lifetime bytes assigned to this NIC, including retries before posting.
     pub allocated_bytes: u64,
-    /// Bytes currently posted and awaiting a validated completion.
+    /// Possibly posted payload bytes owed until validated completion or physical teardown.
     pub posted_bytes: u64,
     /// Cumulative successfully completed payload bytes.
     pub completed_bytes: u64,
-    /// Learned selection bandwidth in bytes/second.
+    /// Selection bandwidth estimate in bytes/second, seeded from link or configured bandwidth.
     pub ewma_bandwidth_bps: f64,
-    /// Observed payload transmit bandwidth in bytes/second.
+    /// Payload transmit bandwidth estimate in bytes/second, seeded before accepted samples.
     pub transmit_bandwidth_bps: f64,
     /// Accepted samples used by the selection estimator.
     pub selection_samples: u64,

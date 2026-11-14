@@ -159,7 +159,8 @@ impl EffectiveQosPolicy {
     pub fn enabled(&self) -> bool {
         self.0.contract.is_some()
     }
-    /// Whether resolution found a tenant-specific or intent-specific contract.
+    /// Whether resolution found an explicit intent contract within the tenant.
+    /// Tenant/global defaults and disabled QoS return false.
     pub fn matched(&self) -> bool {
         self.0.matched
     }

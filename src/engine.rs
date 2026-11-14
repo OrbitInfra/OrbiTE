@@ -1045,6 +1045,8 @@ impl TransferEngine {
     ///
     /// # Errors
     /// Returns [`Error::Internal`] if an accounting lock is poisoned.
+    /// On Linux, SHM retirement sweeping can return [`Error::Unquiesced`];
+    /// unresolved exports remain retained.
     pub fn stats(&self) -> Result<EngineStats> {
         #[cfg(target_os = "linux")]
         if let Some(shm) = &self.source.shm {

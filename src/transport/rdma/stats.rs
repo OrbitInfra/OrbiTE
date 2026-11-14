@@ -197,15 +197,15 @@ pub struct RdmaStats {
     /// Source parents retained by failed deregistration. Failed MW cleanup keeps
     /// its parent borrow charged in persistent_source_mrs without a dereg attempt.
     pub retained_source_mrs: usize,
-    /// Successful physical READ owners.
+    /// Successfully completed native READ work requests.
     pub completed_reads: u64,
     /// Physical SQ completions observed for payload WRs, including error receipts.
     pub payload_send_cqes: u64,
-    /// Successful physical WRITE owners.
+    /// Successfully completed native WRITE work requests.
     pub completed_writes: u64,
-    /// Payload bytes in successful READ owners.
+    /// Bytes in successfully completed native READ work requests.
     pub completed_read_bytes: u64,
-    /// Payload bytes in successful WRITE owners.
+    /// Bytes in successfully completed native WRITE work requests.
     pub completed_write_bytes: u64,
     /// Reserved or possibly posted WR slots pending CQ validation or teardown.
     pub work_requests: usize,
@@ -213,7 +213,7 @@ pub struct RdmaStats {
     pub retained_work_requests: usize,
     /// High-water mark of charged SQ slots.
     pub peak_work_requests: usize,
-    /// Cumulative accepted native payload work requests.
+    /// Cumulative known-accepted native SQ work requests, including control WRs.
     pub posted_work_requests: u64,
     /// Cumulative native send-post calls.
     pub post_calls: u64,
