@@ -90,6 +90,21 @@ are source checks, not counts of dynamic assertions or new qualification.
 `repeat-tcp-pool.sh` keeps its existing filter names and 50 repetitions. Native
 shims, hardware gates and the remaining lifetime/fault controls are unchanged.
 
+The selector table refactor preserves the following concrete input/outcome
+checks through the production `SelectionContext` and compiled selector. Here
+the invariant count expands each table row and loop iteration, unlike the
+source-predicate count used for the unchanged TCP assertions above. Repeated
+assertion expressions decrease from 21 to 14, while all 26 selection checks
+and both original test entry points remain. Independent size/hint and IPC
+rows start with fresh contexts. Test source stays at 870 lines and production
+source delta is zero. Default and CUDA builds retain the feature-dependent
+staging result; these CPU controls do not qualify an installed GPU path.
+
+| Control in `runtime::transport_selector::tests` | Selection checks before/after | Preserved cases |
+| --- | --- | --- |
+| `transport_selector_first_match_bounds_priority_and_hard_hint` | 15 / 15 | Inclusive bounds 8/16 and outside bounds 7/17 with automatic and hard-hint outcomes; priority, local memory/capability, first-match unavailable and no-matching-policy rejection |
+| `transport_selector_uses_both_owners_and_preserves_staging_intent` | 11 / 11 | Both IPC exports, either export absent, same process, different machine; TCP at all three priorities; unsupported staging, CUDA-dependent staging and CPU-target rejection |
+
 Fixed-port restart, close and metrics fixtures execute in isolated child
 processes before opening their sockets. A deterministic fork control identifies
 the inherited listener by socket inode and reproduces `AddrInUse` despite

@@ -79,7 +79,6 @@ fn context(remote: &RemoteRegion) -> SelectionContext<'_> {
 #[test]
 fn transport_selector_first_match_bounds_priority_and_hard_hint() {
     let remote = region(MemoryType::Cpu, false);
-    let mut context = context(&remote);
     let selector = make_selector(
         &TransportSelectorConfig::from_json(
             r#"{"policy":[
@@ -92,26 +91,26 @@ fn transport_selector_first_match_bounds_priority_and_hard_hint() {
         .unwrap(),
     )
     .unwrap();
-    for size in [8, 16] {
+    for (size, automatic, hint, forced) in [
+        (8, Transport::Tcp, Transport::Rdma, Some(Transport::Rdma)),
+        (16, Transport::Tcp, Transport::Rdma, Some(Transport::Rdma)),
+        (7, Transport::Rdma, Transport::Tcp, None),
+        (17, Transport::Rdma, Transport::Tcp, None),
+    ] {
+        let mut context = context(&remote);
         context.transfer_size = size;
         assert_eq!(
             select(Some(&selector), &context, Transport::Unspec).unwrap(),
-            Transport::Tcp
+            automatic,
+            "automatic selection at size {size}"
         );
         assert_eq!(
-            select(Some(&selector), &context, Transport::Rdma).unwrap(),
-            Transport::Rdma
+            select(Some(&selector), &context, hint).ok(),
+            forced,
+            "hard hint {hint:?} at size {size}"
         );
     }
-    for size in [7, 17] {
-        context.transfer_size = size;
-        assert_eq!(
-            select(Some(&selector), &context, Transport::Unspec).unwrap(),
-            Transport::Rdma
-        );
-        assert!(select(Some(&selector), &context, Transport::Tcp).is_err());
-    }
-    context.transfer_size = 16;
+    let mut context = context(&remote);
     context.priority = Priority::Medium;
     assert_eq!(
         select(Some(&selector), &context, Transport::Unspec).unwrap(),
@@ -148,40 +147,41 @@ fn transport_selector_first_match_bounds_priority_and_hard_hint() {
 
 #[test]
 fn transport_selector_uses_both_owners_and_preserves_staging_intent() {
-    let remote = region(MemoryType::Cuda, true);
-    let mut context = context(&remote);
-    context.local_ipc = true;
     let identity = ProcessIdentity {
         machine: SourceEpoch([2; 16]),
         process: SourceEpoch([3; 16]),
     };
-    context.local_segment.nvlink = Some(identity);
-    context.remote_segment.nvlink = Some(ProcessIdentity {
+    let peer = ProcessIdentity {
         process: SourceEpoch([4; 16]),
         ..identity
-    });
-    let select = |context: &SelectionContext<'_>| select(None, context, Transport::Unspec).unwrap();
-    assert_eq!(select(&context), Transport::Nvlink);
-    context.local_ipc = false;
-    assert_eq!(select(&context), Transport::Rdma);
-    context.local_ipc = true;
-    let ordinary = region(MemoryType::Cuda, false);
-    context.remote = &ordinary;
-    assert_eq!(select(&context), Transport::Rdma);
-    context.remote = &remote;
-    context.remote_segment.nvlink = Some(identity);
-    assert_eq!(select(&context), Transport::Rdma);
-    context.remote_segment.nvlink = Some(ProcessIdentity {
+    };
+    let other_machine = ProcessIdentity {
         machine: SourceEpoch([5; 16]),
-        process: SourceEpoch([4; 16]),
-    });
-    assert_eq!(select(&context), Transport::Rdma);
-    context.remote_segment.nvlink = None;
+        ..peer
+    };
+    let select = |context: &SelectionContext<'_>| select(None, context, Transport::Unspec).unwrap();
+    for (case, local_ipc, remote_ipc, peer, expected) in [
+        ("both exports", true, true, peer, Transport::Nvlink),
+        ("local not exportable", false, true, peer, Transport::Rdma),
+        ("remote not exportable", true, false, peer, Transport::Rdma),
+        ("same process", true, true, identity, Transport::Rdma),
+        ("other machine", true, true, other_machine, Transport::Rdma),
+    ] {
+        let remote = region(MemoryType::Cuda, remote_ipc);
+        let mut context = context(&remote);
+        context.local_ipc = local_ipc;
+        context.local_segment.nvlink = Some(identity);
+        context.remote_segment.nvlink = Some(peer);
+        assert_eq!(select(&context), expected, "{case}");
+    }
+    let remote = region(MemoryType::Cuda, true);
+    let mut context = context(&remote);
+    context.local_ipc = true;
+    context.local_segment.nvlink = Some(identity);
     context.remote_segment.rdma = false;
-    assert_eq!(select(&context), Transport::Tcp);
-    for priority in [Priority::Medium, Priority::Low] {
+    for priority in [Priority::High, Priority::Medium, Priority::Low] {
         context.priority = priority;
-        assert_eq!(select(&context), Transport::Tcp);
+        assert_eq!(select(&context), Transport::Tcp, "priority {priority:?}");
     }
     context.priority = Priority::High;
     context.remote_staging = true;
