@@ -116,6 +116,26 @@ its own descriptor. This closes the borrowed-snapshot resurrection hole without
 charging historical peer incarnations. There is no engine descriptor cache to
 erase: snapshots lose admission authority immediately.
 
+Memory descriptors are immutable requester-owned snapshots. Explicit
+`open_segment` reads the current source description with the caller's pinned
+epoch. If a submission contains an address missing from its snapshot, preparation
+performs one Describe for that batch in the same epoch before resolving its
+requests. This does not mutate the public handle or its clones. A descriptor
+already present keeps its registration ID: replacing a registration at the same
+address cannot redirect an admitted WRITE. Source-side validation still rejects
+retired registrations, and a newly responding epoch cannot replace the old one.
+
+This deliberately differs from frozen
+`segment_manager.cpp::getRemoteCached`, `invalidateAllCacheForRemote` and
+`synchronizeLocal`: TENT uses a TTL/versioned thread-local cache and best-effort
+update subscriptions. OrbiTE has no shared memory-descriptor cache, subscriber
+table or cross-submission refresh coalescer. Refresh is scoped to each explicit
+open or missing-address batch; applications replace their own snapshots when
+they need updated inventory. File descriptor caching and refresh keep their
+separate [storage contract](storage.md). The missing-descriptor, replaced-WRITE
+and retired-descriptor TCP controls check snapshot immutability, exact bytes and
+rejection without remote effects.
+
 Timed-out drain entries still owe cleanup, and failed native cleanup entries
 remain charged even after every handle disappears. Live/retired/unquiesced and
 cumulative reclaimed-entry counters expose this distinction. The churn control

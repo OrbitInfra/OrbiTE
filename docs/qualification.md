@@ -136,6 +136,19 @@ NVLink and MNNVL retirement remain **Implemented; installed profile unqualified*
 Python same-epoch reopen preserves segment-handle close; it is not
 a drain receipt.
 
+Descriptor refresh has real TCP controls in the ordinary `cargo test --locked`
+gate. `missing_descriptor_refreshes_once_in_the_original_epoch_before_admission`
+checks guarded READ bytes, unchanged public snapshots and clones, explicit
+same-epoch reopen and stale-epoch WRITE rejection.
+`a_refresh_cannot_rebind_an_admitted_write_to_a_replaced_registration` keeps a
+replacement at the same address unchanged after stale registration rejection.
+The public `tcp` integration test
+`batched_read_write_range_guards_and_retired_descriptors` checks that an older
+snapshot can still list retired regions while the source denies them with no
+remote effect; reopening returns the current empty inventory. These controls
+validate the [deliberate cache/subscription difference](architecture.md#peer-retirement),
+not a push-update service or physical two-host qualification.
+
 (tent-tcp-interoperability)=
 ## Historical TENT TCP interoperability
 

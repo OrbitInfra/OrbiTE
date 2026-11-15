@@ -142,6 +142,8 @@ fn batched_read_write_range_guards_and_retired_descriptors() {
         .open_segment(source.endpoint(), source.source_epoch(), TIMEOUT)
         .unwrap();
     assert!(refreshed.regions().is_empty());
+    assert_eq!(peer.regions().len(), 2);
+    assert_eq!(region(&peer, export.id()).id(), export.id());
     source.close_source(TIMEOUT).unwrap();
     assert!(matches!(
         requester.open_segment(source.endpoint(), source.source_epoch(), TIMEOUT),

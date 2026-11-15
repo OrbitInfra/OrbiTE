@@ -9,6 +9,7 @@ fn missing_descriptor_refreshes_once_in_the_original_epoch_before_admission() ->
     let source = TransferEngine::new(Default::default())?;
     let requester = TransferEngine::new(Default::default())?;
     let empty = requester.open_segment(source.endpoint(), source.source_epoch(), WAIT)?;
+    let snapshot = empty.clone();
     let remote =
         source.register_memory(vec![8, 1, 2, 3, 4, 9].into(), Permission::RemoteReadWrite)?;
     let local = requester.register_memory(vec![0xee; 6].into(), Permission::LocalOnly)?;
@@ -26,6 +27,17 @@ fn missing_descriptor_refreshes_once_in_the_original_epoch_before_admission() ->
     let mut bytes = [0; 6];
     local.read(0, &mut bytes)?;
     assert_eq!(bytes, [0xee, 1, 2, 3, 4, 0xee]);
+    for peer in [&empty, &snapshot] {
+        assert!(peer.regions().is_empty());
+        assert!(matches!(
+            peer.resolve_address(remote.base_address(), remote.len()),
+            Err(Error::RegionNotFound)
+        ));
+    }
+    let refreshed = requester.open_segment(source.endpoint(), source.source_epoch(), WAIT)?;
+    let (region, offset) = refreshed.resolve_address(remote.base_address(), remote.len())?;
+    assert_eq!((region.id(), offset), (remote.id(), 0));
+    assert_eq!(refreshed.source_epoch(), empty.source_epoch());
     let mut stale = empty.clone();
     stale.epoch = SourceEpoch::generate()?;
     requester.bind_test_peer(&mut stale)?;
