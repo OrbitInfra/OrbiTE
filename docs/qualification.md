@@ -72,6 +72,24 @@ each real-process kill control once in ordinary CI, and 50 times per toolchain
 in [extended and release validation](build.md#ci-tiers). This is lifetime
 and byte evidence, not a physical-network latency or throughput claim.
 
+The TCP requester lifetime controls share a held-read peer and external-memory
+registration fixture. They retain their original test names, four scenarios,
+barriers, deadlines, listener-close order and all 37 postcondition assertions;
+the fixture owns no requester engine, registration or backing. For this
+consolidation, an assertion-level invariant is one existing `assert!` or
+`assert_eq!` predicate, including its original tuple or conditional expression.
+The predicates and their order are unchanged within each test; these counts
+are source checks, not counts of dynamic assertions or new qualification.
+
+| Control in `runtime::control_plane::tests` | Scenarios before/after | Assertion-level invariants before/after |
+| --- | --- | --- |
+| `address_batch_retains_requester_allocation_through_concurrent_unregister_and_close` | 1 / 1: synchronous READ | 9 / 9: retained external owner and charge, retired-registration rejection, completed bytes, one final drop and zero final charges |
+| `async_cancel_wait_timeout_and_requester_drain_preserve_physical_owners` | 2 / 2: queued cancel and deadline | 22 / 22: running/queued outcomes, non-drained timeout, busy free, closed requester, exact prefix/effect/index, no queued network connection and final release |
+| `dropping_async_handle_retains_engine_allocator_and_capacity_until_worker_exit` | 1 / 1: detached two-request batch | 6 / 6: charged allocation, admission pressure, retained backing/engine, bounded eventual drain and one final drop |
+
+`repeat-tcp-pool.sh` keeps its existing filter names and 50 repetitions. Native
+shims, hardware gates and the remaining lifetime/fault controls are unchanged.
+
 Fixed-port restart, close and metrics fixtures execute in isolated child
 processes before opening their sockets. A deterministic fork control identifies
 the inherited listener by socket inode and reproduces `AddrInUse` despite

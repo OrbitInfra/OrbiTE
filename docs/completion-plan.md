@@ -82,9 +82,12 @@ The [API documentation closure](#release-ladder) is implemented: core/runtime,
 CPU/RDMA, CUDA/local-copy/staging, storage and metrics have complete public
 rustdoc, enforced for every feature set. Python classes, fields, methods and
 exceptions have installed-wheel coverage and a missing-contract negative control.
-Independent review and the PR's final CI establish acceptance of this source step;
-no publication or hardware verification is part of it. The release ladder's
-test-consolidation item and installed acceptance remain separate work.
+Independent review and PR #202's final CI accepted this source step; no
+publication or hardware verification was part of it. Test consolidation is now
+in progress: the first substep shares the held TCP READ fixtures used by the
+synchronous, queued-cancel/deadline and detached-batch lifetime controls. Their
+test entry points, four scenarios and all 37 existing postcondition assertions
+are unchanged. Broader assertion consolidation and installed acceptance remain open.
 
 Follow the maintainer's 2026-11-09 order, one PR at a time, stopping for review
 after each:
@@ -497,7 +500,7 @@ publish packages.
 | --- | --- |
 | `0.1.0-alpha.N` | Historical maintainer-published milestones; APIs remain unstable. `0.1.0-alpha.1` was published from [`7cc48490`](https://github.com/OrbitInfra/OrbiTE/commit/7cc48490) and is superseded by beta.1. |
 | `0.1.0-beta.1` | [Published November 12, 2026](releases.md). S21, S26 and per-peer retirement are complete; S24 is removed and out of scope, and S25 is deferred. The [Rust](rust-api.md#current-public-surface) and [Python](python.md#surface-and-defaults) inventories describe current source, including unreleased documentation updates; the [API decisions](rust-api.md#api-decisions) settle extensibility, names and hidden binding/core boundaries. TCP, HP-TCP, SHM, io_uring, configuration and Python CPU/TCP are qualified in their stated Linux CI profiles. Current GPU, RDMA, GDS, MNNVL/EGM, CXL and physical multi-rail profiles remain explicitly unqualified. |
-| Test consolidation (after the beta.1 surface review) | Audit `tests/unit` (about 72k lines) for repeated assertions of the same invariant through the same owner, often added by different steps; merge them into table-driven tests. Preserve every negative control and distinct failure path: timeout, cancel, partial submit, `Unquiesced`, stale epoch and each deliberate TENT difference. CPU shims and `tests/hardware` gates are out of scope. Report source/test line deltas and invariant counts before/after; the invariant count must be unchanged. Tests-only refactor: no production change and no coverage drop. |
+| Test consolidation (after the beta.1 surface review) | In progress. First substep shares held-read peer and external-registration setup in `tests/unit/runtime/control_plane.rs`: 1,978 → 1,939 lines, production source delta 0; three test entry points, four scenarios and 37 assertion-level invariant checks before/after. [Coverage mapping](qualification.md#linux-ci-release-profiles). Continue auditing `tests/unit` for repeated assertions of the same invariant through the same owner and merge those into table-driven tests. Preserve every negative control and distinct failure path: timeout, cancel, partial submit, `Unquiesced`, stale epoch and each deliberate TENT difference. CPU shims and `tests/hardware` gates are out of scope. Report source/test line deltas and invariant counts before/after; the invariant count must be unchanged. Tests-only refactor: no production change and no coverage drop. |
 | API documentation closure (before `0.1.0`) | Implemented: all public Rust feature owners and Python classes, fields, methods and exceptions are documented. [Coverage](rust-api.md#documentation-closure): zero missing-docs diagnostics, fatal audits for all 14 feature sets on stable and Rust 1.85, and an installed-wheel public-documentation check with a negative control. No signature or transfer behavior change; final CI and independent review are required for source acceptance. |
 | `0.1.0` | Installed hardware verification passes for the OrbitKV-critical profiles below. The [P10 fault matrix](#p10--fault-and-physical-lifetime-acceptance) must pass on those profiles, and [P11 performance comparisons](#p11--consumers-performance-and-release) must be matched against frozen TENT. |
 | Post-0.1.0 P/D acceptance | After installed GDR/NVLink qualification, validate the [NIXL integration](nixl-backend.md) with inference consumers: decode-page abort/reuse safety, joint P/D and cache arbitration, and TTFT/ITL against NIXL+UCX and Mooncake. The backend design and upstream agreement happen earlier under [Current focus](#current-focus); OrbiTE ships no custom P/D connector. This remains a plan, not implemented or qualified integration. |

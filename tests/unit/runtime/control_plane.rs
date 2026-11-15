@@ -833,15 +833,23 @@ fn lost_notification_receipt_never_replays_or_erases_completed_data() {
     }
 }
 
-#[test]
-fn address_batch_retains_requester_allocation_through_concurrent_unregister_and_close() {
-    use std::sync::atomic::Ordering;
-    use std::sync::mpsc;
+// This fixture retains only the server socket. Client engines, registrations and
+// backing stay in each test so the fixture cannot hide a premature release.
+type HeldReadPeer<T> = (
+    RemoteSegment,
+    std::sync::mpsc::Receiver<()>,
+    std::sync::mpsc::Sender<()>,
+    thread::JoinHandle<T>,
+);
 
-    let (listener, mut peer) = fault_peer();
+fn held_read_peer<T: Send + 'static>(
+    replies: usize,
+    finish: impl FnOnce(TcpListener) -> T + Send + 'static,
+) -> HeldReadPeer<T> {
+    let (listener, peer) = fault_peer();
     let epoch = peer.epoch;
-    let (admitted_tx, admitted_rx) = mpsc::channel();
-    let (release_tx, release_rx) = mpsc::channel();
+    let (admitted_tx, admitted_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel();
     let handler = thread::spawn(move || {
         let (stream, _) = listener.accept().unwrap();
         let mut channel = ControlChannel {
@@ -850,24 +858,43 @@ fn address_batch_retains_requester_allocation_through_concurrent_unregister_and_
             stopping: None,
             nonblocking: false,
         };
-        channel.read_exact(&mut [0; REQUEST_SIZE]).unwrap();
-        admitted_tx.send(()).unwrap();
-        release_rx.recv_timeout(common::EVENTUAL_PROGRESS).unwrap();
-        channel
-            .write_all(
-                &Reply {
-                    status: 0,
-                    epoch,
-                    length: 8,
-                }
-                .encode(),
-            )
-            .unwrap();
-        channel.write_all(&[0xa7; 8]).unwrap();
+        for index in 0..replies {
+            if replies > 1 {
+                channel.deadline = deadline(TIMEOUT).unwrap();
+            }
+            channel.read_exact(&mut [0; REQUEST_SIZE]).unwrap();
+            if index == 0 {
+                admitted_tx.send(()).unwrap();
+                release_rx.recv_timeout(common::EVENTUAL_PROGRESS).unwrap();
+            }
+            channel
+                .write_all(
+                    &Reply {
+                        status: 0,
+                        epoch,
+                        length: 8,
+                    }
+                    .encode(),
+                )
+                .unwrap();
+            channel.write_all(&[0xa7; 8]).unwrap();
+        }
+        drop(channel);
+        // Cancellation/deadline tests keep the listener for the no-new-connection
+        // check; the other tests drop it here, at their original server exit.
+        finish(listener)
     });
-    let engine = Arc::new(TransferEngine::new(EngineConfig::default()).unwrap());
+    (peer, admitted_rx, release_tx, handler)
+}
 
-    engine.bind_test_peer(&mut peer).unwrap();
+fn requester_memory(
+    engine: &TransferEngine,
+    peer: &RemoteSegment,
+) -> (
+    common::ExternalFixture,
+    crate::RegisteredMemory,
+    TransferRequest,
+) {
     let fixture = common::external_memory(&[0; 8]);
     let local = engine
         .register_host_memory(Arc::clone(&fixture.memory), 0, 8, Permission::LocalOnly)
@@ -878,6 +905,18 @@ fn address_batch_retains_requester_allocation_through_concurrent_unregister_and_
         peer.regions[0].base_address(),
         8,
     );
+    (fixture, local, request)
+}
+
+#[test]
+fn address_batch_retains_requester_allocation_through_concurrent_unregister_and_close() {
+    use std::sync::atomic::Ordering;
+
+    let (mut peer, admitted_rx, release_tx, handler) = held_read_peer(1, drop);
+    let engine = Arc::new(TransferEngine::new(EngineConfig::default()).unwrap());
+
+    engine.bind_test_peer(&mut peer).unwrap();
+    let (fixture, local, request) = requester_memory(&engine, &peer);
     let requester = {
         let engine = Arc::clone(&engine);
         let peer = peer.clone();
@@ -923,37 +962,9 @@ fn address_batch_retains_requester_allocation_through_concurrent_unregister_and_
 fn async_cancel_wait_timeout_and_requester_drain_preserve_physical_owners() {
     use crate::{BatchState, TaskState};
     use std::sync::atomic::Ordering;
-    use std::sync::mpsc;
 
     for queued_cancel in [true, false] {
-        let (listener, mut peer) = fault_peer();
-        let epoch = peer.epoch;
-        let (admitted_tx, admitted_rx) = mpsc::channel();
-        let (release_tx, release_rx) = mpsc::channel();
-        let handler = thread::spawn(move || {
-            let (stream, _) = listener.accept().unwrap();
-            let mut channel = ControlChannel {
-                stream,
-                deadline: deadline(TIMEOUT).unwrap(),
-                stopping: None,
-                nonblocking: false,
-            };
-            channel.read_exact(&mut [0; REQUEST_SIZE]).unwrap();
-            admitted_tx.send(()).unwrap();
-            release_rx.recv_timeout(common::EVENTUAL_PROGRESS).unwrap();
-            channel
-                .write_all(
-                    &Reply {
-                        status: 0,
-                        epoch,
-                        length: 8,
-                    }
-                    .encode(),
-                )
-                .unwrap();
-            channel.write_all(&[0xa7; 8]).unwrap();
-            listener
-        });
+        let (mut peer, admitted_rx, release_tx, handler) = held_read_peer(1, |listener| listener);
         let engine = Arc::new(
             TransferEngine::new(EngineConfig {
                 max_allocated_batches: 1,
@@ -963,16 +974,7 @@ fn async_cancel_wait_timeout_and_requester_drain_preserve_physical_owners() {
         );
 
         engine.bind_test_peer(&mut peer).unwrap();
-        let fixture = common::external_memory(&[0; 8]);
-        let local = engine
-            .register_host_memory(Arc::clone(&fixture.memory), 0, 8, Permission::LocalOnly)
-            .unwrap();
-        let request = TransferRequest::new(
-            crate::Transport::Tcp,
-            local.base_address(),
-            peer.regions[0].base_address(),
-            8,
-        );
+        let (fixture, local, request) = requester_memory(&engine, &peer);
         let mut batch = engine.allocate_batch(2).unwrap();
         batch
             .submit(
@@ -1072,40 +1074,8 @@ fn async_cancel_wait_timeout_and_requester_drain_preserve_physical_owners() {
 #[test]
 fn dropping_async_handle_retains_engine_allocator_and_capacity_until_worker_exit() {
     use std::sync::atomic::Ordering;
-    use std::sync::mpsc;
 
-    let (listener, mut peer) = fault_peer();
-    let epoch = peer.epoch;
-    let (admitted_tx, admitted_rx) = mpsc::channel();
-    let (release_tx, release_rx) = mpsc::channel();
-    let handler = thread::spawn(move || {
-        let (stream, _) = listener.accept().unwrap();
-        let mut channel = ControlChannel {
-            stream,
-            deadline: deadline(TIMEOUT).unwrap(),
-            stopping: None,
-            nonblocking: false,
-        };
-        for index in 0..2 {
-            channel.deadline = deadline(TIMEOUT).unwrap();
-            channel.read_exact(&mut [0; REQUEST_SIZE]).unwrap();
-            if index == 0 {
-                admitted_tx.send(()).unwrap();
-                release_rx.recv_timeout(common::EVENTUAL_PROGRESS).unwrap();
-            }
-            channel
-                .write_all(
-                    &Reply {
-                        status: 0,
-                        epoch,
-                        length: 8,
-                    }
-                    .encode(),
-                )
-                .unwrap();
-            channel.write_all(&[0xa7; 8]).unwrap();
-        }
-    });
+    let (mut peer, admitted_rx, release_tx, handler) = held_read_peer(2, drop);
     let engine = Arc::new(
         TransferEngine::new(EngineConfig {
             max_allocated_batches: 1,
@@ -1116,16 +1086,7 @@ fn dropping_async_handle_retains_engine_allocator_and_capacity_until_worker_exit
 
     engine.bind_test_peer(&mut peer).unwrap();
     let weak_engine = Arc::downgrade(&engine);
-    let fixture = common::external_memory(&[0; 8]);
-    let local = engine
-        .register_host_memory(Arc::clone(&fixture.memory), 0, 8, Permission::LocalOnly)
-        .unwrap();
-    let request = TransferRequest::new(
-        crate::Transport::Tcp,
-        local.base_address(),
-        peer.regions[0].base_address(),
-        8,
-    );
+    let (fixture, local, request) = requester_memory(&engine, &peer);
     let mut batch = engine.allocate_batch(2).unwrap();
     batch
         .submit(

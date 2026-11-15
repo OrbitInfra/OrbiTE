@@ -43,7 +43,7 @@ records the source alignment. The [design-reference map](tent-parity.md) identif
 | Capability | Status | Limits |
 | --- | --- | --- |
 | Request construction | Implemented | `TransferRequest::new` with builders. The `rdma` and `cuda` features require Linux. See [Rust API](rust-api.md) |
-| Owned and external host registration | Implemented | Transactional batches, duplicate references, aliases and retained backing |
+| Owned and external host registration | Implemented | Transactional batches, duplicate references, aliases and retained backing. [TCP lifetime controls](qualification.md#linux-ci-release-profiles) retain distinct synchronous, queued-cancel/deadline and detached-batch cases while sharing socket setup |
 | Local file segments | Implemented | Core `file://` descriptors, checked offsets and close with pending I/O. Real-file controls cover fd retention and release. See [file segments](storage.md) |
 | Async batches and notifications | Implemented | Explicit progress, event-driven batch wakes, deferred free, bounded TCP/RPC notifications and per-target delivery. See [async batches](async-batches.md#explicit-progress) |
 | NVIDIA allocations, pinned host memory and copy streams | Qualified (H20 local copy) | Stream and event reuse; failure retention has CPU controls only |
