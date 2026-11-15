@@ -9,6 +9,7 @@ fn missing_descriptor_refreshes_once_in_the_original_epoch_before_admission() ->
     let source = TransferEngine::new(Default::default())?;
     let requester = TransferEngine::new(Default::default())?;
     let empty = requester.open_segment(source.endpoint(), source.source_epoch(), WAIT)?;
+    let snapshot = empty.clone();
     let remote =
         source.register_memory(vec![8, 1, 2, 3, 4, 9].into(), Permission::RemoteReadWrite)?;
     let local = requester.register_memory(vec![0xee; 6].into(), Permission::LocalOnly)?;
@@ -26,6 +27,17 @@ fn missing_descriptor_refreshes_once_in_the_original_epoch_before_admission() ->
     let mut bytes = [0; 6];
     local.read(0, &mut bytes)?;
     assert_eq!(bytes, [0xee, 1, 2, 3, 4, 0xee]);
+    for peer in [&empty, &snapshot] {
+        assert!(peer.regions().is_empty());
+        assert!(matches!(
+            peer.resolve_address(remote.base_address(), remote.len()),
+            Err(Error::RegionNotFound)
+        ));
+    }
+    let refreshed = requester.open_segment(source.endpoint(), source.source_epoch(), WAIT)?;
+    let (region, offset) = refreshed.resolve_address(remote.base_address(), remote.len())?;
+    assert_eq!((region.id(), offset), (remote.id(), 0));
+    assert_eq!(refreshed.source_epoch(), empty.source_epoch());
     let mut stale = empty.clone();
     stale.epoch = SourceEpoch::generate()?;
     requester.bind_test_peer(&mut stale)?;
@@ -35,6 +47,57 @@ fn missing_descriptor_refreshes_once_in_the_original_epoch_before_admission() ->
     ));
     remote.read(0, &mut bytes)?;
     assert_eq!(bytes, [8, 1, 2, 3, 4, 9]);
+    Ok(())
+}
+
+#[test]
+fn missing_address_refresh_resolves_the_whole_batch_before_binding_registrations() -> Result<()> {
+    let source = TransferEngine::new(Default::default())?;
+    let requester = TransferEngine::new(Default::default())?;
+    let backing = Arc::new(HostMemory::new(vec![0x45; 6].into())?);
+    let old = source.register_host_memory(backing.clone(), 0, 6, Permission::RemoteRead)?;
+    let peer = requester.open_segment(source.endpoint(), source.source_epoch(), WAIT)?;
+    source.unregister_memory(&old)?;
+    let replacement = source.register_host_memory(backing, 0, 6, Permission::RemoteRead)?;
+    let added = source.register_memory(vec![0x93; 6].into(), Permission::RemoteRead)?;
+    assert_ne!(old.id(), replacement.id());
+    let local = requester.register_memory(vec![0xee; 12].into(), Permission::LocalOnly)?;
+    let requests = [
+        TransferRequest::new(
+            Transport::Tcp,
+            local.base_address() + 1,
+            old.base_address() + 1,
+            4,
+        ),
+        TransferRequest::new(
+            Transport::Tcp,
+            local.base_address() + 7,
+            added.base_address() + 1,
+            4,
+        ),
+    ];
+    let report = requester.submit_and_wait(TransferOp::Read, &peer, &requests, WAIT)?;
+    assert!(report.is_complete());
+    assert_eq!(
+        (report.completed_requests, report.transferred_bytes),
+        (2, 8)
+    );
+    let mut bytes = [0; 12];
+    local.read(0, &mut bytes)?;
+    assert_eq!(
+        bytes,
+        [
+            0xee, 0x45, 0x45, 0x45, 0x45, 0xee, 0xee, 0x93, 0x93, 0x93, 0x93, 0xee
+        ]
+    );
+    assert_eq!(
+        peer.resolve_address(old.base_address(), old.len())?.0.id(),
+        old.id()
+    );
+    assert!(matches!(
+        peer.resolve_address(added.base_address(), added.len()),
+        Err(Error::RegionNotFound)
+    ));
     Ok(())
 }
 

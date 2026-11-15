@@ -83,8 +83,8 @@ CPU/RDMA, CUDA/local-copy/staging, storage and metrics have complete public
 rustdoc, enforced for every feature set. Python classes, fields, methods and
 exceptions have installed-wheel coverage and a missing-contract negative control.
 Independent review and PR #202's final CI accepted this source step; no
-publication or hardware verification was part of it. Test consolidation is
-in progress: the TCP substep shares the held READ fixtures used by the
+publication or hardware verification was part of it. The TCP test consolidation
+shares the held READ fixtures used by the
 synchronous, queued-cancel/deadline and detached-batch lifetime controls. Their
 test entry points, four scenarios and all 37 existing postcondition assertions
 are unchanged. Selector size/hint and owner-capability cases now use tables,
@@ -92,8 +92,14 @@ with fresh contexts for independent rows; both test entry points and all 26
 selection checks remain. Production source and selector-test line counts are
 unchanged. The dependency refresh is merged: PyO3 0.29.3 and docs-only SoupSieve
 4.1.1 cover the published advisories, preserving the GIL requirement and the
-CPython 3.10–3.14 / Rust 1.85 support window. Continue the test audit with
-request-merge eligibility; broader consolidation and installed acceptance remain open.
+CPython 3.10–3.14 / Rust 1.85 support window. The current substep closes the P2
+descriptor contract audit: immutable snapshots, same-epoch refresh, source-side
+registration validation and the deliberate omission of TENT's shared cache and
+update subscriptions. Existing TCP controls now also assert that refresh and
+unregister do not mutate public snapshots. A mixed READ verifies whole-batch
+refresh before registration IDs are bound. This step clarifies existing transfer
+behavior and adds no hardware qualification. Request-merge eligibility remains the
+next test-consolidation item; installed acceptance remains open.
 
 Follow the maintainer's 2026-11-09 order, one PR at a time, stopping for review
 after each:
@@ -237,8 +243,8 @@ Done (each Implemented):
 
 Open:
 
-- [ ] Peer identity, descriptor update subscriptions and reconnect semantics.
-- [ ] Notification RPC fallback and native C allocation/free conventions.
+- [x] Requester-owned peer identity, same-epoch descriptor refresh and epoch-fenced reconnect. Shared descriptor caching/update subscriptions are a [deliberate F05/F07 difference](architecture.md#peer-retirement), not an unfinished provider.
+- [x] Notification RPC fallback with bounded, separate logical delivery accounting (S7/F11). Native C allocation/free conventions are out of scope with S19.
 - [x] Core resource and failure metrics. See [metrics](metrics.md).
 - S23 TENT wire interoperability is out of scope by design.
 - [ ] Physical two-host TCP qualification.

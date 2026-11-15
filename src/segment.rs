@@ -207,6 +207,10 @@ impl RemoteRegion {
 /// A requester-owned descriptor snapshot. Clones retain its admission identity.
 /// Refresh explicitly with the same authoritative epoch. To use another engine,
 /// call that engine's `open_segment`; a borrowed snapshot cannot create admission.
+/// If any submitted address is missing, preparation refreshes within that epoch
+/// and resolves the whole batch against the new description, without mutating
+/// this snapshot or its clones. There is no update subscription; a listed
+/// registration must still be validated by the source.
 /// The handle retains this requester's identity/fence entry, not the peer's
 /// allocation. Each admitted transfer acquires its own source authority.
 /// [`crate::TransferEngine::close_segment`] fences admission and drains cached

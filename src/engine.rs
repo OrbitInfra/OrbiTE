@@ -1559,6 +1559,10 @@ impl TransferEngine {
     /// The returned descriptor and its clones belong to this requester. A retired
     /// identity can reopen only after all old references are gone and cleanup has
     /// succeeded; this explicit open still validates the supplied epoch remotely.
+    /// Each call returns a fresh snapshot. Later registration changes do not
+    /// update older handles. If any submitted address is missing, preparation
+    /// refreshes within the same epoch and resolves the whole batch against that
+    /// description, without changing those handles.
     ///
     /// # Errors
     /// Returns [`Error::EpochMismatch`] for a changed source, [`Error::PeerClosed`] for
