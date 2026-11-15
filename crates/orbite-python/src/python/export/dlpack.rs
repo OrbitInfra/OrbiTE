@@ -183,7 +183,7 @@ pub(super) fn get(value: &Bound<'_, PyAny>, device: i32) -> PyResult<(usize, usi
     }
     // SAFETY: rename succeeded, so the original capsule no longer owns deletion.
     let lease = unsafe { std::mem::ManuallyDrop::take(&mut lease) };
-    let managed = PyCapsule::new(py, lease, None)?;
+    let managed = PyCapsule::new_with_value(py, lease, c"orbite._dlpack_lease")?;
     let retained = PyTuple::new(
         py,
         [
