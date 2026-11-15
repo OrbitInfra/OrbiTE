@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Dependency security fixes: PyO3 requires 0.29.3 or a compatible patch
+  (locked at 0.29.3), covering GHSA-36hh-v3qg-5jq4 and GHSA-chgr-c6px-7xpp.
+  The Python module explicitly retains its GIL requirement; blocking calls
+  still detach it. The private DLPack lease uses PyO3's value-capsule constructor
+  and retains the existing deleter lifetime. Rust 1.85 and CPython 3.10–3.14
+  remain supported.
+  Documentation builds require SoupSieve 4.0 or newer (locked at 4.1.1),
+  covering GHSA-6655-6qjp-jx7x, GHSA-7g44-g9rc-x53w and GHSA-mmhr-3c5m-f64f.
+  SoupSieve is not a runtime dependency of the Rust crate or Python wheel.
 - Public documentation closure: all public Rust owners, including CUDA/local-copy,
   staging, storage and metrics, document errors, units and retirement contracts.
   Every CI feature set denies missing docs and invalid rustdoc links/HTML.

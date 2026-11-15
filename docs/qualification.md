@@ -160,6 +160,11 @@ and historical jobs in [release evidence](#linux-ci-release-profiles).
 The `Python wheels` workflow builds and installs CPU + io_uring and combined-feature
 wheels on Linux x86_64 and aarch64, with stable and Rust 1.85. Ordinary CI uses
 CPython 3.13; extended and release validation cover 3.10–3.14.
+The PyO3 0.29.3 dependency refresh uses the complete Python matrix, including
+the existing repeated GIL and exporter-lifetime controls. Its explicit module
+GIL requirement preserves the previous contract; free-threaded interpreters
+are not a qualified profile. The docs-only SoupSieve 4.1.1 refresh uses a fresh
+pinned environment, strict Sphinx build and local link/asset checks.
 `tests/python/test_installed.py` checks the OrbiTE surface. Its real loopback and two-process transfers
 check both directions, payload guards, notifications, policy/intent/deadline
 routing, exceptions and context exits. Held TCP replies prove GIL release,

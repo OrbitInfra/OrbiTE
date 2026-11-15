@@ -87,7 +87,11 @@ publication or hardware verification was part of it. Test consolidation is now
 in progress: the first substep shares the held TCP READ fixtures used by the
 synchronous, queued-cancel/deadline and detached-batch lifetime controls. Their
 test entry points, four scenarios and all 37 existing postcondition assertions
-are unchanged. Broader assertion consolidation and installed acceptance remain open.
+are unchanged. Before the selector-test substep, the dependency refresh raises
+PyO3's minimum to 0.29.3 and the docs-only SoupSieve minimum
+to 4.0 (locked at 4.1.1), covering their published advisories. Python retains
+its GIL requirement and the CPython 3.10–3.14 / Rust 1.85 support window.
+Broader assertion consolidation and installed acceptance remain open.
 
 Follow the maintainer's 2026-11-09 order, one PR at a time, stopping for review
 after each:

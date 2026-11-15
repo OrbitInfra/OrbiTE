@@ -26,7 +26,7 @@ rdma-adaptive = ["rdma", "orbite/rdma-adaptive"]
 
 [dependencies]
 # Shared facade: compatible minimum; Cargo.lock fixes the tested MSRV resolution.
-pyo3 = { version = "0.27.2" }
+pyo3 = { version = "0.29.3" }
 # Hidden binding helpers are compatible only within the same OrbiTE release.
 orbite = { version = "=0.1.0-beta.1", path = "../.." }
 libc = "0.2.191"

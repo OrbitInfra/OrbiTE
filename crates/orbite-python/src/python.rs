@@ -637,7 +637,8 @@ fn task_json(tasks: &[orbite::TaskStatus]) -> Result<String> {
     })).collect();
     serde_json::to_string(&rows).map_err(|_| INTERNAL)
 }
-#[pymodule]
+// Preserve the GIL requirement when PyO3's module default changes.
+#[pymodule(gil_used = true)]
 fn _native(m: &Bound<'_, PyModule>) -> PyResult<()> {
     m.add_class::<PythonEngine>()?;
     m.add_class::<PythonConfig>()?;
