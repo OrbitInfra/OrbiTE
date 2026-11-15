@@ -97,7 +97,10 @@ qualification; GPU/RDMA/GDS installed fault fixtures remain queued.
 
 Explicit CPU/TCP routing works without configuration. `Transport::Unspec` uses
 [eligible transport selection](transport-selection.md). `rdma` and `cuda` are
-independent Cargo features. Enabling a feature makes its provider code
+independent Cargo features. [Selector CPU controls](qualification.md#linux-ci-release-profiles)
+retain 26 size/hint, priority, owner-capability and staging checks in two test
+entry points; table consolidation changes no routing behavior. Enabling a
+feature makes its provider code
 available; runtime use still requires the actual device, driver and resources. A combined-feature wheel does not link libibverbs; the configured RDMA install loads the host runtime and reports a named unavailable error if it is absent. See [build isolation](build.md#host-rdma).
 
 `RdmaConfig::new("mlx5_0")` strictly pins that device, port 1 and GID index 0.

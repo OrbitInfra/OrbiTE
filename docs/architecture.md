@@ -351,6 +351,13 @@ indices, native SL/TC and cache claims independently of CQ worker placement.
 The pool layout is immutable across admitted work. See
 [transport selection](transport-selection.md).
 
+The selector CPU controls use case tables for inclusive size bounds, hard
+hints and both owners' IPC capabilities/identity. Each independent table row
+starts from a fresh context; first-match rejection and remote-staging intent
+keep their separate negative checks. All 26 checks call production selection
+code, reusing compiled rules where configured; no mock selector or native shim
+is introduced.
+
 Library diagnostics use the shared `log` facade. OrbiTE installs no logger.
 Consumers can enable selector warnings and errors through their own logger.
 
