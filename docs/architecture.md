@@ -54,7 +54,10 @@ the existing bounded memory, segment and batch tables directly. The removed
 C/C++ exports, raw argument/output adapters and external plugin loader have no
 Python callers. No Python dependency or interpreter is loaded by an ordinary
 Rust build. See the [consumer boundary](tent-parity.md#wire-and-consumer-boundaries). Shared PyO3 has a
-compatible minimum of 0.27.2 and the lockfile fixes its MSRV-tested graph. Maturin
+compatible minimum of 0.29.3, including the iterator and closure soundness fixes;
+the lockfile resolves 0.29.3. The module explicitly requires the GIL, preserving
+the existing contract across PyO3's changed default. Blocking calls still detach
+the GIL; this is not a free-threaded Python qualification. Maturin
 builds one wheel per CPython version because the 3.10 stable ABI lacks the buffer
 API needed to retain exporters. Mooncake's `mooncake.tent` and standalone `tent`
 imports remain untouched; consumers explicitly import `orbite`.
