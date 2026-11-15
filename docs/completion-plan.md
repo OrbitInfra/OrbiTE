@@ -96,7 +96,8 @@ CPython 3.10–3.14 / Rust 1.85 support window. The current substep closes the P
 descriptor contract audit: immutable snapshots, same-epoch refresh, source-side
 registration validation and the deliberate omission of TENT's shared cache and
 update subscriptions. Existing TCP controls now also assert that refresh and
-unregister do not mutate public snapshots. This step clarifies existing transfer
+unregister do not mutate public snapshots. A mixed READ verifies whole-batch
+refresh before registration IDs are bound. This step clarifies existing transfer
 behavior and adds no hardware qualification. Request-merge eligibility remains the
 next test-consolidation item; installed acceptance remains open.
 

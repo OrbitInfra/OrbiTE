@@ -140,6 +140,11 @@ Descriptor refresh has real TCP controls in the ordinary `cargo test --locked`
 gate. `missing_descriptor_refreshes_once_in_the_original_epoch_before_admission`
 checks guarded READ bytes, unchanged public snapshots and clones, explicit
 same-epoch reopen and stale-epoch WRITE rejection.
+`missing_address_refresh_resolves_the_whole_batch_before_binding_registrations`
+checks a mixed READ: a newly registered address triggers refresh of the whole
+batch, including a same-address replacement already listed in the old snapshot.
+Exact bytes and unchanged old registration IDs distinguish preparation from
+attempt-stage retry.
 `a_refresh_cannot_rebind_an_admitted_write_to_a_replaced_registration` keeps a
 replacement at the same address unchanged after stale registration rejection.
 The public `tcp` integration test
