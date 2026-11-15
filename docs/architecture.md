@@ -203,6 +203,11 @@ cleanup. `runtime::control_plane::tests::tcp_reuse` checks ordered scattered
 bytes, dirty-frame retirement without replay and idle source admission. The
 held-reply peer-retirement control proves a timeout cannot release backing or
 close the active stream before the drain receipt.
+Requester lifetime tests share only the held-read socket setup: engines,
+registrations, backing and their explicit drop points stay in each test, so a
+fixture cannot supply an extra owner that hides premature release. The
+[invariant mapping](qualification.md#linux-ci-release-profiles) preserves the
+separate synchronous, queued-cancel/deadline and detached-batch controls.
 
 HP-TCP is built into the CPU transport set and is disabled by default. When
 enabled, it replaces the ordinary TCP payload and retains the control service.
