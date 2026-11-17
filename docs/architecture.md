@@ -429,6 +429,13 @@ hints can still merge across intervening requests. One source epoch, target and 
 whole submit. The peer advertises its transfer limit in Describe so a merge
 cannot create an oversized grant on a smaller receiver.
 
+The request-merge eligibility tables exercise real CPU/TCP submission and public
+task status, preserving contiguous/gapped ranges, the peer cap, matching and
+different policy fields, and merge opt-out. They retain all 14 input/outcome
+pairs and completion checks; the separate registration, overlap, queued-cancel
+and alias-accounting controls remain unchanged. See the
+[coverage mapping](qualification.md#linux-ci-release-profiles).
+
 Each physical owner holds its QoS permit, queue window and receiver credit.
 Dispatch takes queue → QoS → credit locks. Credit sync and payload I/O run
 outside them. EDF ranks independent batch heads. Reserving the only slot for

@@ -157,21 +157,20 @@ fn gaps_hints_priorities_intents_policy_contracts_deadlines_caps_and_opt_out_spl
     );
     let base = f.req(4, 2);
     let next = f.req(6, 2);
-    assert_eq!(f.mapping(&[base.clone(), next.clone()]), [0, 0]);
-    assert_eq!(f.mapping(&[base.clone(), f.req(8, 2)]), [0, 1]);
-    assert_eq!(f.mapping(&[f.req(4, 4), f.req(8, 4)]), [0, 1]); // peer's actual cap
-    assert_eq!(
-        f.mapping(&[f.req(1, 5), f.req(6, 1), f.req(7, 1)]),
-        [0, 0, 2]
-    );
+    let cases: &[(&str, &[TransferRequest], &[usize])] = &[
+        ("contiguous", &[base.clone(), next.clone()], &[0, 0]),
+        ("gap", &[base.clone(), f.req(8, 2)], &[0, 1]),
+        ("peer cap", &[f.req(4, 4), f.req(8, 4)], &[0, 1]),
+        (
+            "prefix at peer cap",
+            &[f.req(1, 5), f.req(6, 1), f.req(7, 1)],
+            &[0, 0, 2],
+        ),
+    ];
+    for (name, requests, expected) in cases {
+        assert_eq!(f.mapping(requests), *expected, "{name}");
+    }
     let deadline = Instant::now() + WAIT;
-    assert_eq!(
-        f.mapping(&[
-            base.clone().with_deadline(deadline),
-            next.clone().with_deadline(deadline)
-        ]),
-        [0, 0]
-    );
     let q = f
         .dst
         .resolve_qos(&QosRequestContext {
@@ -179,45 +178,66 @@ fn gaps_hints_priorities_intents_policy_contracts_deadlines_caps_and_opt_out_spl
             ..Default::default()
         })
         .unwrap();
-    let mut other = next.clone();
-    other.qos = Some(q);
-    for (a, b) in [
+    for (name, a, b, expected) in [
         (
+            "same deadline",
+            base.clone().with_deadline(deadline),
+            next.clone().with_deadline(deadline),
+            [0, 0],
+        ),
+        (
+            "different hint",
             base.clone(),
             TransferRequest {
                 transport: Transport::Unspec,
                 ..next.clone()
             },
+            [0, 1],
         ),
-        (base.clone(), next.clone().with_priority(Priority::Low)),
         (
+            "different priority",
+            base.clone(),
+            next.clone().with_priority(Priority::Low),
+            [0, 1],
+        ),
+        (
+            "different intent",
             base.clone().with_intent(IntentType::Migration),
             next.clone(),
+            [0, 1],
         ),
         (
+            "different policy",
             base.clone().with_policy_name("one").unwrap(),
             next.clone().with_policy_name("two").unwrap(),
+            [0, 1],
         ),
         (
+            "different deadline",
             base.clone().with_deadline(deadline),
             next.clone()
                 .with_deadline(deadline - Duration::from_secs(1)),
+            [0, 1],
         ),
-        (base.clone(), other),
-    ] {
-        assert_eq!(f.mapping(&[a, b]), [0, 1]);
-    }
-    assert_eq!(
-        f.mapping(&[
+        (
+            "different QoS contract",
+            base.clone(),
+            next.clone().with_qos(q),
+            [0, 1],
+        ),
+        (
+            "same policy and intent",
             base.with_policy_name("two")
                 .unwrap()
                 .with_intent(IntentType::Checkpoint),
             next.with_policy_name("two")
                 .unwrap()
-                .with_intent(IntentType::Checkpoint)
-        ]),
-        [0, 0]
-    );
+                .with_intent(IntentType::Checkpoint),
+            [0, 0],
+        ),
+    ] {
+        assert_eq!(f.mapping(&[a, b]), expected, "{name}");
+    }
     let f = Pair::new(
         Default::default(),
         EngineConfig {
