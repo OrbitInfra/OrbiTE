@@ -105,6 +105,30 @@ staging result; these CPU controls do not qualify an installed GPU path.
 | `transport_selector_first_match_bounds_priority_and_hard_hint` | 15 / 15 | Inclusive bounds 8/16 and outside bounds 7/17 with automatic and hard-hint outcomes; priority, local memory/capability, first-match unavailable and no-matching-policy rejection |
 | `transport_selector_uses_both_owners_and_preserves_staging_intent` | 11 / 11 | Both IPC exports, either export absent, same process, different machine; TCP at all three priorities; unsupported staging, CUDA-dependent staging and CPU-target rejection |
 
+The request-merge eligibility refactor preserves all input/outcome pairs in
+`runtime::request_merge::tests::gaps_hints_priorities_intents_policy_contracts_deadlines_caps_and_opt_out_split`.
+Range/cap and policy-field cases now have names in their shared assertions;
+the empty and shuffled opt-out controls remain separate. Each case still calls
+`Pair::mapping`, which submits a real TCP READ, checks `BatchState::Completed`,
+reads public `physical_owner` values and frees the batch. The following counts
+expand table rows and loop iterations, as for the selector above.
+
+| Merge eligibility cases | Input/outcome pairs before/after | Assertion checks before/after |
+| --- | --- | --- |
+| Contiguous ranges, gap, peer cap and prefix at the cap | 4 / 4 | 8 / 8: completion and exact owner mapping |
+| Same deadline; different hint, priority, intent, policy, deadline and QoS contract; same policy and intent | 8 / 8 | 16 / 16: completion and exact owner mapping |
+| Merging disabled with empty and shuffled inputs | 2 / 2 | 4 / 4: completion and empty/identity mapping |
+
+All 14 input/outcome pairs and 28 assertion checks remain. The eligibility
+test's mapping assertion expressions decrease from 9 to 4. All seven merge test
+entry points remain; the other six tests and `Pair` are unchanged. In particular,
+registration boundaries, self-overlap, shared backing across epochs, queued
+alias cancellation, original size-policy/QoS selection, byte guards and
+notification accounting keep their existing controls. Test source grows from
+468 to 488 lines with case labels; production source delta is zero. No CPU shim
+or installed hardware gate changes, and these CPU checks add no hardware
+qualification.
+
 Fixed-port restart, close and metrics fixtures execute in isolated child
 processes before opening their sockets. A deterministic fork control identifies
 the inherited listener by socket inode and reproduces `AddrInUse` despite
