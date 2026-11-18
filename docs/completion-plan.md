@@ -319,7 +319,8 @@ P5 is complete at source level for the frozen CPU/NVIDIA cooperative profile.
 Mixed CUDA paths preserve ordered handoffs even when the outer ranges abut.
 GPU source QP/MR reuse requires explicit opt-in and hardware key revocation.
 Legacy NVLink IPC covers remote device allocations and requires the exporter
-to remain alive until importers close. Remote host-NUMA exports use MNNVL/EGM.
+to remain alive until importers close. Direct and cached exports share the grant
+encoder. Remote host-NUMA exports use MNNVL/EGM.
 Legacy remote host export and recovery after exporter death remain outside
 this source-level claim. See [CUDA IPC scope](cuda-ipc.md#correspondence-to-tent).
 

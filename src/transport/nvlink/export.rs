@@ -109,6 +109,26 @@ impl NVLinkTransport {
         ))
     }
 
+    pub(super) fn encode_grant(
+        &self,
+        request: &Request,
+        requester: SourceEpoch,
+        nonce: SourceEpoch,
+        export: &IpcExport,
+        allocation_offset: usize,
+    ) -> [u8; GRANT_SIZE] {
+        let mut grant = [0; GRANT_SIZE];
+        grant[..4].copy_from_slice(self.grant_magic());
+        self.wire_identity().encode(&mut grant[4..36]);
+        grant[36..88].copy_from_slice(&request.encode());
+        grant[88..104].copy_from_slice(&requester.0);
+        grant[104..120].copy_from_slice(&nonce.0);
+        grant[120..128].copy_from_slice(&(export.extent as u64).to_be_bytes());
+        grant[128..136].copy_from_slice(&(allocation_offset as u64).to_be_bytes());
+        grant[136..].copy_from_slice(&export.handle);
+        grant
+    }
+
     pub(super) fn serve_cached(
         &self,
         channel: &mut ControlChannel<'_>,
@@ -121,13 +141,7 @@ impl NVLinkTransport {
         let (identity, requester, token, reuse) = self.read_cache_hello(channel)?;
         let (_, allocation_offset) = memory.allocation_range(offset, length)?;
         let nonce = SourceEpoch::generate()?;
-        let mut grant = [0; GRANT_SIZE];
-        grant[..4].copy_from_slice(self.grant_magic());
-        self.wire_identity().encode(&mut grant[4..36]);
-        grant[36..88].copy_from_slice(&request.encode());
-        grant[88..104].copy_from_slice(&requester.0);
-        grant[104..120].copy_from_slice(&nonce.0);
-        {
+        let grant = {
             let mut entries = self
                 .exports
                 .entries
@@ -173,13 +187,12 @@ impl NVLinkTransport {
             }
             let export = entry
                 .export
-                .as_mut()
+                .as_ref()
                 .ok_or(Error::Internal("missing CUDA export"))?;
-            grant[120..128].copy_from_slice(&(export.extent as u64).to_be_bytes());
-            grant[128..136].copy_from_slice(&(allocation_offset as u64).to_be_bytes());
-            grant[136..].copy_from_slice(&export.handle);
+            let grant = self.encode_grant(request, requester, nonce, export, allocation_offset);
             entry.active = true;
-        }
+            grant
+        };
         let mut exposed = reuse;
         let completion = (|| {
             if !reuse {

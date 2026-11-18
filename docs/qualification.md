@@ -1815,6 +1815,10 @@ open. See [the ownership contract](cuda-ipc.md) and the
 
 ## Cooperative CUDA IPC and NVLink
 
+The CPU source fixture reads the production grant over a socket and checks
+its transport identifier, request, requester epoch, nonzero nonce, allocation
+extent and offset. Both direct and cached source paths use the same encoder.
+
 Source [`e19b3a5`](https://github.com/OrbitInfra/OrbiTE/commit/e19b3a5100f9eac37852db2d47437f6321b5862f)
 qualifies the initial cooperative, owned GPU/GPU path on two physical H20 hosts.
 Each host runs separate exporter/requester processes on its local GPU 0/1,
