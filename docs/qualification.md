@@ -26,7 +26,9 @@ features on Linux, and checks that native features are rejected on other
 targets; these compile checks exercise no device.
 
 The CPU oracle compares real registered memory and TCP traces against the
-frozen reference. Three frozen RPC prefixes and a real frozen client exercise
+frozen reference. Its [tebench gate](cpu-oracle.md#frozen-tebench-byte-checks)
+records a seeded WRITE, a verified READ, a one-byte rejection and a verified
+READ after restoration on CPU/TCP. Three frozen RPC prefixes and a real frozen client exercise
 native OrbiTE rejection, with no admission or payload movement. Compatibility
 inventories and unused codec captures are removed.
 

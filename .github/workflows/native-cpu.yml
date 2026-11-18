@@ -142,5 +142,6 @@ jobs:
             ${{ runner.temp }}/orbite-native-cpu/*.stderr
             ${{ runner.temp }}/orbite-native-cpu/tent-build/CMakeCache.txt
             ${{ runner.temp }}/orbite-native-cpu/tent-driver
+            ${{ runner.temp }}/orbite-native-cpu/tent-build/mooncake-transfer-engine/benchmark/tebench
             ${{ runner.temp }}/orbite-native-cpu/tent-build/**/*.so*
             ${{ runner.temp }}/orbite-native-cpu/cargo/debug/examples/cpu_trace
