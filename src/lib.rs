@@ -1,4 +1,6 @@
-//! Owned CPU/NVIDIA memory, fenced TCP/direct or staged RDMA transfers and notifications.
+//! OrbiTE is a High Performance Transfer Engine for LLM Inference.
+//! It owns CPU and NVIDIA memory, fenced TCP transfers, direct or staged RDMA,
+//! and notifications.
 //!
 //! Memory, registrations and staging stay retained until physical completion.
 //! Rust is the primary API; Python mirrors OrbiTE's retained owners. Peers use OrbiTE's

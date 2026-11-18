@@ -1,8 +1,8 @@
 # OrbiTE completion plan
 
-Follow the [product positioning and non-goals](architecture.md#scope-and-non-goals):
-OrbiTE is a transfer engine for LLM inference on NVIDIA, with OrbitKV cache
-tiering and cross-node reuse as its first use case. This plan delivers the
+OrbiTE is a High Performance Transfer Engine for LLM Inference.
+Its [scope](architecture.md#scope-and-non-goals) covers CPU and NVIDIA CUDA.
+OrbitKV cache tiering and cross-node reuse are the first use case. This plan delivers the
 [frozen TENT design](tent-parity.md) through Rust and Python, and records the
 evidence for each owner and profile. The upstream path is the proposed
 [NIXL backend](nixl-backend.md); P/D acceptance still requires the installed

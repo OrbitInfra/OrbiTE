@@ -14,11 +14,15 @@ do not turn this file into a second status diary.
 
 ## 1. What OrbiTE is
 
-- Follow the [product positioning and non-goals](docs/architecture.md#scope-and-non-goals): OrbiTE is
-  a transfer engine for LLM inference on NVIDIA. OrbitKV cache tiering and
-  cross-node reuse come first; P/D is a later integration target, not a current
-  qualification claim. The upstream path is an in-tree NIXL backend, described
-  in the [design proposal](docs/nixl-backend.md). Follow the
+- OrbiTE is a High Performance Transfer Engine for LLM Inference.
+  Across both projects, label OrbiTE “High Performance Transfer Engine” and
+  OrbitKV “High Performance KV Cache System” in architecture diagrams.
+  Describe the consumer as “OrbitKV is a High Performance KV Cache System for LLM Inference.”
+- Follow the [product scope and non-goals](docs/architecture.md#scope-and-non-goals).
+  OrbitKV cache tiering and cross-node reuse come first. P/D is a later
+  integration target whose qualification requires its installed gates. The
+  upstream path is an in-tree NIXL backend, described in the
+  [design proposal](docs/nixl-backend.md). Follow the
   [current work order and plugin prerequisites](docs/completion-plan.md#current-focus).
   Do not post, comment, fork or open anything upstream for this design;
   the maintainer handles external posts.

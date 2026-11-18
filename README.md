@@ -3,7 +3,7 @@
     <source media="(prefers-color-scheme: dark)" srcset="docs/_static/orbite-logo-dark.svg">
     <img src="docs/_static/orbite-logo.svg" width="60%" alt="OrbiTE">
   </picture>
-  <h2>A transfer engine for LLM inference</h2>
+  <h2>OrbiTE is a High Performance Transfer Engine for LLM Inference.</h2>
   <a href="https://orbitinfra.github.io/OrbiTE/"><strong>Documentation</strong></a>
   | <a href="https://orbitinfra.github.io/OrbiTE/getting-started.html"><strong>Quick Start</strong></a>
   | <a href="https://orbitinfra.github.io/OrbiTE/architecture.html"><strong>Architecture</strong></a>
@@ -15,13 +15,15 @@
   [![Docs](https://img.shields.io/badge/docs-online-blue.svg)](https://orbitinfra.github.io/OrbiTE/)
 </div>
 
-OrbiTE moves KV bytes between GPU memory, DRAM, local SSD and peer hosts over
+OrbiTE moves KV bytes between NVIDIA GPU memory, DRAM, local SSDs and peer hosts over
 RDMA/GPUDirect, NVLink/MNNVL, TCP, io_uring and GDS, in Rust with a Python API.
 Memory, registrations and staging stay retained until [physical retirement](docs/architecture.md#engine-and-transport-boundary) proves the hardware has stopped accessing them.
-[OrbitKV](https://github.com/OrbitInfra/OrbitKV) is its first user.
+OrbitKV is a High Performance KV Cache System for LLM Inference.
+Its Cache Manager is OrbiTE’s first consumer and uses it for cache tiering and
+cross-node reuse. [OrbitKV architecture](https://github.com/OrbitInfra/OrbitKV/blob/main/docs/architecture.md).
 
 <div align="center">
-  <img src="docs/_static/architecture.svg" width="95%" alt="OrbiTE network transports and the implemented DRAM and GPU paths to local SSD">
+  <img src="docs/_static/architecture.svg" width="95%" alt="OrbitKV’s high-performance KV cache system uses the OrbiTE high-performance transfer engine for transfers across CPU memory, NVIDIA GPUs, local SSDs and peer hosts.">
 </div>
 
 ## Supported paths
