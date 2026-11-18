@@ -1,4 +1,4 @@
-"""Run the shared CPU trace against public OrbiTE APIs and frozen native TENT."""
+"""Check the shared CPU trace on Rust, an installed wheel or frozen native TENT."""
 
 from __future__ import annotations
 
@@ -23,6 +23,10 @@ CONTRACT = json.loads((REPO / "tests/reference/contract.json").read_text())
 
 def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def observations(stdout: str) -> list[str]:
+    return [line for line in stdout.splitlines() if line.startswith("OBS\t")]
 
 
 def compare(expected: list[str], actual: list[str]) -> None:
@@ -82,6 +86,11 @@ def main() -> int:
         help="fixture gate only; never claims native comparison",
     )
     mode.add_argument(
+        "--python-wheel",
+        type=Path,
+        help="install this wheel in a fresh virtualenv and check the shared fixture",
+    )
+    mode.add_argument(
         "--fetch-reference",
         action="store_true",
         help="fetch the frozen public reference and YLT archive into the artifact directory",
@@ -110,6 +119,8 @@ def main() -> int:
         parser.error("--tent-source requires --ylt-archive")
     if args.rust_only and args.ylt_archive:
         parser.error("--rust-only does not consume a YLT archive")
+    if args.python_wheel and args.ylt_archive:
+        parser.error("--python-wheel does not consume a YLT archive")
     output.mkdir(parents=True, exist_ok=False)
     manifest = {
         "schema_version": 1,
@@ -126,6 +137,12 @@ def main() -> int:
 
     def save() -> None:
         manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+
+    def passed(status: str) -> int:
+        manifest["status"] = status
+        save()
+        print(f"{status}: {manifest['observations']} observations; {manifest_path}")
+        return 0
 
     # Do not inherit a consumer's native loader paths or Mooncake configuration.
     environment = {
@@ -181,19 +198,65 @@ def main() -> int:
             revision = run("source-revision", ["git", "rev-parse", "HEAD"]).strip()
             dirty = bool(run("source-status", ["git", "status", "--porcelain"]).strip())
             manifest["source"] = {"revision": revision, "origin": "git", "dirty": dirty}
-        manifest["rustc"] = run("rustc-version", ["rustc", "-Vv"]).strip()
         inputs = [
             Path(CONTRACT["trace"]),
             Path(CONTRACT["expected"]),
             Path("tests/reference/contract.json"),
             Path("tests/reference/run.py"),
-            Path("tests/reference/rust_driver.rs"),
-            Path("tests/reference/tent_driver.cpp"),
         ]
+        if args.python_wheel:
+            driver = Path("tests/reference/python_driver.py")
+            inputs.append(driver)
+        else:
+            inputs.extend(
+                [
+                    Path("tests/reference/rust_driver.rs"),
+                    Path("tests/reference/tent_driver.cpp"),
+                ]
+            )
         manifest["input_sha256"] = {str(path): digest(REPO / path) for path in inputs}
         expected = (REPO / CONTRACT["expected"]).read_text().splitlines()
         manifest["negative_controls"] = negative_controls(expected)
         trace = REPO / CONTRACT["trace"]
+        if args.python_wheel:
+            wheel = args.python_wheel.resolve()
+            if wheel.suffix != ".whl" or not wheel.is_file():
+                raise ValueError(f"expected an existing wheel: {wheel}")
+            manifest["profile"] = "Installed CPython wheel, two engines, standard loopback TCP"
+            manifest["python_wheel"] = {"path": str(wheel), "sha256": digest(wheel)}
+            venv = output / "venv"
+            python = str(venv / "bin/python")
+            run(
+                "python-venv", [sys.executable, "-I", "-m", "venv", str(venv)], cwd=output
+            )
+            manifest["python"] = run("python-version", [python, "-VV"], cwd=output).strip()
+            run(
+                "python-install",
+                [
+                    python,
+                    "-I",
+                    "-m",
+                    "pip",
+                    "--isolated",
+                    "--disable-pip-version-check",
+                    "install",
+                    "--no-index",
+                    "--no-deps",
+                    str(wheel),
+                ],
+                cwd=output,
+            )
+            actual = run(
+                "python-trace",
+                [python, "-I", "-B", str(REPO / driver), str(trace)],
+                cwd=output,
+                timeout=30,
+            )
+            compare(expected, observations(actual))
+            manifest["observations"] = len(expected)
+            return passed("passed-python-wheel-trace")
+
+        manifest["rustc"] = run("rustc-version", ["rustc", "-Vv"]).strip()
         run(
             "rust-build",
             [
@@ -208,9 +271,7 @@ def main() -> int:
         )
         rust_binary = output / "cargo/debug/examples/cpu_trace"
         rust_output = run("rust-trace", [str(rust_binary), str(trace)], timeout=30)
-        rust_records = [
-            line for line in rust_output.splitlines() if line.startswith("OBS\t")
-        ]
+        rust_records = observations(rust_output)
         compare(expected, rust_records)
         rust_linkage = run("rust-linkage", ["ldd", str(rust_binary)])
         if re.search(r"lib(?:tent|mooncake|asio)", rust_linkage):
@@ -371,9 +432,7 @@ def main() -> int:
             manifest["native_dependencies"] = dependencies
             manifest["native_executed"] = True
             native_output = run("tent-trace", [str(binary), str(trace)], timeout=30)
-            native_records = [
-                line for line in native_output.splitlines() if line.startswith("OBS\t")
-            ]
+            native_records = observations(native_output)
             compare(expected, native_records)
             compare(rust_records, native_records)
             if run(
@@ -387,14 +446,11 @@ def main() -> int:
                 "sha256": digest(binary),
                 "library_sha256": digest(library),
             }
-        manifest["status"] = (
+        return passed(
             "passed-cpu-trace"
             if manifest["native_executed"]
             else "passed-rust-fixture-only"
         )
-        save()
-        print(f"{manifest['status']}: {len(expected)} observations; {manifest_path}")
-        return 0
     except Exception as error:
         manifest.update(status="failed", error=str(error))
         save()
