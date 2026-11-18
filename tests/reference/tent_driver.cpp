@@ -319,11 +319,65 @@ public:
     std::cout << "OBS\tCLEANUP\tok\n";
   }
 };
+
+// The initiator exits between phases. Inspect and change the registered target
+// only after its completed WRITE or READ, with no other requester admitted.
+void tebench_target() {
+  constexpr size_t guard = 32, payload = 2 * 4096;
+  std::vector<unsigned char> bytes(guard + payload + guard, 0xa5);
+  auto first = bytes.begin() + guard, last = first + payload;
+  std::fill(first, last, 0);
+  auto source = engine();
+  checked(tent_register_memory_with_perm(source.get(), bytes.data(),
+                                         bytes.size(), PERM_GLOBAL_READ_WRITE),
+          "register tebench target");
+  char name[256]{};
+  checked(tent_segment_name(source.get(), name, sizeof(name)),
+          "tebench segment name");
+  std::cout << "READY " << name << std::endl;
+
+  auto command = [](const char *expected) {
+    std::string line;
+    require(std::getline(std::cin, line) && line == expected,
+            "unexpected tebench phase");
+  };
+  auto check_guards = [&] {
+    auto intact = [](unsigned char byte) { return byte == 0xa5; };
+    require(std::all_of(bytes.begin(), first, intact) &&
+                std::all_of(last, bytes.end(), intact),
+            "tebench changed target guard bytes");
+  };
+  command("flip");
+  check_guards();
+  // Frozen write_seed fills DRAM/TCP payloads with one nonzero address-derived
+  // byte.
+  const auto seed = *first;
+  auto seeded = [seed](unsigned char byte) { return byte == seed; };
+  require(seed != 0 && std::all_of(first, last, seeded),
+          "tebench WRITE left incorrect bytes");
+  *(last - 1) ^= 1;
+  std::cout << "FLIPPED " << payload - 1 << std::endl;
+
+  command("restore");
+  check_guards();
+  require(std::all_of(first, last - 1, seeded) && *(last - 1) == (seed ^ 1),
+          "tebench READ changed the target");
+  *(last - 1) = seed;
+  std::cout << "RESTORED" << std::endl;
+  command("close");
+  check_guards();
+  require(std::all_of(first, last, seeded),
+          "tebench READ changed the restored target");
+  checked(tent_unregister_memory(source.get(), bytes.data(), bytes.size()),
+          "unregister tebench target");
+  source.reset();
+  std::cout << "CLOSED" << std::endl;
+}
 } // namespace
 
 int main(int argc, char **argv) {
   try {
-    require(argc == 2, "expected trace path");
+    require(argc == 2, "expected trace path or --tebench-target");
     tent_set_config("metadata_type", "p2p");
     tent_set_config("rpc_server_hostname", "127.0.0.1");
     tent_set_config("rpc_server_port", "0");
@@ -339,6 +393,10 @@ int main(int argc, char **argv) {
       const auto key = std::string("transports/") + transport + "/enable";
       tent_set_config(key.c_str(),
                       std::string(transport) == "tcp" ? "true" : "false");
+    }
+    if (std::string(argv[1]) == "--tebench-target") {
+      tebench_target();
+      return 0;
     }
     std::ifstream input(argv[1]);
     require(input.good(), "cannot open trace");

@@ -360,8 +360,10 @@ and quarantine. See the [file guide](storage.md) for completion and retention.
 
 The [S26 harness](benchmarks.md) uses public engine calls; it adds no runtime
 fast path or benchmark API. The frozen TENT build remains an isolated oracle
-and performance baseline. Measurements require full-byte and guard checks;
-logical status alone is not evidence. Fault fixtures reuse the executing owners
+and performance baseline. Measurements require full-byte and guard checks.
+The separate [tebench byte gate](cpu-oracle.md#frozen-tebench-byte-checks)
+uses the unmodified benchmark as a TENT requester and a test-owned target buffer.
+Fault fixtures reuse the executing owners
 and record outstanding charges before the release receipt. A killed socket
 requester, an injected CQ error and physical device loss are distinct cases.
 GPU/RDMA/GDS installed fixtures stay unqualified until run on their hardware.

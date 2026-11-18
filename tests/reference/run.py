@@ -25,6 +25,22 @@ def digest(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def dependencies(linkage: str, build: Path) -> dict:
+    result = {}
+    for name, path in re.findall(r"^\s*(\S+)\s+=>\s+(\S+)", linkage, re.MULTILINE):
+        if path == "not":
+            raise RuntimeError("missing native dependency: " + name)
+        resolved = Path(path).resolve()
+        if name.startswith(
+            ("libtent", "libtransfer_engine", "libmooncake", "libasio")
+        ) and not resolved.is_relative_to(build):
+            raise RuntimeError(
+                "native dependency escaped isolated build: " + str(resolved)
+            )
+        result[name] = {"path": str(resolved), "sha256": digest(resolved)}
+    return result
+
+
 def observations(stdout: str) -> list[str]:
     return [line for line in stdout.splitlines() if line.startswith("OBS\t")]
 
@@ -214,6 +230,8 @@ def main() -> int:
                     Path("tests/reference/tent_driver.cpp"),
                 ]
             )
+            if not args.rust_only:
+                inputs.append(Path("tests/reference/tebench.py"))
         manifest["input_sha256"] = {str(path): digest(REPO / path) for path in inputs}
         expected = (REPO / CONTRACT["expected"]).read_text().splitlines()
         manifest["negative_controls"] = negative_controls(expected)
@@ -387,6 +405,7 @@ def main() -> int:
                     str(build),
                     "--target",
                     "tent_shared",
+                    "tebench",
                     "--parallel",
                     str(args.jobs),
                 ],
@@ -415,26 +434,38 @@ def main() -> int:
                 ],
             )
             linkage = run("tent-linkage", ["ldd", str(binary)])
-            dependencies = {}
-            for name, path in re.findall(
-                r"^\s*(\S+)\s+=>\s+(\S+)", linkage, re.MULTILINE
-            ):
-                resolved = Path(path).resolve()
-                if path == "not":
-                    raise RuntimeError("missing native dependency: " + name)
-                if name.startswith(
-                    ("libtent", "libmooncake", "libasio")
-                ) and not resolved.is_relative_to(build):
-                    raise RuntimeError(
-                        "native dependency escaped isolated build: " + str(resolved)
-                    )
-                dependencies[name] = {"path": str(resolved), "sha256": digest(resolved)}
-            manifest["native_dependencies"] = dependencies
+            manifest["native_dependencies"] = dependencies(linkage, build)
             manifest["native_executed"] = True
             native_output = run("tent-trace", [str(binary), str(trace)], timeout=30)
             native_records = observations(native_output)
             compare(expected, native_records)
             compare(rust_records, native_records)
+            tebench = build / "mooncake-transfer-engine/benchmark/tebench"
+            manifest["tebench"] = {
+                "path": str(tebench),
+                "sha256": digest(tebench),
+                "dependencies": dependencies(
+                    run("tebench-linkage", ["ldd", str(tebench)]), build
+                ),
+            }
+            manifest["tebench"].update(
+                json.loads(
+                    run(
+                        "tebench-bytes",
+                        [
+                            sys.executable,
+                            "-I",
+                            "-B",
+                            str(REPO / "tests/reference/tebench.py"),
+                            str(tebench),
+                            str(binary),
+                            str(output),
+                        ],
+                        cwd=output,
+                        timeout=130,
+                    )
+                )
+            )
             if run(
                 "tent-final-status",
                 ["git", "status", "--porcelain", "--untracked-files=all"],

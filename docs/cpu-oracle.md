@@ -17,7 +17,9 @@ Native code is compiled from the unmodified reference; no C++ implementation
 is copied into OrbiTE.
 
 The runner configures Mooncake's root CMake project, which defines the CLI11
-header target needed by TENT, and builds only `tent_shared` and its dependencies.
+header target needed by TENT, and builds `tent_shared`, the frozen `tebench`
+executable and their dependencies. Upstream links both classic and TENT code
+into that executable. The byte gate selects the TENT backend explicitly.
 The reference build disables Mooncake Store and its Rust bindings, CUDA/HIP,
 runtime metrics and YLT IBV. Upstream
 CMake can still compile/link discovered RDMA or HTTP support. The native driver
@@ -107,14 +109,28 @@ python3 tests/reference/run.py \
   --output /var/tmp/orbite-native-002
 ```
 
-The full run reports `passed-cpu-trace` only after both real runners exit
-successfully and all 25 observations match. Its manifest preserves exact inputs,
+The full run reports `passed-cpu-trace` after both trace runners exit
+successfully, all 25 observations match and the tebench byte controls pass.
+Its manifest preserves exact inputs,
 commands, command outcomes, binary hashes, native dependency paths/hashes,
 observations, comparator controls and provenance. Failures keep their logs and
 mark the manifest failed. Timeout kills are failures, never drain receipts.
-Native CI runs for core/trace changes and uploads its evidence, including failed
-runs. Source commit provenance and a clean reference do not turn an untested
+Native CI runs on changes to the reference gate and in the extended and release
+tiers. It uploads evidence from failed runs. Source commit provenance and a clean reference do not turn an untested
 hardware or API surface into an accepted profile.
+
+### Frozen tebench byte checks
+
+The unmodified TENT `tebench` initiator writes two 4 KiB blocks to a guarded
+DRAM range over loopback TCP with `write_seed`. A new `read_verify` process
+checks all 8,192 bytes. Between initiators the target checks its payload and both
+32-byte guards, then flips one bit in the final byte. The next verification must
+abort with TENT's byte-mismatch diagnostic. The target restores the original
+byte and a final verification must succeed before it unregisters the buffer.
+Each successful initiator must report a completed workload row. The manifest
+records the executable hash, resolved libraries, commands, exit statuses and
+corruption offset. The workload checks native reference behavior and supplies
+no performance measurement for OrbiTE.
 
 ### Installed Python wheel
 

@@ -1,6 +1,13 @@
 name: Frozen TENT CPU comparison
 
 on:
+  pull_request:
+    paths:
+      - '.github/workflows/native-cpu.yml'
+      - 'tests/reference/contract.json'
+      - 'tests/reference/run.py'
+      - 'tests/reference/tebench.py'
+      - 'tests/reference/tent_driver.cpp'
   workflow_call:
     inputs:
       release_gate:
@@ -70,6 +77,7 @@ jobs:
           name: frozen-tent-rdma-geometry-${{ matrix.toolchain }}
           path: ${{ runner.temp }}/orbite-rdma-geometry/
       - name: Prepare warmed ext4 and tmpfs benchmark filesystems
+        if: github.event_name != 'pull_request' || inputs.release_gate
         run: |
           if test -e /proc/sys/kernel/io_uring_disabled; then sudo sysctl -w kernel.io_uring_disabled=0; fi
           ext="$RUNNER_TEMP/orbite-bench-ext4"
@@ -112,10 +120,10 @@ jobs:
           cd "$RUNNER_TEMP/orbite-before"
           python3 benches/run.py --reference "$RUNNER_TEMP/orbite-native-cpu" --output "$RUNNER_TEMP/orbite-bench-before" --ext4 "$ORBITE_EXT4_DIR" --samples 100 --warmup 3 --workers 2 --trials 3
       - name: Matched byte-checked CPU sweeps (no hardware)
-        if: '!inputs.profile_only && !inputs.tail_profile_only'
+        if: (github.event_name != 'pull_request' || inputs.release_gate) && !inputs.profile_only && !inputs.tail_profile_only
         run: python3 benches/run.py --reference "$RUNNER_TEMP/orbite-native-cpu" --output "$RUNNER_TEMP/orbite-bench" --ext4 "$ORBITE_EXT4_DIR" --samples 100 --warmup 3 --workers 2 --trials 3
       - name: Preserve raw measurements outside Git
-        if: always()
+        if: always() && (github.event_name != 'pull_request' || inputs.release_gate)
         uses: actions/upload-artifact@v7.0.2
         with:
           name: cpu-bench-${{ matrix.toolchain }}
@@ -142,5 +150,6 @@ jobs:
             ${{ runner.temp }}/orbite-native-cpu/*.stderr
             ${{ runner.temp }}/orbite-native-cpu/tent-build/CMakeCache.txt
             ${{ runner.temp }}/orbite-native-cpu/tent-driver
+            ${{ runner.temp }}/orbite-native-cpu/tent-build/mooncake-transfer-engine/benchmark/tebench
             ${{ runner.temp }}/orbite-native-cpu/tent-build/**/*.so*
             ${{ runner.temp }}/orbite-native-cpu/cargo/debug/examples/cpu_trace

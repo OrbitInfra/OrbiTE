@@ -73,6 +73,10 @@ records the source alignment. The [design-reference map](tent-parity.md) identif
 
 ## Failure handling
 
+The [frozen tebench byte gate](cpu-oracle.md#frozen-tebench-byte-checks) exercises
+a completed native TCP read with a wrong payload byte and checks recovery after
+the target restores it.
+
 [CPU benchmark and fault fixtures](benchmarks.md) cover verified size/batch
 sweeps and the software backend lifetime matrix. They add no hardware
 qualification; GPU/RDMA/GDS installed fault fixtures remain queued.

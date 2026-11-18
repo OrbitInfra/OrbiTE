@@ -81,12 +81,12 @@ required profiles and evidence for each milestone.
 The [API documentation closure and test consolidation](#release-ladder) are
 implemented. The [P2 descriptor audit](architecture.md#peer-retirement)
 covers immutable snapshots and whole-batch refresh before registration IDs
-are bound. The current P0 substep adds
-[installed Python wheel replay](cpu-oracle.md#installed-python-wheel) of the
-shared CPU/TCP trace. CI requires both Linux wheel profiles and the rebuilt
+are bound. The [installed Python wheel replay](cpu-oracle.md#installed-python-wheel)
+covers the shared CPU/TCP trace. CI requires both Linux wheel profiles and the rebuilt
 sdist wheel to match the same 25 observations as the Rust and frozen TENT
 drivers. The trace checks registrations, bytes, task receipts, notifications
-and final cleanup.
+and final cleanup. The full native comparison also runs the frozen
+[tebench byte checks](cpu-oracle.md#frozen-tebench-byte-checks) on DRAM/TCP.
 The remaining P0 cases and the installed hardware queue are listed below.
 
 Follow the maintainer's 2026-11-09 order, one PR at a time, stopping for review
@@ -153,6 +153,10 @@ Done:
   reject broken results. See [CPU oracle](cpu-oracle.md). It covers selected
   valid-input CPU behavior.
 
+- **P0 native tebench bytes (Implemented).** The frozen benchmark writes and reads
+  guarded CPU memory over TCP. A single-byte mismatch must fail and restoring
+  that byte must recover a passing read.
+
 - **S16 — reference fixtures.** Retain the CPU trace contract and three frozen
   request prefixes used by native-listener rejection. Compatibility inventories
   and unused codec/metadata captures are removed; OrbiTE's wire fixtures live
@@ -163,7 +167,7 @@ Open:
 - [ ] Pin optional-provider SDKs and build options for the profiles outside
   the isolated CPU reference build.
 - [ ] Extend the CPU oracle beyond the shared valid-input trace with further
-  native/Python behavior, Python guard cases and tebench byte checks, with
+  native/Python behavior, Python guard cases and hardware tebench profiles, with
   hardware triggers where needed.
 - [ ] Extend the shared trace to allowed concurrent transitions, faults, broken
   lifetime/epoch controls against independent native and Rust runs.
