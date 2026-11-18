@@ -141,6 +141,10 @@ pub(crate) fn source_case(memory: Arc<crate::cuda::CudaMemory>, case: &str) {
         channel.read_exact(&mut grant[..1]).unwrap();
     } else {
         channel.read_exact(&mut grant).unwrap();
+        assert_eq!(&grant[..4], b"NVL1");
+        assert_eq!(&grant[36..88], &request.encode());
+        assert_eq!(&grant[88..104], &hello[36..]);
+        assert_ne!(grant[104..120], [0; 16]);
         assert_eq!(crate::runtime::control_plane::u64_at(&grant, 120), 2 << 20);
         assert_eq!(crate::runtime::control_plane::u64_at(&grant, 128), 12);
         assert!(memory.read(100, &mut [0; 1]).is_err());

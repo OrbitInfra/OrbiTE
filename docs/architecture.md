@@ -866,7 +866,7 @@ excludes link speed, so a rate change keeps existing QPs. See
 | Owner | Responsibility |
 | --- | --- |
 | `transport/mnnvl/` and `cuda/fabric` | Fabric-domain capability and grant binding, CUDA VMM references, VA reservations, access descriptors and EGM socket placement |
-| `transport/nvlink.rs::NVLinkTransport` | Legacy or fabric identity checks, grant and close bindings, mapping quotas, stream pool and completion progress |
+| `transport/nvlink.rs::NVLinkTransport` | Legacy or fabric identity checks, common grant encoding for direct and cached exports, close bindings, mapping quotas, stream pool and completion progress |
 | `cuda/ipc.rs::IpcExport`, `IpcMapping` | Allocation-wide source loan; one imported reference with its context and touched local allocations |
 | `transport/nvlink/mapping.rs::OpenedMapping` | Mapping charge and explicit native close |
 | `transport/nvlink/subbatch.rs::NVLinkSubBatch` | Consecutive same-region, same-context copies |

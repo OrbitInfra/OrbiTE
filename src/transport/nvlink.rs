@@ -422,15 +422,15 @@ impl NVLinkTransport {
         let (mut export, allocation_offset) =
             self.export(memory, offset, length, channel.deadline)?;
         let permit = self.budget.reserve(export.extent, true)?;
-        let mut grant = [0; GRANT_SIZE];
-        grant[..4].copy_from_slice(self.grant_magic());
-        self.wire_identity().encode(&mut grant[4..36]);
-        grant[36..88].copy_from_slice(&request.encode());
-        grant[88..104].copy_from_slice(&hello[36..52]);
-        grant[104..120].copy_from_slice(&SourceEpoch::generate()?.0);
-        grant[120..128].copy_from_slice(&(export.extent as u64).to_be_bytes());
-        grant[128..136].copy_from_slice(&(allocation_offset as u64).to_be_bytes());
-        grant[136..].copy_from_slice(&export.handle);
+        let mut requester = SourceEpoch([0; 16]);
+        requester.0.copy_from_slice(&hello[36..]);
+        let grant = self.encode_grant(
+            request,
+            requester,
+            SourceEpoch::generate()?,
+            &export,
+            allocation_offset,
+        );
         channel.reply(epoch, 0, GRANT_SIZE as u64)?;
         export.expose();
         let receipt = (|| {
