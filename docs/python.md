@@ -1,6 +1,7 @@
 # Python
 
-The `orbite` package is a thin PEP 8 binding to OrbiTE's Rust owners. It is
+OrbiTE is a High Performance Transfer Engine for LLM Inference.
+The `orbite` package is a thin PEP 8 binding to its Rust owners. It is
 independent of Mooncake's Python API; there is no `tent` or `mooncake.engine`
 alias. Rust remains the primary interface.
 

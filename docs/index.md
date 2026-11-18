@@ -1,3 +1,9 @@
+---
+myst:
+  html_meta:
+    description: OrbiTE is a High Performance Transfer Engine for LLM Inference.
+---
+
 # Welcome to OrbiTE
 
 :::{raw} html
@@ -5,7 +11,7 @@
   <img class="orbit-logo-light dark-light" src="_static/orbite-logo.svg" alt="OrbiTE" width="600" height="144">
   <img class="orbit-logo-dark dark-light" src="_static/orbite-logo-dark.svg" alt="OrbiTE" width="600" height="144">
 </div>
-<p class="orbit-tagline"><strong>A Rust-native transfer engine for AI infrastructure.</strong></p>
+<p class="orbit-tagline"><strong>OrbiTE is a High Performance Transfer Engine for LLM Inference.</strong></p>
 <p class="orbit-links">
   <a href="https://github.com/OrbitInfra/OrbiTE">GitHub</a> ·
   <a href="getting-started.html">Quick Start</a> ·
@@ -15,15 +21,15 @@
 
 ## Overview
 
-OrbiTE is the transfer engine for OrbitKV's KV cache, replacing its earlier
-Mooncake TENT dependency. It moves bytes between CPU memory, NVIDIA GPUs and
-local SSDs, within and across machines, so every end-to-end cache path,
-including GPU↔DRAM and GPU↔SSD, runs through one engine. The design follows
+OrbitKV is a High Performance KV Cache System for LLM Inference.
+Its Cache Manager uses OrbiTE for local cache tiering and cross-node reuse.
+OrbiTE replaced OrbitKV’s earlier Mooncake TENT dependency and moves KV data
+between CPU memory, NVIDIA GPUs, local SSDs and peer hosts. The design follows
 Mooncake TENT's engine, transport, context, buffer, endpoint and worker
 boundaries, implemented in Rust with no Mooncake C++ dependency.
 
 :::{image} _static/architecture.svg
-:alt: OrbiTE network transports and the implemented DRAM and GPU paths to local SSD
+:alt: OrbitKV’s high-performance KV cache system uses the OrbiTE high-performance transfer engine for transfers across CPU memory, NVIDIA GPUs, local SSDs and peer hosts.
 :class: dark-light
 :::
 

@@ -30,13 +30,17 @@ Architectural alignment alone establishes no behavior or performance result. See
 [completion plan](completion-plan.md#p4-remaining-delivery) for open work.
 
 :::{image} _static/architecture.svg
-:alt: OrbiTE network transports and the implemented DRAM and GPU paths to local SSD
+:alt: OrbitKV’s high-performance KV cache system uses the OrbiTE high-performance transfer engine for transfers across CPU memory, NVIDIA GPUs, local SSDs and peer hosts.
 :class: dark-light
 :::
 
 ## Scope and non-goals
 
-OrbiTE is a transfer engine for LLM inference on NVIDIA.
+OrbiTE is a High Performance Transfer Engine for LLM Inference.
+It supports CPU memory and NVIDIA GPUs.
+
+OrbitKV is a High Performance KV Cache System for LLM Inference.
+Its Cache Manager uses OrbiTE for local cache tiering and cross-node reuse.
 
 Non-goals:
 

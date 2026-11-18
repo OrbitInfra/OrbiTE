@@ -1,7 +1,8 @@
-"""OrbiTE: retained transfer owners and explicit peer epochs.
+"""OrbiTE is a High Performance Transfer Engine for LLM Inference.
 
-The Python interface mirrors the Rust API. A timeout, cancellation or object
-finalizer is never permission to release memory still used by native work.
+The Python interface mirrors the Rust API, including retained transfer owners
+and explicit peer epochs. A timeout, cancellation or object finalizer is never
+permission to release memory still used by native work.
 """
 from dataclasses import dataclass as _dataclass
 from enum import Enum as _Enum, IntEnum as _IntEnum
