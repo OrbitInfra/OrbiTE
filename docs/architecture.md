@@ -98,6 +98,11 @@ This retained interchange contract is an extension beyond TENT's raw integers.
 If interpreter finalization prevents a safe detach, the bounded
 engine slot remains retained. The [guide](python.md) records these deliberate
 lifetime differences from frozen `src/python/pybind.cpp` and its guard test.
+The [shared CPU trace](cpu-oracle.md#installed-python-wheel) drives those
+public owners from an isolated wheel installation. It checks that duplicate
+CPU registrations retain the first permission and pin the exporter until the
+last reference closes. Task receipts and engine counters check drain and
+release of the installed binding's memory and batch owners.
 
 ## Peer retirement
 

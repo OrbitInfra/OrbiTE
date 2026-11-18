@@ -229,6 +229,15 @@ early-drop ownership, queued cancellation and timeout retention. Four timing
 controls repeat 50 times in extended/release validation. The source-distribution job rebuilds and installs its
 wheel before repeating the same consumer controls.
 
+The wheel workflow also [replays the shared CPU trace](cpu-oracle.md#installed-python-wheel)
+in a fresh virtualenv for each CPU + io_uring wheel, combined wheel and rebuilt
+sdist wheel. All 25 expected observations cover real loopback TCP, including
+guard bytes, batch append, repeat polling, notification delivery and cleanup.
+The Python driver verifies that live duplicate registrations pin the exporter
+and final unregister permits resizing. The `cpu-trace-*` artifacts preserve the
+exact wheel SHA-256, the fixture and driver hashes, six comparator controls,
+and the observed records. These results cover the installed CPU/TCP profile.
+
 The specific installed tests are
 `test_installed_distribution_and_surface`, `test_two_process_tcp_installed_wheel`,
 `test_real_tcp_read_write_guards_status_and_notifications`,

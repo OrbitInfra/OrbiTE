@@ -39,7 +39,7 @@ artifacts and hardware profiles.
 
 | Stage | Concrete delivery | Prerequisites | Current state |
 | --- | --- | --- | --- |
-| P0 | Frozen contracts, test mapping and differential oracle | Reference inventory | CPU oracle and native-boundary rejection fixtures implemented; broader differential fault and performance cases open |
+| P0 | Frozen contracts, test mapping and differential oracle | Reference inventory | CPU oracle, installed wheel replay and native-boundary rejection fixtures implemented; broader differential fault and performance cases open |
 | P1 | Rust engine, configuration and resource ownership | Frozen P0 subset | P1.1–P1.5 and S0 implemented; broader P1 open |
 | P2 | P2P control plane and standard TCP path | Corresponding P1 substage | P2.1–P2.3 and S0b implemented; broader P2 open |
 | P3 | HP-TCP and shared-memory paths | P2 | Complete at source level |
@@ -78,31 +78,16 @@ required profiles and evidence for each milestone.
 
 ## Current focus
 
-The [API documentation closure](#release-ladder) is implemented: core/runtime,
-CPU/RDMA, CUDA/local-copy/staging, storage and metrics have complete public
-rustdoc, enforced for every feature set. Python classes, fields, methods and
-exceptions have installed-wheel coverage and a missing-contract negative control.
-Independent review and PR #202's final CI accepted this source step; no
-publication or hardware verification was part of it. The TCP test consolidation
-shares the held READ fixtures used by the
-synchronous, queued-cancel/deadline and detached-batch lifetime controls. Their
-test entry points, four scenarios and all 37 existing postcondition assertions
-are unchanged. Selector size/hint and owner-capability cases now use tables,
-with fresh contexts for independent rows; both test entry points and all 26
-selection checks remain. Production source and selector-test line counts are
-unchanged. The dependency refresh is merged: PyO3 0.29.3 and docs-only SoupSieve
-4.1.1 cover the published advisories, preserving the GIL requirement and the
-CPython 3.10–3.14 / Rust 1.85 support window. The current substep closes the P2
-descriptor contract audit: immutable snapshots, same-epoch refresh, source-side
-registration validation and the deliberate omission of TENT's shared cache and
-update subscriptions. Existing TCP controls now also assert that refresh and
-unregister do not mutate public snapshots. A mixed READ verifies whole-batch
-refresh before registration IDs are bound. This step clarifies existing transfer
-behavior and adds no hardware qualification. Request-merge eligibility now uses
-named range/cap and policy-field tables. All 14 input/outcome pairs and their
-completion checks remain, along with the six other merge test entry points.
-The scoped TCP, selector and request-merge test consolidation is implemented;
-installed acceptance remains open.
+The [API documentation closure and test consolidation](#release-ladder) are
+implemented. The [P2 descriptor audit](architecture.md#peer-retirement)
+covers immutable snapshots and whole-batch refresh before registration IDs
+are bound. The current P0 substep adds
+[installed Python wheel replay](cpu-oracle.md#installed-python-wheel) of the
+shared CPU/TCP trace. CI requires both Linux wheel profiles and the rebuilt
+sdist wheel to match the same 25 observations as the Rust and frozen TENT
+drivers. The trace checks registrations, bytes, task receipts, notifications
+and final cleanup.
+The remaining P0 cases and the installed hardware queue are listed below.
 
 Follow the maintainer's 2026-11-09 order, one PR at a time, stopping for review
 after each:
@@ -162,10 +147,11 @@ Requirements: all F/B IDs in [the parity contract](tent-parity.md).
 Done:
 
 - **P0.1 — shared CPU comparison trace (Implemented).** Unmodified frozen TENT
-  and the public Rust API run one deterministic registration, READ/WRITE, batch
-  and notification trace over real host memory and TCP; both must match 25
-  observations, and six comparator controls must reject broken results. See
-  [CPU oracle](cpu-oracle.md). It covers selected valid-input CPU behavior only.
+  and the public Rust and installed Python APIs run one deterministic
+  registration, READ/WRITE, batch and notification trace over real host memory
+  and TCP. Each must match 25 observations, and six comparator controls must
+  reject broken results. See [CPU oracle](cpu-oracle.md). It covers selected
+  valid-input CPU behavior.
 
 - **S16 — reference fixtures.** Retain the CPU trace contract and three frozen
   request prefixes used by native-listener rejection. Compatibility inventories
@@ -176,8 +162,9 @@ Open:
 
 - [ ] Pin optional-provider SDKs and build options for the profiles outside
   the isolated CPU reference build.
-- [ ] Extend the CPU oracle to the remaining native/Python behavior,
-  Python guards and tebench byte checks, with hardware triggers where needed.
+- [ ] Extend the CPU oracle beyond the shared valid-input trace with further
+  native/Python behavior, Python guard cases and tebench byte checks, with
+  hardware triggers where needed.
 - [ ] Extend the shared trace to allowed concurrent transitions, faults, broken
   lifetime/epoch controls against independent native and Rust runs.
 - [ ] Write the run-manifest schema and freeze workload-specific resource and

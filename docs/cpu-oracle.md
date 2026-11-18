@@ -1,10 +1,10 @@
 # Frozen CPU comparison
 
-P0.1 supplies one executable behavioral trace for the existing CPU/TCP slice.
-It runs public OrbiTE Rust APIs and the frozen native TENT C ABI in separate
-runner processes. Each runner owns a source engine, requester engine and actual
-host backing. Remote operations use real loopback TCP between those engines.
-This is a correctness gate, not a throughput comparison or mixed-peer test.
+P0.1 supplies one executable behavior trace for the CPU/TCP profile. The public
+OrbiTE Rust API, the frozen native TENT C ABI and the installed OrbiTE Python API
+run in separate processes. Each runner uses real host backing and loopback TCP
+between its own source and requester engines. The comparison checks correctness
+within each runtime.
 
 ## Reference and build boundary
 
@@ -37,14 +37,14 @@ dependencies. Normal Cargo builds do not build or load TENT.
 [`cpu-v1.trace`](../tests/fixtures/cpu-v1.trace) is a small deterministic source
 fixture. [`cpu-v1.expected`](../tests/fixtures/cpu-v1.expected) defines exact byte,
 descriptor, completion and notification observations from its specified inputs.
-Both drivers must match that expectation and each other; matching two wrong
-outputs is insufficient.
+Every driver compares against that expectation. The native comparison also
+checks the actual Rust and TENT outputs against each other.
 
 | Contract | Trace coverage | Remaining boundary |
 | --- | --- | --- |
 | F04 host registration | Existing backing, single and batch duplicate registration, first permission retained during subsequent WRITE, partial/final unregister and descriptor refresh | Failed provider free, overlapping native registrations and retained DMA |
 | F05/F07/F08 CPU movement | Noncontiguous batched READ, offset WRITE, exact bytes/sentinels and completed byte counts | Native error mapping, partial posts, cancellation and failover |
-| F08 batch lifetime | Both drivers allocate/submit/poll/free; the first READ appends two groups to one capacity reservation; terminal polling repeats without redelivery | Asynchronous multi-target hooks and merged task aliases |
+| F08 batch lifetime | Drivers allocate/submit/poll/free; the first READ appends two groups to one capacity reservation; terminal polling repeats without redelivery | Asynchronous multi-target hooks and merged task aliases |
 | F11 notifications | Explicit local/remote, attached READ/WRITE, empty submission, deliberate repeats, empty names/messages and empty polls | Ambiguous native receipts, provider fallback and durable/deduplicated delivery |
 | Selected F09 C output | Native notification result reuse, reset on free and repeated free | Frozen TENT output contract only; OrbiTE C ABI is out of scope |
 
@@ -57,9 +57,11 @@ reference. New duplicate descriptors in one native batch are outside this trace.
 `FILL` and `BYTES` specify offsets/lengths. `READ`/`WRITE` take a label,
 comma-separated `local_offset:remote_offset:length` slices, notification name
 and message. `READ_SPLIT` submits each slice separately into one allocated
-batch, without notification. The Rust driver seals after append; frozen native
-TENT has no seal API. Both poll completion repeatedly, verify bytes/counts and
-free every batch before cleanup. `~` disables the attached notification; `-` means empty strings
+batch, without notification. The Rust driver seals after append. The Python
+driver waits for physically drained task receipts via `Batch.wait` and checks
+counts and byte totals from the returned tasks. All drivers observe terminal
+status repeatedly and free each batch before cleanup. `~` disables the attached
+notification; `-` means empty strings
 or an empty slice list. `NOTIFY` selects local/remote delivery; `TAKE` drains
 the source inbox. Fixtures use bounded, valid ranges and C-string-compatible
 messages. Random addresses, IDs and timing are excluded from observations;
@@ -114,6 +116,30 @@ Native CI runs for core/trace changes and uploads its evidence, including failed
 runs. Source commit provenance and a clean reference do not turn an untested
 hardware or API surface into an accepted profile.
 
+### Installed Python wheel
+
+Use a CPython interpreter matching the wheel's tag. The runner creates a fresh
+virtualenv in the external output directory, installs the supplied wheel with
+`pip --no-index --no-deps`, then runs the driver there in isolated Python mode.
+The driver checks its import path inside that virtualenv. The manifest records
+the wheel SHA-256, the interpreter version, commands, input hashes and the same
+six comparator controls. The wheel trace executes without building Rust or TENT.
+
+```sh
+python -I tests/reference/run.py --python-wheel "$WHEEL" \
+  --output /var/tmp/orbite-wheel-trace-001
+```
+
+The result `passed-python-wheel-trace` requires all 25 observations, including
+duplicate registration and permission retention, guard bytes, empty batches,
+and notification order and multiplicity. Live aliases must keep the Python
+exporter pinned, and final unregister must allow resizing. Before emitting
+cleanup the driver closes every registration, batch and segment guard, checks
+the memory and batch charges on both engines, and closes both engines.
+The wheel matrix runs this
+gate on CPU + io_uring and combined wheels and on the rebuilt sdist wheel.
+See [wheel qualification](qualification.md#python-wheels) for its scope.
+
 ## Isolated RDMA geometry function
 
 P4.12g adds a separate valid-input comparison for frozen TENT's
@@ -143,10 +169,10 @@ controls are recorded in the
 
 ## Qualification limits
 
-This first comparison has valid-input CPU behavior coverage. It leaves the full
-P0 inventory/oracle, metadata schemas, all native
-errors/configuration, physical two-host tests, RNIC/GPU/storage and consumer
-installed qualification open. OrbitKV-specific source epochs and source-close
+This comparison covers valid-input CPU/TCP behavior through the three drivers.
+Full P0 coverage, native errors and configuration, physical two-host tests,
+RNIC/GPU/storage and installed consumer qualification remain open.
+OrbitKV-specific source epochs and source-close
 extensions need their own audited adapter controls. Use the
 [completion plan](completion-plan.md) for subsequent delivery and independent
 acceptance; there is no second execution queue here.
