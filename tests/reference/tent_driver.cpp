@@ -324,9 +324,10 @@ public:
 // only after its completed WRITE or READ, with no other requester admitted.
 void tebench_target() {
   constexpr size_t guard = 32, payload = 2 * 4096;
-  std::vector<unsigned char> bytes(guard + payload + guard, 0xa5);
+  // The frozen address-derived seed is always nonzero, including for the
+  // address chosen by ASLR. A seeded WRITE into either zero guard is observable.
+  std::vector<unsigned char> bytes(guard + payload + guard, 0);
   auto first = bytes.begin() + guard, last = first + payload;
-  std::fill(first, last, 0);
   auto source = engine();
   checked(tent_register_memory_with_perm(source.get(), bytes.data(),
                                          bytes.size(), PERM_GLOBAL_READ_WRITE),
@@ -342,7 +343,7 @@ void tebench_target() {
             "unexpected tebench phase");
   };
   auto check_guards = [&] {
-    auto intact = [](unsigned char byte) { return byte == 0xa5; };
+    auto intact = [](unsigned char byte) { return byte == 0; };
     require(std::all_of(bytes.begin(), first, intact) &&
                 std::all_of(last, bytes.end(), intact),
             "tebench changed target guard bytes");

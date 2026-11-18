@@ -115,8 +115,8 @@ Its manifest preserves exact inputs,
 commands, command outcomes, binary hashes, native dependency paths/hashes,
 observations, comparator controls and provenance. Failures keep their logs and
 mark the manifest failed. Timeout kills are failures, never drain receipts.
-Native CI runs on changes to the reference gate and in the extended and release
-tiers. It uploads evidence from failed runs. Source commit provenance and a clean reference do not turn an untested
+The extended, release and manually dispatched native CI runs upload this evidence,
+including failed runs. Source commit provenance and a clean reference do not turn an untested
 hardware or API surface into an accepted profile.
 
 ### Frozen tebench byte checks
