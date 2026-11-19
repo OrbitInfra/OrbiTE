@@ -95,12 +95,12 @@ def pending_reads(slow_peer: str, fast_peer: str) -> None:
             and not tasks[0].locally_drained
             and tasks[0].transferred_bytes == 0
         ):
-            raise RuntimeError(f"first READ no longer pending: {tasks}")
+            raise RuntimeError(f"READ no longer pending: {tasks}")
 
-    def submit(batch, peer, registration, length):
+    def submit(batch, peer, registration, offset, length):
         _, [(address, _, _)] = peer.info()
         request = orbite.TransferRequest(
-            registration.address + 1, address, length, orbite.Transport.TCP
+            registration.address + 1, address + offset, length, orbite.Transport.TCP
         )
         batch.submit(orbite.TransferOp.READ, peer, [request])
 
@@ -123,11 +123,11 @@ def pending_reads(slow_peer: str, fast_peer: str) -> None:
         with engine.allocate_batch(1) as first:
             print("OPEN", flush=True)
             command("stopped")
-            submit(first, slow, reg, 5)
+            submit(first, slow, reg, 0, 5)
             check_pending(first)
             del dst
             with engine.register_buffer(fast_bytes) as fast_reg, engine.allocate_batch(1) as second:
-                submit(second, fast, fast_reg, 3)
+                submit(second, fast, fast_reg, 0, 3)
                 finish_batch(second, "second", 1)
             observe("BYTES", "second", fast_bytes.hex())
             check_pending(first)
@@ -143,7 +143,20 @@ def pending_reads(slow_peer: str, fast_peer: str) -> None:
             if retained is None:
                 raise RuntimeError("pending READ lost its exporter")
             print("PENDING first", flush=True)
-            command("resumed")
+            later_bytes = bytearray(b"\xee" * 8)
+            with engine.register_buffer(later_bytes) as later_reg, engine.allocate_batch(1) as later:
+                submit(later, slow, later_reg, 3, 2)
+                check_pending(first)
+                check_pending(later)
+                if (remaining := charges()) != (2, 2, 7, 2, 16):
+                    raise RuntimeError(f"unexpected charges with two READs pending: {remaining}")
+                print("PENDING first later", flush=True)
+                command("resumed")
+                finish_batch(later, "later", 1)
+            stats = engine.stats()
+            if (stats["allocated_batches"], stats["allocated_requests"]) != (1, 1):
+                raise RuntimeError("expected only the first batch after closing the later one")
+            observe("BYTES", "later", later_bytes.hex())
             finish_batch(first, "first", 1)
         observe("BYTES", "first", retained.hex())
         reg.close()

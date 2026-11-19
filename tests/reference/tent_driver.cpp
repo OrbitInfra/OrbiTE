@@ -156,23 +156,30 @@ void pending_source(std::string payload) {
 }
 
 void pending_reads(const char *slow, const char *fast) {
-  std::array<std::array<unsigned char, 8>, 2> dst;
+  std::array<std::array<unsigned char, 8>, 3> dst;
   auto requester = engine();
   auto *te = requester.get();
   try {
-    const char *names[] = {slow, fast};
-    std::array<tent_request_t, 2> req{};
+    const std::array names{slow, fast};
+    const std::array<size_t, 3> lengths{5, 3, 2};
+    std::array<tent_request_t, 3> req{};
     for (size_t i = 0; i < req.size(); ++i) {
       dst[i].fill(0xee);
       checked(tent_register_memory_with_perm(te, dst[i].data(), dst[i].size(),
                                              PERM_LOCAL_READ_WRITE),
               "register destination");
+      req[i].opcode = OPCODE_READ;
+      req[i].transport_hint = TRANSPORT_TCP;
+      req[i].source = dst[i].data() + 1;
+      req[i].length = lengths[i];
+    }
+    for (size_t i = 0; i < names.size(); ++i) {
       checked(tent_open_segment(te, &req[i].target_id, names[i]), "open peer");
     }
     require(req[0].target_id != req[1].target_id, "expected two source peers");
     // Opening a segment invalidates the submit thread's descriptor cache.
     // Resolve both addresses after both opens, while both peers can reply.
-    for (size_t i = 0; i < req.size(); ++i) {
+    for (size_t i = 0; i < names.size(); ++i) {
       tent_segment_info_t info{};
       checked(tent_get_segment_info(te, req[i].target_id, &info),
               "describe peer");
@@ -181,11 +188,9 @@ void pending_reads(const char *slow, const char *fast) {
               "expected one eight-byte source");
       req[i].target_offset = info.buffers[0].base;
       tent_free_segment_info(&info);
-      req[i].opcode = OPCODE_READ;
-      req[i].transport_hint = TRANSPORT_TCP;
-      req[i].source = dst[i].data() + 1;
-      req[i].length = i == 0 ? 5 : 3;
     }
+    req[2].target_id = req[0].target_id;
+    req[2].target_offset = req[0].target_offset + 3;
     auto submit = [&](size_t i) {
       auto id = allocate_batch(te, 1);
       checked(tent_submit(te, id, &req[i], 1), "submit pending-read case");
@@ -204,27 +209,35 @@ void pending_reads(const char *slow, const char *fast) {
     std::cout << "OPEN" << std::endl;
     command("stopped");
     auto first = submit(0);
-    auto check_pending = [&] {
+    auto check_pending = [&](tent_batch_id_t id) {
       tent_status_t task{}, batch{};
-      checked(tent_task_status(te, first, 0, &task), "first task status");
-      checked(tent_overall_status(te, first, &batch), "first batch status");
+      checked(tent_task_status(te, id, 0, &task), "pending task status");
+      checked(tent_overall_status(te, id, &batch), "pending batch status");
       for (auto status : {task, batch})
         require((status.status == STATUS_WAITING ||
                  status.status == STATUS_PENDING) &&
                     status.transferred_bytes == 0,
-                "first READ no longer pending");
+                "READ no longer pending");
     };
-    check_pending();
+    check_pending(first);
     auto second = submit(1);
     require(second != first, "live batches share an ID");
     finish(1, second, "second");
-    check_pending();
+    check_pending(first);
     std::cout << "PENDING first" << std::endl;
+    auto later = submit(2);
+    require(later != first, "same-peer batches share an ID");
+    check_pending(first);
+    check_pending(later);
+    std::cout << "PENDING first later" << std::endl;
     command("resumed");
+    finish(2, later, "later");
     finish(0, first, "first");
-    for (size_t i = 0; i < req.size(); ++i) {
-      checked(tent_unregister_memory(te, dst[i].data(), dst[i].size()),
+    for (auto &buffer : dst) {
+      checked(tent_unregister_memory(te, buffer.data(), buffer.size()),
               "unregister destination");
+    }
+    for (size_t i = 0; i < names.size(); ++i) {
       checked(tent_close_segment(te, req[i].target_id), "close peer");
     }
   } catch (const std::exception &error) {

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "profile": "Linux CPU host memory, loopback TCP: two-engine trace and three-process stopped-source READ",
+  "profile": "Linux CPU host memory, loopback TCP: two-engine trace and three-process stopped-source READs on one segment with independent peer progress",
   "tent_release": "v0.3.14",
   "tent_repository": "https://github.com/OrbitInfra/Mooncake.git",
   "tent_revision": "e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c",

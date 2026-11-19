@@ -110,8 +110,10 @@ another source registration stays live. Waiting for and releasing the second
 batch first must preserve the first batch's receipt. The
 [stopped-source case](cpu-oracle.md#pending-read-across-two-peers) holds one
 peer unavailable while another READ completes. The first destination still
-belongs to its admitted batch: Rust retains the withdrawn registration and
-its budget; the Python guard rejects close until drain.
+belongs to its admitted batch. Rust retains the withdrawn registration and
+its budget, and the Python guard rejects close until drain. A later READ on
+the stopped segment owns a separate destination and budget. Both remain
+charged while pending and can be retired in reverse order after resumption.
 
 ## Peer retirement
 

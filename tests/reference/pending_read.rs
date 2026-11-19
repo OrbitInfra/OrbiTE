@@ -38,7 +38,7 @@ fn check_pending(batch: &Batch) -> Result<()> {
         || !matches!(tasks.as_slice(), [task] if !task.state.is_terminal()
             && !task.locally_drained && task.transferred_bytes == 0)
     {
-        return Err(format!("first READ no longer pending: {status:?}, {tasks:?}").into());
+        return Err(format!("READ no longer pending: {status:?}, {tasks:?}").into());
     }
     Ok(())
 }
@@ -57,29 +57,44 @@ pub(super) fn reads(slow_peer: &str, fast_peer: &str) -> Result<()> {
             engine.register_host_memory(memory.clone(), 0, memory.len(), Permission::LocalOnly)?;
         Ok((memory, reg))
     };
-    let submit = |peer: &RemoteSegment, dst: &HostMemory, len: usize| -> Result<Batch> {
-        let [region] = peer.regions() else {
-            return Err("expected one source region".into());
+    let submit =
+        |peer: &RemoteSegment, dst: &HostMemory, offset: u64, len: usize| -> Result<Batch> {
+            let [region] = peer.regions() else {
+                return Err("expected one source region".into());
+            };
+            let request = TransferRequest::new(
+                Transport::Tcp,
+                dst.base_address() + 1,
+                region.base_address() + offset,
+                len,
+            );
+            Ok(engine.submit_async(TransferOp::Read, peer, &[request], None, TIMEOUT)?)
         };
-        let request = TransferRequest::new(
-            Transport::Tcp,
-            dst.base_address() + 1,
-            region.base_address(),
-            len,
+    let check_charges = |expected| -> Result<()> {
+        let stats = engine.stats()?;
+        let actual = (
+            stats.allocated_batches,
+            stats.inflight_batches,
+            stats.inflight_bytes,
+            stats.retained_regions,
+            stats.retained_bytes,
         );
-        Ok(engine.submit_async(TransferOp::Read, peer, &[request], None, TIMEOUT)?)
+        if actual != expected {
+            return Err(format!("expected READ charges {expected:?}, observed {actual:?}").into());
+        }
+        Ok(())
     };
     let (slow_bytes, slow_reg) = destination()?;
     let (fast_bytes, fast_reg) = destination()?;
     println!("OPEN");
     command("stopped")?;
-    let first = submit(&slow, &slow_bytes, 5)?;
+    let first = submit(&slow, &slow_bytes, 0, 5)?;
     check_pending(&first)?;
     let owner = Arc::downgrade(&slow_bytes);
     engine.unregister_memory(&slow_reg)?;
     drop((slow_reg, slow_bytes));
 
-    let second = submit(&fast, &fast_bytes, 3)?;
+    let second = submit(&fast, &fast_bytes, 0, 3)?;
     finish_batch(second, "second", false)?;
     let mut bytes = [0; 8];
     fast_bytes.read(0, &mut bytes)?;
@@ -87,36 +102,37 @@ pub(super) fn reads(slow_peer: &str, fast_peer: &str) -> Result<()> {
     engine.unregister_memory(&fast_reg)?;
     drop(fast_reg);
     check_pending(&first)?;
-    let stats = engine.stats()?;
-    if (
-        stats.allocated_batches,
-        stats.inflight_batches,
-        stats.inflight_bytes,
-        stats.retained_regions,
-        stats.retained_bytes,
-    ) != (1, 1, 5, 1, 8)
-    {
-        return Err(format!("pending READ lost its charges: {stats:?}").into());
-    }
+    check_charges((1, 1, 5, 1, 8))?;
     let retained = owner.upgrade().ok_or("pending READ lost its destination")?;
     println!("PENDING first");
+
+    let (later_bytes, later_reg) = destination()?;
+    let later = submit(&slow, &later_bytes, 3, 2)?;
+    check_pending(&first)?;
+    check_pending(&later)?;
+    check_charges((2, 2, 7, 2, 16))?;
+    println!("PENDING first later");
     command("resumed")?;
+    finish_batch(later, "later", false)?;
+    later_bytes.read(0, &mut bytes)?;
+    println!("OBS\tBYTES\tlater\t{}", hex(&bytes));
+    engine.unregister_memory(&later_reg)?;
+    drop(later_reg);
+    let stats = engine.stats()?;
+    if (stats.allocated_batches, stats.allocated_requests) != (1, 1) {
+        return Err(format!(
+            "expected only the first batch after freeing the later one: {stats:?}"
+        )
+        .into());
+    }
     finish_batch(first, "first", false)?;
     retained.read(0, &mut bytes)?;
     println!("OBS\tBYTES\tfirst\t{}", hex(&bytes));
     drop(retained);
-    let stats = engine.stats()?;
-    if owner.upgrade().is_some()
-        || (
-            stats.allocated_batches,
-            stats.inflight_batches,
-            stats.inflight_bytes,
-            stats.retained_regions,
-            stats.retained_bytes,
-        ) != (0, 0, 0, 0, 0)
-    {
-        return Err(format!("drained READ retained its owners: {stats:?}").into());
+    if owner.upgrade().is_some() {
+        return Err("drained READ retained its destination".into());
     }
+    check_charges((0, 0, 0, 0, 0))?;
     engine.close(TIMEOUT)?;
     Ok(())
 }
