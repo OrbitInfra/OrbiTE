@@ -100,7 +100,9 @@ destination and drops the caller's strong references. While the source is stoppe
 the backing must still be reachable and its registration and transfer charges
 must remain. Rust and Python check that the two pending batches charge seven
 in-flight bytes and retain sixteen bytes of destination memory across two
-registrations. After drain the charges return to zero. Python requires the busy
+registrations. After retiring the later handle both drivers require exactly
+one allocated batch and one reserved request slot before retiring the first.
+After both retire the charges return to zero. Python requires the busy
 registration to reject close and keep its exporter alive until drain. Frozen
 TENT requires the caller to keep its buffers registered until completion.
 The driver checks that each freed batch ID is rejected before a new allocation.

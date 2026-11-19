@@ -153,6 +153,9 @@ def pending_reads(slow_peer: str, fast_peer: str) -> None:
                 print("PENDING first later", flush=True)
                 command("resumed")
                 finish_batch(later, "later", 1)
+            stats = engine.stats()
+            if (stats["allocated_batches"], stats["allocated_requests"]) != (1, 1):
+                raise RuntimeError("expected only the first batch after closing the later one")
             observe("BYTES", "later", later_bytes.hex())
             finish_batch(first, "first", 1)
         observe("BYTES", "first", retained.hex())

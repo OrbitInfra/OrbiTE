@@ -118,6 +118,13 @@ pub(super) fn reads(slow_peer: &str, fast_peer: &str) -> Result<()> {
     println!("OBS\tBYTES\tlater\t{}", hex(&bytes));
     engine.unregister_memory(&later_reg)?;
     drop(later_reg);
+    let stats = engine.stats()?;
+    if (stats.allocated_batches, stats.allocated_requests) != (1, 1) {
+        return Err(format!(
+            "expected only the first batch after freeing the later one: {stats:?}"
+        )
+        .into());
+    }
     finish_batch(first, "first", false)?;
     retained.read(0, &mut bytes)?;
     println!("OBS\tBYTES\tfirst\t{}", hex(&bytes));
