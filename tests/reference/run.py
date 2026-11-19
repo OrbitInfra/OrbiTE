@@ -213,6 +213,16 @@ def main() -> int:
             raise RuntimeError(f"{name} failed ({result}); see {stderr}")
         return stdout.read_text()
 
+    def pending_read(profile: str, driver: list[str]) -> list[str]:
+        receipts = run(
+            f"{profile}-pending-read",
+            [sys.executable, "-I", "-B", str(REPO / "tests/reference/pending_read.py"), *driver],
+            cwd=output,
+            timeout=30,
+        ).splitlines()
+        manifest.setdefault("pending_read", {})[profile] = receipts
+        return receipts
+
     try:
         save()
         packaged_vcs = REPO / ".cargo_vcs_info.json"
@@ -231,6 +241,7 @@ def main() -> int:
             Path(CONTRACT["expected"]),
             Path("tests/reference/contract.json"),
             Path("tests/reference/run.py"),
+            Path("tests/reference/pending_read.py"),
         ]
         if args.python_wheel:
             driver = Path("tests/reference/python_driver.py")
@@ -239,6 +250,7 @@ def main() -> int:
             inputs.extend(
                 [
                     Path("tests/reference/rust_driver.rs"),
+                    Path("tests/reference/pending_read.rs"),
                     Path("tests/reference/tent_driver.cpp"),
                 ]
             )
@@ -252,7 +264,7 @@ def main() -> int:
             wheel = args.python_wheel.resolve()
             if wheel.suffix != ".whl" or not wheel.is_file():
                 raise ValueError(f"expected an existing wheel: {wheel}")
-            manifest["profile"] = "Installed CPython wheel, two engines, standard loopback TCP"
+            manifest["profile"] = "Installed CPython wheel, loopback TCP: two-engine trace and three-process stopped-source READ"
             manifest["python_wheel"] = {"path": str(wheel), "sha256": digest(wheel)}
             venv = output / "venv"
             python = str(venv / "bin/python")
@@ -284,6 +296,7 @@ def main() -> int:
             )
             compare(expected, observations(actual))
             manifest["observations"] = len(expected)
+            pending_read("python", [python, "-I", "-B", str(REPO / driver)])
             return passed("passed-python-wheel-trace")
 
         manifest["rustc"] = run("rustc-version", ["rustc", "-Vv"]).strip()
@@ -303,6 +316,7 @@ def main() -> int:
         rust_output = run("rust-trace", [str(rust_binary), str(trace)], timeout=30)
         rust_records = observations(rust_output)
         compare(expected, rust_records)
+        rust_pending = pending_read("rust", [str(rust_binary)])
         rust_linkage = run("rust-linkage", ["ldd", str(rust_binary)])
         if re.search(r"lib(?:tent|mooncake|asio)", rust_linkage):
             raise RuntimeError("Rust runner unexpectedly depends on a Mooncake runtime")
@@ -452,6 +466,7 @@ def main() -> int:
             native_records = observations(native_output)
             compare(expected, native_records)
             compare(rust_records, native_records)
+            compare(rust_pending, pending_read("tent", [str(binary)]))
             tebench = build / "mooncake-transfer-engine/benchmark/tebench"
             manifest["tebench"] = {
                 "path": str(tebench),

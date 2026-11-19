@@ -10,6 +10,8 @@ use orbite::{
 
 const TIMEOUT: Duration = Duration::from_secs(5);
 
+mod pending_read;
+
 struct Buffer {
     memory: Arc<HostMemory>,
     registration: Option<RegisteredMemory>,
@@ -75,7 +77,13 @@ fn finish_batch(mut batch: Batch, label: &str, notified: bool) -> Result<(), Box
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
-    let path = std::env::args().nth(1).ok_or("expected trace path")?;
+    let args: Vec<_> = std::env::args().skip(1).collect();
+    let path = match args.as_slice() {
+        [mode, payload] if mode == "--pending-source" => return pending_read::source(payload),
+        [mode, slow, fast] if mode == "--pending-reads" => return pending_read::reads(slow, fast),
+        [path] => path,
+        _ => return Err("expected trace path or pending READ role".into()),
+    };
     let trace = std::fs::read_to_string(path)?;
     let source = Arc::new(TransferEngine::new(EngineConfig::default())?);
     let requester = Arc::new(TransferEngine::new(EngineConfig::default())?);

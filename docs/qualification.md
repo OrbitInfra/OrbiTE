@@ -26,7 +26,11 @@ features on Linux, and checks that native features are rejected on other
 targets; these compile checks exercise no device.
 
 The CPU oracle compares real registered memory and TCP traces against the
-frozen reference. Its [tebench gate](cpu-oracle.md#frozen-tebench-byte-checks)
+frozen reference. Its [stopped-source gate](cpu-oracle.md#pending-read-across-two-peers)
+requires one peer's READ to complete and release its batch before a stopped
+source resumes. The manifest records both guarded byte results and the pending
+checkpoint; failure or timeout of any child fails the gate. Its
+[tebench gate](cpu-oracle.md#frozen-tebench-byte-checks)
 records a seeded WRITE, a verified READ, a one-byte rejection and a verified
 READ after restoration on CPU/TCP. Three frozen RPC prefixes and a real frozen client exercise
 native OrbiTE rejection, with no admission or payload movement. Compatibility
@@ -238,9 +242,11 @@ TCP, including guard bytes, batch append, repeat polling, notifications and
 cleanup. A non-final source unregister with two submitted READ handles must
 preserve their individual byte counts when the handles retire in reverse order.
 The Python driver verifies that live duplicate registrations pin the exporter
-and final unregister permits resizing. The `cpu-trace-*` artifacts preserve the
-exact wheel SHA-256, the fixture and driver hashes, seven comparator controls,
-and the observed records. These results cover the installed CPU/TCP profile.
+and final unregister permits resizing. In the separate stopped-source case a
+busy registration rejects close after the other peer has drained, then releases
+its exporter after its own READ completes. The `cpu-trace-*` artifacts preserve
+the exact wheel SHA-256, fixture and driver hashes, seven comparator controls,
+and both sets of receipts. These results cover the installed CPU/TCP profile.
 
 The specific installed tests are
 `test_installed_distribution_and_surface`, `test_two_process_tcp_installed_wheel`,

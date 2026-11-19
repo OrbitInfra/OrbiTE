@@ -2,9 +2,8 @@
 
 P0.1 supplies one executable behavior trace for the CPU/TCP profile. The public
 OrbiTE Rust API, the frozen native TENT C ABI and the installed OrbiTE Python API
-run in separate processes. Each runner uses real host backing and loopback TCP
-between its own source and requester engines. The comparison checks correctness
-within each runtime.
+run independently. Both the shared trace and the stopped-source case use real
+host backing and loopback TCP within each runtime.
 
 ## Reference and build boundary
 
@@ -82,6 +81,30 @@ not network, epoch or lifetime fault injection. The existing Rust tests retain t
 restart, partial-body, close/drain and lost-receipt controls; running this shared
 trace does not qualify corresponding behavior in unmodified native TENT.
 
+### Pending READ across two peers
+
+A separate process gate opens two sources from one requester. The controller
+sends `SIGSTOP` to its first source and waits for `waitpid(WUNTRACED)` to
+confirm the stop before allowing submission. The requester submits a five-byte
+READ from that source, observes it pending, then submits a three-byte READ from
+the other source. The second batch must drain and be freed while the first is
+still nonterminal with zero completed bytes. Only then does the controller
+resume the first source. Both receipts and both eight-byte destinations,
+including the untouched guards, must match. All three children must exit cleanly.
+
+Each driver follows its own ownership contract. Rust unregisters the first
+destination and drops the caller's strong references. While the source is stopped,
+the backing must still be reachable and its registration and transfer charges
+must remain. After drain they must disappear. Python requires the busy
+registration to reject close and keep its exporter alive until drain. Frozen
+TENT requires the caller to keep its buffers registered until completion.
+The controller checks the same transfer outcomes on all three paths without
+reading a pending destination or interpreting either wire format.
+
+This covers independent progress across two loopback peers. The shared trace
+above covers two handles on one peer without forcing either READ to stay pending.
+Neither case exercises peer death, timeouts or physical networks.
+
 ## Run the gates
 
 Use Linux, Rust 1.85+, Python 3.11.8+, Git, CMake, a C++20 compiler and permission
@@ -115,7 +138,8 @@ python3 tests/reference/run.py \
 ```
 
 The full run reports `passed-cpu-trace` after both trace runners exit
-successfully, all 29 observations match and the tebench byte controls pass.
+successfully, all 29 observations match, the stopped-source receipts agree,
+and the tebench byte controls pass.
 Its manifest preserves exact inputs,
 commands, command outcomes, binary hashes, native dependency paths/hashes,
 observations, comparator controls and provenance. Failures keep their logs and
@@ -151,7 +175,8 @@ python -I tests/reference/run.py --python-wheel "$WHEEL" \
   --output /var/tmp/orbite-wheel-trace-001
 ```
 
-The result `passed-python-wheel-trace` requires all 29 observations, including
+The result `passed-python-wheel-trace` requires the stopped-source case and all
+29 shared trace observations, including
 duplicate registration and permission retention, guard bytes, independent batch
 receipts, empty batches, and notification order and multiplicity. Live aliases must keep the Python
 exporter pinned, and final unregister must allow resizing. Before emitting
