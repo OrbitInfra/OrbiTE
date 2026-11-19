@@ -27,9 +27,10 @@ targets; these compile checks exercise no device.
 
 The CPU oracle compares real registered memory and TCP traces against the
 frozen reference. Its [stopped-source gate](cpu-oracle.md#pending-read-across-two-peers)
-requires one peer's READ to complete and release its batch before a stopped
-source resumes. The manifest records both guarded byte results and the pending
-checkpoint; failure or timeout of any child fails the gate. Its
+requires one peer's READ to complete and release its batch while another
+source is stopped. The manifest records two same-peer batches pending before
+resumption, their receipts in reverse submission order, and all three guarded
+destinations. Failure or timeout of any child fails the gate. Its
 [tebench gate](cpu-oracle.md#frozen-tebench-byte-checks)
 records a seeded WRITE, a verified READ, a one-byte rejection and a verified
 READ after restoration on CPU/TCP. Three frozen RPC prefixes and a real frozen client exercise
@@ -243,8 +244,9 @@ cleanup. A non-final source unregister with two submitted READ handles must
 preserve their individual byte counts when the handles retire in reverse order.
 The Python driver verifies that live duplicate registrations pin the exporter
 and final unregister permits resizing. In the separate stopped-source case a
-busy registration rejects close after the other peer has drained, then releases
-its exporter after its own READ completes. The `cpu-trace-*` artifacts preserve
+busy registration rejects close after the other peer has drained. Two batches
+on the stopped segment retain separate charges until peer progress resumes.
+The exporter is released after its own READ completes. The `cpu-trace-*` artifacts preserve
 the exact wheel SHA-256, fixture and driver hashes, seven comparator controls,
 and both sets of receipts. These results cover the installed CPU/TCP profile.
 

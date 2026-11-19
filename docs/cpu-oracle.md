@@ -88,23 +88,28 @@ sends `SIGSTOP` to its first source and waits for `waitpid(WUNTRACED)` to
 confirm the stop before allowing submission. The requester submits a five-byte
 READ from that source, observes it pending, then submits a three-byte READ from
 the other source. The second batch must drain and be freed while the first is
-still nonterminal with zero completed bytes. Only then does the controller
-resume the first source. Both receipts and both eight-byte destinations,
-including the untouched guards, must match. All three children must exit cleanly.
+still nonterminal with zero completed bytes. With the first source still stopped,
+the requester submits a two-byte READ at offset three on the same segment
+into a third destination. Both same-peer handles must report pending with zero
+bytes before the controller resumes the source. The requester waits for and
+frees the later handle first. Each receipt and all three eight-byte destinations
+must match, including their guards. All three children must exit cleanly.
 
 Each driver follows its own ownership contract. Rust unregisters the first
 destination and drops the caller's strong references. While the source is stopped,
 the backing must still be reachable and its registration and transfer charges
-must remain. After drain they must disappear. Python requires the busy
+must remain. Rust and Python check that the two pending batches charge seven
+in-flight bytes and retain sixteen bytes of destination memory across two
+registrations. After drain the charges return to zero. Python requires the busy
 registration to reject close and keep its exporter alive until drain. Frozen
 TENT requires the caller to keep its buffers registered until completion.
 The driver checks that each freed batch ID is rejected before a new allocation.
 The controller checks the same transfer outcomes on all three paths without
 reading a pending destination or interpreting either wire format.
 
-This covers independent progress across two loopback peers. The shared trace
-above covers two handles on one peer without forcing either READ to stay pending.
-Neither case exercises peer death, timeouts or physical networks.
+The stop establishes overlap in the lifetime of both same-peer batches. After
+resumption either transfer can finish first. Only the order of handle retirement
+is prescribed. Peer death and interrupted replies remain separate cases.
 
 ## Run the gates
 

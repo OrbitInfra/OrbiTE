@@ -1,4 +1,4 @@
-"""Hold one loopback source stopped while the same requester drains another READ."""
+"""Check independent peer progress and two pending batches on the stopped peer."""
 
 from contextlib import ExitStack
 import os
@@ -58,8 +58,11 @@ def check(driver):
         expect(reader, "OBS\tRESULT\tsecond\tcompleted\t1\t3")
         expect(reader, "OBS\tBYTES\tsecond\tee74776feeeeeeee")
         expect(reader, "PENDING first")
+        expect(reader, "PENDING first later")
         slow.send_signal(signal.SIGCONT)
         send(reader, "resumed")
+        expect(reader, "OBS\tRESULT\tlater\tcompleted\t1\t2")
+        expect(reader, "OBS\tBYTES\tlater\tee7374eeeeeeeeee")
         expect(reader, "OBS\tRESULT\tfirst\tcompleted\t1\t5")
         expect(reader, "OBS\tBYTES\tfirst\tee6669727374eeee")
         finish(reader)

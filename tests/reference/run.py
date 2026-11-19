@@ -269,7 +269,7 @@ def main() -> int:
             wheel = args.python_wheel.resolve()
             if wheel.suffix != ".whl" or not wheel.is_file():
                 raise ValueError(f"expected an existing wheel: {wheel}")
-            manifest["profile"] = "Installed CPython wheel, loopback TCP: two-engine trace and three-process stopped-source READ"
+            manifest["profile"] = "Installed CPython wheel, loopback TCP: two-engine trace and three-process stopped-source READs on one segment with independent peer progress"
             manifest["python_wheel"] = {"path": str(wheel), "sha256": digest(wheel)}
             venv = output / "venv"
             python = str(venv / "bin/python")

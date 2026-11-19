@@ -87,7 +87,8 @@ sdist wheel to match the same 29 observations as the Rust and frozen TENT
 drivers. The trace checks registrations, bytes, task receipts, notifications
 and final cleanup, including reverse retirement of two live READ batches.
 A separate [stopped-source case](cpu-oracle.md#pending-read-across-two-peers)
-requires a second peer's READ to drain while the first is held pending.
+requires a healthy peer's READ to drain and two READs on the stopped peer to
+remain pending together. After resumption their handles retire in reverse order.
 The full native comparison also runs the frozen
 [tebench byte checks](cpu-oracle.md#frozen-tebench-byte-checks) on DRAM/TCP.
 The remaining P0 cases and the installed hardware queue are listed below.
@@ -157,7 +158,8 @@ Done:
   observations; seven comparator controls must reject broken results. See the
   [CPU oracle](cpu-oracle.md) for the covered valid-input behavior. A separate
   three-process case holds one source stopped, checks independent completion
-  on the other peer, then resumes and checks the retained READ.
+  on the other peer, and observes two same-peer batches pending before
+  resumption. Both receipts and guarded destinations are checked at retirement.
 
 - **P0 native tebench bytes (Implemented).** The frozen benchmark writes and reads
   guarded CPU memory over TCP. A single-byte mismatch must fail and restoring
@@ -175,9 +177,9 @@ Open:
 - [ ] Extend the CPU oracle beyond the shared valid-input trace with further
   native/Python behavior, Python guard cases and hardware tebench profiles, with
   hardware triggers where needed.
-- [ ] Extend the independent native and Rust runs to same-peer pending
-  interleavings, interrupted replies, and stale-epoch or broken-lifetime controls.
-  The stopped-source READ covers healthy resumption across two peers.
+- [ ] Extend the independent native and Rust runs to interrupted replies and
+  stale-epoch or broken-lifetime controls. The stopped-source case covers
+  healthy resumption, including two pending READs on one segment.
 - [ ] Write the run-manifest schema and freeze workload-specific resource and
   performance guards before formal measurements.
 
