@@ -1,5 +1,6 @@
 // Test-only adapter to the frozen TENT C ABI. No Mooncake code is vendored.
 #include <algorithm>
+#include <array>
 #include <charconv>
 #include <chrono>
 #include <cstdlib>
@@ -71,10 +72,165 @@ Engine engine() {
   return result;
 }
 
+tent_batch_id_t allocate_batch(tent_engine_t engine, size_t capacity) {
+  const auto batch = tent_allocate_batch(engine, capacity);
+  require(batch != 0, "batch allocation failed");
+  return batch;
+}
+
+void finish_batch(tent_engine_t engine, tent_batch_id_t batch,
+                  size_t task_count, const std::string &label) {
+  tent_status_t status{};
+  const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+  do {
+    checked(tent_overall_status(engine, batch, &status), "batch status");
+    if (status.status == STATUS_COMPLETED)
+      break;
+    require(status.status == STATUS_PENDING || status.status == STATUS_WAITING,
+            "transfer reached failed terminal state");
+    require(std::chrono::steady_clock::now() < end,
+            "transfer deadline expired");
+    std::this_thread::sleep_for(std::chrono::microseconds(100));
+  } while (true);
+  for (int i = 0; i < 2; ++i) {
+    tent_status_t repeated{};
+    checked(tent_overall_status(engine, batch, &repeated), "repeat status");
+    require(repeated.status == status.status &&
+                repeated.transferred_bytes == status.transferred_bytes,
+            "terminal status changed");
+  }
+  // The C wrapper truncates to the supplied capacity. Leave one extra slot
+  // so a surplus task cannot look like the requested cardinality.
+  std::vector<tent_status_t> tasks(task_count + 1);
+  size_t reported = tasks.size();
+  checked(tent_task_status_list(engine, batch, tasks.data(), &reported),
+          "task statuses");
+  require(reported == task_count, "unexpected task count");
+  auto remaining = status.transferred_bytes;
+  for (size_t i = 0; i < reported; ++i) {
+    require(tasks[i].status == STATUS_COMPLETED, "task did not complete");
+    require(tasks[i].transferred_bytes <= remaining, "task bytes exceed batch");
+    remaining -= tasks[i].transferred_bytes;
+  }
+  require(remaining == 0, "task bytes do not cover batch");
+  std::cout << "OBS\tRESULT\t" << label << "\tcompleted\t" << reported << '\t'
+            << status.transferred_bytes << '\n';
+  checked(tent_free_batch(engine, batch), "free batch");
+}
+
 struct Buffer {
   std::vector<unsigned char> bytes;
   size_t references = 0;
 };
+
+void command(const std::string &expected) {
+  std::string line;
+  require(std::getline(std::cin, line) && line == expected,
+          "expected controller command: " + expected);
+}
+
+[[noreturn]] void stop_trace(const std::exception &error) {
+  // A failed submit or poll is not a receipt for destroying active backing.
+  std::cerr << error.what() << std::endl;
+  std::_Exit(EXIT_FAILURE);
+}
+
+void pending_source(std::string payload) {
+  auto source = engine();
+  try {
+    checked(tent_register_memory_with_perm(source.get(), payload.data(),
+                                           payload.size(),
+                                           PERM_GLOBAL_READ_ONLY),
+            "register pending-read source");
+    char name[256]{};
+    checked(tent_segment_name(source.get(), name, sizeof(name)),
+            "segment name");
+    std::cout << "READY " << name << std::endl;
+    command("close");
+    checked(
+        tent_unregister_memory(source.get(), payload.data(), payload.size()),
+        "unregister pending-read source");
+  } catch (const std::exception &error) {
+    stop_trace(error);
+  }
+}
+
+void pending_reads(const char *slow, const char *fast) {
+  std::array<std::array<unsigned char, 8>, 2> dst;
+  auto requester = engine();
+  auto *te = requester.get();
+  try {
+    const char *names[] = {slow, fast};
+    std::array<tent_request_t, 2> req{};
+    for (size_t i = 0; i < req.size(); ++i) {
+      dst[i].fill(0xee);
+      checked(tent_register_memory_with_perm(te, dst[i].data(), dst[i].size(),
+                                             PERM_LOCAL_READ_WRITE),
+              "register destination");
+      checked(tent_open_segment(te, &req[i].target_id, names[i]), "open peer");
+    }
+    require(req[0].target_id != req[1].target_id, "expected two source peers");
+    // Opening a segment invalidates the submit thread's descriptor cache.
+    // Resolve both addresses after both opens, while both peers can reply.
+    for (size_t i = 0; i < req.size(); ++i) {
+      tent_segment_info_t info{};
+      checked(tent_get_segment_info(te, req[i].target_id, &info),
+              "describe peer");
+      require(info.num_buffers == 1 && info.buffers &&
+                  info.buffers[0].length == 8,
+              "expected one eight-byte source");
+      req[i].target_offset = info.buffers[0].base;
+      tent_free_segment_info(&info);
+      req[i].opcode = OPCODE_READ;
+      req[i].transport_hint = TRANSPORT_TCP;
+      req[i].source = dst[i].data() + 1;
+      req[i].length = i == 0 ? 5 : 3;
+    }
+    auto submit = [&](size_t i) {
+      auto id = allocate_batch(te, 1);
+      checked(tent_submit(te, id, &req[i], 1), "submit pending-read case");
+      return id;
+    };
+    auto finish = [&](size_t i, tent_batch_id_t id, const char *label) {
+      finish_batch(te, id, 1, label);
+      // Frozen task lookup checks liveness before accessing the batch.
+      // No intervening allocation can reuse this just-freed ID.
+      tent_status_t retired{};
+      require(tent_task_status(te, id, 0, &retired) != 0,
+              "freed batch still exposes its task");
+      std::cout << "OBS\tBYTES\t" << label << '\t'
+                << hex(dst[i].data(), dst[i].size()) << std::endl;
+    };
+    std::cout << "OPEN" << std::endl;
+    command("stopped");
+    auto first = submit(0);
+    auto check_pending = [&] {
+      tent_status_t task{}, batch{};
+      checked(tent_task_status(te, first, 0, &task), "first task status");
+      checked(tent_overall_status(te, first, &batch), "first batch status");
+      for (auto status : {task, batch})
+        require((status.status == STATUS_WAITING ||
+                 status.status == STATUS_PENDING) &&
+                    status.transferred_bytes == 0,
+                "first READ no longer pending");
+    };
+    check_pending();
+    auto second = submit(1);
+    require(second != first, "live batches share an ID");
+    finish(1, second, "second");
+    check_pending();
+    std::cout << "PENDING first" << std::endl;
+    command("resumed");
+    finish(0, first, "first");
+    for (size_t i = 0; i < req.size(); ++i) {
+      checked(tent_unregister_memory(te, dst[i].data(), dst[i].size()),
+              "unregister destination");
+      checked(tent_close_segment(te, req[i].target_id), "close peer");
+    }
+  } catch (const std::exception &error) {
+    stop_trace(error);
+  }
+}
 
 class Trace {
   // Backing outlives both engines during normal teardown.
@@ -127,48 +283,6 @@ class Trace {
     --buffer.references;
   }
 
-  tent_batch_id_t allocate_batch(size_t capacity) {
-    const auto batch = tent_allocate_batch(requester_.get(), capacity);
-    require(batch != 0, "batch allocation failed");
-    return batch;
-  }
-
-  void finish_batch(tent_batch_id_t batch, size_t task_count,
-                    const std::string &label) {
-    tent_status_t status{};
-    const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-    do {
-      checked(tent_overall_status(requester_.get(), batch, &status),
-              "batch status");
-      if (status.status == STATUS_COMPLETED)
-        break;
-      require(status.status == STATUS_PENDING ||
-                  status.status == STATUS_WAITING,
-              "transfer reached failed terminal state");
-      require(std::chrono::steady_clock::now() < end,
-              "transfer deadline expired");
-      std::this_thread::sleep_for(std::chrono::microseconds(100));
-    } while (true);
-    for (int i = 0; i < 2; ++i) {
-      tent_status_t repeated{};
-      checked(tent_overall_status(requester_.get(), batch, &repeated),
-              "repeat status");
-      require(repeated.status == status.status &&
-                  repeated.transferred_bytes == status.transferred_bytes,
-              "terminal status changed");
-    }
-    std::vector<tent_status_t> tasks(std::max<size_t>(1, task_count));
-    size_t reported = tasks.size();
-    checked(tent_task_status_list(requester_.get(), batch, tasks.data(), &reported),
-            "task statuses");
-    require(reported == task_count, "unexpected task count");
-    for (size_t i = 0; i < reported; ++i)
-      require(tasks[i].status == STATUS_COMPLETED, "task did not complete");
-    std::cout << "OBS\tRESULT\t" << label << "\tcompleted\t" << reported
-              << '\t' << status.transferred_bytes << '\n';
-    checked(tent_free_batch(requester_.get(), batch), "free batch");
-  }
-
   void transfer(const std::vector<std::string> &fields) {
     require(peer_.has_value(), "DESCRIBE must precede transfers");
     auto slices =
@@ -200,20 +314,20 @@ class Trace {
       const auto *b = static_cast<unsigned char *>(entries[1].source);
       require(a + entries[0].length <= b || b + entries[1].length <= a,
               "paired read destinations overlap");
-      const auto first = allocate_batch(1);
+      const auto first = allocate_batch(requester_.get(), 1);
       checked(tent_submit(requester_.get(), first, &entries[0], 1),
               "first submit");
-      const auto second = allocate_batch(1);
+      const auto second = allocate_batch(requester_.get(), 1);
       require(first != second, "live batches share an ID");
       checked(tent_submit(requester_.get(), second, &entries[1], 1),
               "second submit");
       unregister_buffer("source");
       std::cout << "OBS\tLIVE\t" << fields[1] << "\t2\n";
-      finish_batch(second, 1, fields[1] + "-second");
-      finish_batch(first, 1, fields[1] + "-first");
+      finish_batch(requester_.get(), second, 1, fields[1] + "-second");
+      finish_batch(requester_.get(), first, 1, fields[1] + "-first");
       return;
     }
-    const auto batch = allocate_batch(entries.size());
+    const auto batch = allocate_batch(requester_.get(), entries.size());
     auto name = text(fields[3]), message = text(fields[4]);
     if (fields[0] == "READ_SPLIT") {
       require(fields[3] == "~" && !slices.empty(), "invalid split submission");
@@ -228,7 +342,7 @@ class Trace {
       checked(tent_submit_notif(requester_.get(), batch, entries.data(),
                                 slices.size(), name.c_str(), message.c_str()),
               "submit notification");
-    finish_batch(batch, slices.size(), fields[1]);
+    finish_batch(requester_.get(), batch, slices.size(), fields[1]);
   }
 
   void take(const std::string &label) {
@@ -363,7 +477,8 @@ public:
 void tebench_target() {
   constexpr size_t guard = 32, payload = 2 * 4096;
   // The frozen address-derived seed is always nonzero, including for the
-  // address chosen by ASLR. A seeded WRITE into either zero guard is observable.
+  // address chosen by ASLR. A seeded WRITE into either zero guard is
+  // observable.
   std::vector<unsigned char> bytes(guard + payload + guard, 0);
   auto first = bytes.begin() + guard, last = first + payload;
   auto source = engine();
@@ -375,11 +490,6 @@ void tebench_target() {
           "tebench segment name");
   std::cout << "READY " << name << std::endl;
 
-  auto command = [](const char *expected) {
-    std::string line;
-    require(std::getline(std::cin, line) && line == expected,
-            "unexpected tebench phase");
-  };
   auto check_guards = [&] {
     auto intact = [](unsigned char byte) { return byte == 0; };
     require(std::all_of(bytes.begin(), first, intact) &&
@@ -416,7 +526,7 @@ void tebench_target() {
 
 int main(int argc, char **argv) {
   try {
-    require(argc == 2, "expected trace path or --tebench-target");
+    require(argc >= 2, "expected trace path or driver role");
     tent_set_config("metadata_type", "p2p");
     tent_set_config("rpc_server_hostname", "127.0.0.1");
     tent_set_config("rpc_server_port", "0");
@@ -433,6 +543,15 @@ int main(int argc, char **argv) {
       tent_set_config(key.c_str(),
                       std::string(transport) == "tcp" ? "true" : "false");
     }
+    if (argc == 3 && std::string(argv[1]) == "--pending-source") {
+      pending_source(argv[2]);
+      return 0;
+    }
+    if (argc == 4 && std::string(argv[1]) == "--pending-reads") {
+      pending_reads(argv[2], argv[3]);
+      return 0;
+    }
+    require(argc == 2, "expected trace path or --tebench-target");
     if (std::string(argv[1]) == "--tebench-target") {
       tebench_target();
       return 0;
@@ -452,10 +571,7 @@ int main(int argc, char **argv) {
       }
       trace.finish();
     } catch (const std::exception &error) {
-      // Frozen TENT requires quiescence before destroying an engine. A failed
-      // submit or poll cannot prove it: terminate this isolated trace process.
-      std::cerr << error.what() << std::endl;
-      std::_Exit(EXIT_FAILURE);
+      stop_trace(error);
     }
     return 0;
   } catch (const std::exception &error) {

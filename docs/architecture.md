@@ -107,8 +107,11 @@ public owners from an isolated wheel installation. It checks that duplicate
 CPU registrations retain the first permission and pin the exporter until the
 last reference closes. Two independent batches read into disjoint ranges while
 another source registration stays live. Waiting for and releasing the second
-batch first must preserve the first batch's receipt. Task receipts and engine
-counters check drain and release of the installed binding's memory and batch owners.
+batch first must preserve the first batch's receipt. The
+[stopped-source case](cpu-oracle.md#pending-read-across-two-peers) holds one
+peer unavailable while another READ completes. The first destination still
+belongs to its admitted batch: Rust retains the withdrawn registration and
+its budget; the Python guard rejects close until drain.
 
 ## Peer retirement
 

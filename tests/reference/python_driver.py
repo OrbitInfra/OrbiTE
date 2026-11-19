@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import weakref
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -67,6 +68,88 @@ def finish_batch(batch: orbite.Batch, label: str, count: int) -> None:
         len(tasks),
         sum(task.transferred_bytes for task in tasks),
     )
+
+
+def command(expected: str) -> None:
+    if input() != expected:
+        raise RuntimeError(f"expected controller command {expected}")
+
+
+def pending_source(payload: str) -> None:
+    with orbite.TransferEngine(orbite.EngineConfig()) as engine:
+        options = orbite.MemoryOptions(permission=orbite.Permission.REMOTE_READ)
+        with engine.register_buffer(bytearray(payload, "ascii"), options):
+            print("READY", engine.endpoint(), engine.source_epoch(), flush=True)
+            command("close")
+
+
+def pending_reads(slow_peer: str, fast_peer: str) -> None:
+    class Destination(bytearray):
+        """A weak reference can observe the backing without keeping it alive."""
+
+    def check_pending(batch):
+        tasks = batch.tasks()
+        if not (
+            len(tasks) == 1
+            and tasks[0].state in (orbite.TaskState.WAITING, orbite.TaskState.RUNNING)
+            and not tasks[0].locally_drained
+            and tasks[0].transferred_bytes == 0
+        ):
+            raise RuntimeError(f"first READ no longer pending: {tasks}")
+
+    def submit(batch, peer, registration, length):
+        _, [(address, _, _)] = peer.info()
+        request = orbite.TransferRequest(
+            registration.address + 1, address, length, orbite.Transport.TCP
+        )
+        batch.submit(orbite.TransferOp.READ, peer, [request])
+
+    with (
+        orbite.TransferEngine(orbite.EngineConfig()) as engine,
+        engine.open_segment(*slow_peer.split()) as slow,
+        engine.open_segment(*fast_peer.split()) as fast,
+    ):
+        def charges():
+            stats = engine.stats()
+            return tuple(stats[key] for key in (
+                "allocated_batches", "inflight_batches", "inflight_bytes",
+                "retained_regions", "retained_bytes",
+            ))
+
+        dst = Destination(b"\xee" * 8)
+        owner = weakref.ref(dst)
+        reg = engine.register_buffer(dst)
+        fast_bytes = bytearray(dst)
+        with engine.allocate_batch(1) as first:
+            print("OPEN", flush=True)
+            command("stopped")
+            submit(first, slow, reg, 5)
+            check_pending(first)
+            del dst
+            with engine.register_buffer(fast_bytes) as fast_reg, engine.allocate_batch(1) as second:
+                submit(second, fast, fast_reg, 3)
+                finish_batch(second, "second", 1)
+            observe("BYTES", "second", fast_bytes.hex())
+            check_pending(first)
+            if (remaining := charges()) != (1, 1, 5, 1, 8):
+                raise RuntimeError(f"unexpected charges with one READ pending: {remaining}")
+            try:
+                reg.close()
+            except orbite.ResourceExhaustedError:
+                pass  # The Python registration cannot close while the batch owns its exporter.
+            else:
+                raise RuntimeError("closed the pending Python registration")
+            retained = owner()
+            if retained is None:
+                raise RuntimeError("pending READ lost its exporter")
+            print("PENDING first", flush=True)
+            command("resumed")
+            finish_batch(first, "first", 1)
+        observe("BYTES", "first", retained.hex())
+        reg.close()
+        del retained
+        if owner() is not None or charges() != (0, 0, 0, 0, 0):
+            raise RuntimeError("drained READ retained its exporter or charges")
 
 
 def transfer(
@@ -278,4 +361,12 @@ if __name__ == "__main__":
             f"expected a wheel installed in the trace virtualenv, loaded {installed}"
         )
     print(f"Loaded OrbiTE from {installed}", file=sys.stderr)
-    replay(Path(sys.argv[1]))
+    match sys.argv[1:]:
+        case ["--pending-source", payload]:
+            pending_source(payload)
+        case ["--pending-reads", slow, fast]:
+            pending_reads(slow, fast)
+        case [trace]:
+            replay(Path(trace))
+        case _:
+            raise ValueError("expected trace path or pending READ role")
