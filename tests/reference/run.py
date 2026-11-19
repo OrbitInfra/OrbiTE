@@ -80,7 +80,19 @@ def negative_controls(expected: list[str]) -> list[str]:
             controls.append(name)
         else:
             raise RuntimeError("comparator accepted " + name)
+    # Keep the receipt labels but attribute each byte count to its sibling.
+    swapped = expected.copy()
+    label = next(row.split("\t")[2] for row in expected if row.startswith("OBS\tLIVE\t"))
+    first, second = (
+        next(i for i, row in enumerate(expected)
+             if row.startswith(f"OBS\tRESULT\t{label}-{side}\t"))
+        for side in ("first", "second")
+    )
+    a, a_bytes = expected[first].rsplit("\t", 1)
+    b, b_bytes = expected[second].rsplit("\t", 1)
+    swapped[first], swapped[second] = f"{a}\t{b_bytes}", f"{b}\t{a_bytes}"
     for name, changed in [
+        ("swapped-batch-byte-counts", swapped),
         ("missing-cleanup", expected[:-1]),
         ("extra-observation", expected + [expected[-1]]),
     ]:

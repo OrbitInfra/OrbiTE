@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <charconv>
 #include <chrono>
+#include <cstdlib>
 #include <fstream>
 #include <iomanip>
 #include <iostream>
@@ -76,7 +77,7 @@ struct Buffer {
 };
 
 class Trace {
-  // Engines are destroyed before backing even on a failed operation.
+  // Backing outlives both engines during normal teardown.
   std::map<std::string, Buffer> buffers_;
   Engine source_{engine()};
   Engine requester_{engine()};
@@ -117,6 +118,57 @@ class Trace {
     tent_free_segment_info(&info);
   }
 
+  void unregister_buffer(const std::string &name) {
+    auto &buffer = buffers_.at(name);
+    require(buffer.references > 0, "buffer not registered");
+    checked(tent_unregister_memory(owner(name), buffer.bytes.data(),
+                                   buffer.bytes.size()),
+            "unregister");
+    --buffer.references;
+  }
+
+  tent_batch_id_t allocate_batch(size_t capacity) {
+    const auto batch = tent_allocate_batch(requester_.get(), capacity);
+    require(batch != 0, "batch allocation failed");
+    return batch;
+  }
+
+  void finish_batch(tent_batch_id_t batch, size_t task_count,
+                    const std::string &label) {
+    tent_status_t status{};
+    const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    do {
+      checked(tent_overall_status(requester_.get(), batch, &status),
+              "batch status");
+      if (status.status == STATUS_COMPLETED)
+        break;
+      require(status.status == STATUS_PENDING ||
+                  status.status == STATUS_WAITING,
+              "transfer reached failed terminal state");
+      require(std::chrono::steady_clock::now() < end,
+              "transfer deadline expired");
+      std::this_thread::sleep_for(std::chrono::microseconds(100));
+    } while (true);
+    for (int i = 0; i < 2; ++i) {
+      tent_status_t repeated{};
+      checked(tent_overall_status(requester_.get(), batch, &repeated),
+              "repeat status");
+      require(repeated.status == status.status &&
+                  repeated.transferred_bytes == status.transferred_bytes,
+              "terminal status changed");
+    }
+    std::vector<tent_status_t> tasks(std::max<size_t>(1, task_count));
+    size_t reported = tasks.size();
+    checked(tent_task_status_list(requester_.get(), batch, tasks.data(), &reported),
+            "task statuses");
+    require(reported == task_count, "unexpected task count");
+    for (size_t i = 0; i < reported; ++i)
+      require(tasks[i].status == STATUS_COMPLETED, "task did not complete");
+    std::cout << "OBS\tRESULT\t" << label << "\tcompleted\t" << reported
+              << '\t' << status.transferred_bytes << '\n';
+    checked(tent_free_batch(requester_.get(), batch), "free batch");
+  }
+
   void transfer(const std::vector<std::string> &fields) {
     require(peer_.has_value(), "DESCRIBE must precede transfers");
     auto slices =
@@ -139,54 +191,44 @@ class Trace {
       entries[i].length = length;
       entries[i].transport_hint = TRANSPORT_TCP;
     }
-    auto batch = tent_allocate_batch(requester_.get(), entries.size());
-    require(batch != 0, "batch allocation failed");
-    try {
-      auto name = text(fields[3]), message = text(fields[4]);
-      if (fields[0] == "READ_SPLIT") {
-        require(fields[3] == "~" && !slices.empty(),
-                "invalid split submission");
-        for (size_t i = 0; i < slices.size(); ++i)
-          checked(tent_submit(requester_.get(), batch, &entries[i], 1),
-                  "append submit");
-      } else if (fields[3] == "~")
-        checked(
-            tent_submit(requester_.get(), batch, entries.data(), slices.size()),
-            "submit");
-      else
-        checked(tent_submit_notif(requester_.get(), batch, entries.data(),
-                                  slices.size(), name.c_str(), message.c_str()),
-                "submit notification");
-      tent_status_t status{};
-      const auto end =
-          std::chrono::steady_clock::now() + std::chrono::seconds(5);
-      do {
-        checked(tent_overall_status(requester_.get(), batch, &status),
-                "batch status");
-        if (status.status == STATUS_COMPLETED)
-          break;
-        require(status.status == STATUS_PENDING ||
-                    status.status == STATUS_WAITING,
-                "transfer reached failed terminal state");
-        require(std::chrono::steady_clock::now() < end,
-                "transfer deadline expired");
-        std::this_thread::sleep_for(std::chrono::microseconds(100));
-      } while (true);
-      for (int i = 0; i < 2; ++i) {
-        tent_status_t repeated{};
-        checked(tent_overall_status(requester_.get(), batch, &repeated),
-                "repeat status");
-        require(repeated.status == status.status &&
-                    repeated.transferred_bytes == status.transferred_bytes,
-                "terminal status changed");
-      }
-      std::cout << "OBS\tRESULT\t" << fields[1] << "\tcompleted\t"
-                << slices.size() << '\t' << status.transferred_bytes << '\n';
-    } catch (...) {
-      tent_free_batch(requester_.get(), batch);
-      throw;
+    if (fields[0] == "READ_PAIR_UNREGISTER") {
+      require(slices.size() == 2 && fields[3] == "~" &&
+                  buffers_.at("source").references > 1,
+              "paired read needs two requests, no notification and a "
+              "registration alias");
+      const auto *a = static_cast<unsigned char *>(entries[0].source);
+      const auto *b = static_cast<unsigned char *>(entries[1].source);
+      require(a + entries[0].length <= b || b + entries[1].length <= a,
+              "paired read destinations overlap");
+      const auto first = allocate_batch(1);
+      checked(tent_submit(requester_.get(), first, &entries[0], 1),
+              "first submit");
+      const auto second = allocate_batch(1);
+      require(first != second, "live batches share an ID");
+      checked(tent_submit(requester_.get(), second, &entries[1], 1),
+              "second submit");
+      unregister_buffer("source");
+      std::cout << "OBS\tLIVE\t" << fields[1] << "\t2\n";
+      finish_batch(second, 1, fields[1] + "-second");
+      finish_batch(first, 1, fields[1] + "-first");
+      return;
     }
-    checked(tent_free_batch(requester_.get(), batch), "free batch");
+    const auto batch = allocate_batch(entries.size());
+    auto name = text(fields[3]), message = text(fields[4]);
+    if (fields[0] == "READ_SPLIT") {
+      require(fields[3] == "~" && !slices.empty(), "invalid split submission");
+      for (size_t i = 0; i < slices.size(); ++i)
+        checked(tent_submit(requester_.get(), batch, &entries[i], 1),
+                "append submit");
+    } else if (fields[3] == "~")
+      checked(
+          tent_submit(requester_.get(), batch, entries.data(), slices.size()),
+          "submit");
+    else
+      checked(tent_submit_notif(requester_.get(), batch, entries.data(),
+                                slices.size(), name.c_str(), message.c_str()),
+              "submit notification");
+    finish_batch(batch, slices.size(), fields[1]);
   }
 
   void take(const std::string &label) {
@@ -265,12 +307,7 @@ public:
       std::cout << "OBS\tREGISTER_BATCH\t" << fields[1] << '\t' << count
                 << '\n';
     } else if (operation == "UNREGISTER" && fields.size() == 2) {
-      auto &buffer = buffers_.at(fields[1]);
-      require(buffer.references > 0, "buffer not registered");
-      checked(tent_unregister_memory(owner(fields[1]), buffer.bytes.data(),
-                                     buffer.bytes.size()),
-              "unregister");
-      --buffer.references;
+      unregister_buffer(fields[1]);
     } else if (operation == "DESCRIBE" && fields.size() == 2) {
       describe(fields[1]);
     } else if (operation == "FILL" && fields.size() == 5) {
@@ -287,7 +324,8 @@ public:
       std::cout << "OBS\tBYTES\t" << fields[1] << '\t'
                 << hex(buffer.data() + offset, length) << '\n';
     } else if ((operation == "READ" || operation == "WRITE" ||
-                operation == "READ_SPLIT") &&
+                operation == "READ_SPLIT" ||
+                operation == "READ_PAIR_UNREGISTER") &&
                fields.size() == 5) {
       transfer(fields);
     } else if (operation == "NOTIFY" && fields.size() == 5) {
@@ -402,16 +440,23 @@ int main(int argc, char **argv) {
     std::ifstream input(argv[1]);
     require(input.good(), "cannot open trace");
     Trace trace;
-    for (std::string line; std::getline(input, line);) {
-      std::istringstream stream(line);
-      std::vector<std::string> fields;
-      for (std::string field; stream >> field;)
-        fields.push_back(field);
-      if (fields.empty() || fields[0].starts_with('#'))
-        continue;
-      trace.execute(fields);
+    try {
+      for (std::string line; std::getline(input, line);) {
+        std::istringstream stream(line);
+        std::vector<std::string> fields;
+        for (std::string field; stream >> field;)
+          fields.push_back(field);
+        if (fields.empty() || fields[0].starts_with('#'))
+          continue;
+        trace.execute(fields);
+      }
+      trace.finish();
+    } catch (const std::exception &error) {
+      // Frozen TENT requires quiescence before destroying an engine. A failed
+      // submit or poll cannot prove it: terminate this isolated trace process.
+      std::cerr << error.what() << std::endl;
+      std::_Exit(EXIT_FAILURE);
     }
-    trace.finish();
     return 0;
   } catch (const std::exception &error) {
     std::cerr << error.what() << '\n';

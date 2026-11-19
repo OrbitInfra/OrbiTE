@@ -233,11 +233,13 @@ wheel before repeating the same consumer controls.
 
 The wheel workflow also [replays the shared CPU trace](cpu-oracle.md#installed-python-wheel)
 in a fresh virtualenv for each CPU + io_uring wheel, combined wheel and rebuilt
-sdist wheel. All 25 expected observations cover real loopback TCP, including
-guard bytes, batch append, repeat polling, notification delivery and cleanup.
+sdist wheel. The gate requires all 29 expected observations over real loopback
+TCP, including guard bytes, batch append, repeat polling, notifications and
+cleanup. A non-final source unregister with two submitted READ handles must
+preserve their individual byte counts when the handles retire in reverse order.
 The Python driver verifies that live duplicate registrations pin the exporter
 and final unregister permits resizing. The `cpu-trace-*` artifacts preserve the
-exact wheel SHA-256, the fixture and driver hashes, six comparator controls,
+exact wheel SHA-256, the fixture and driver hashes, seven comparator controls,
 and the observed records. These results cover the installed CPU/TCP profile.
 
 The specific installed tests are
