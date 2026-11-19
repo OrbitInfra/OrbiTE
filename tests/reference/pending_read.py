@@ -70,4 +70,5 @@ def check(driver):
 
 
 if __name__ == "__main__":
+    signal.signal(signal.SIGTERM, lambda signum, _: sys.exit(128 + signum))
     check(sys.argv[1:])

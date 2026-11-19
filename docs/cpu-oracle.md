@@ -98,6 +98,7 @@ the backing must still be reachable and its registration and transfer charges
 must remain. After drain they must disappear. Python requires the busy
 registration to reject close and keep its exporter alive until drain. Frozen
 TENT requires the caller to keep its buffers registered until completion.
+The driver checks that each freed batch ID is rejected before a new allocation.
 The controller checks the same transfer outcomes on all three paths without
 reading a pending destination or interpreting either wire format.
 

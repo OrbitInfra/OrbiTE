@@ -191,6 +191,16 @@ void pending_reads(const char *slow, const char *fast) {
       checked(tent_submit(te, id, &req[i], 1), "submit pending-read case");
       return id;
     };
+    auto finish = [&](size_t i, tent_batch_id_t id, const char *label) {
+      finish_batch(te, id, 1, label);
+      // Frozen task lookup checks liveness before accessing the batch.
+      // No intervening allocation can reuse this just-freed ID.
+      tent_status_t retired{};
+      require(tent_task_status(te, id, 0, &retired) != 0,
+              "freed batch still exposes its task");
+      std::cout << "OBS\tBYTES\t" << label << '\t'
+                << hex(dst[i].data(), dst[i].size()) << std::endl;
+    };
     std::cout << "OPEN" << std::endl;
     command("stopped");
     auto first = submit(0);
@@ -207,15 +217,11 @@ void pending_reads(const char *slow, const char *fast) {
     check_pending();
     auto second = submit(1);
     require(second != first, "live batches share an ID");
-    finish_batch(te, second, 1, "second");
-    std::cout << "OBS\tBYTES\tsecond\t" << hex(dst[1].data(), dst[1].size())
-              << '\n';
+    finish(1, second, "second");
     check_pending();
     std::cout << "PENDING first" << std::endl;
     command("resumed");
-    finish_batch(te, first, 1, "first");
-    std::cout << "OBS\tBYTES\tfirst\t" << hex(dst[0].data(), dst[0].size())
-              << std::endl;
+    finish(0, first, "first");
     for (size_t i = 0; i < req.size(); ++i) {
       checked(tent_unregister_memory(te, dst[i].data(), dst[i].size()),
               "unregister destination");

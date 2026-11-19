@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from contextlib import suppress
 import difflib
 import hashlib
 import json
@@ -198,19 +199,23 @@ def main() -> int:
                 stderr=err,
                 start_new_session=True,
             )
+            succeeded = False
             try:
-                result = process.wait(timeout=timeout)
+                succeeded = process.wait(timeout=timeout) == 0
             except subprocess.TimeoutExpired:
-                os.killpg(process.pid, signal.SIGKILL)
-                process.wait()
                 record["timed_out"] = True
-                result = process.returncode
-        record.update(
-            exit_code=result, elapsed_seconds=round(time.monotonic() - started, 3)
-        )
-        save()
-        if result != 0:
-            raise RuntimeError(f"{name} failed ({result}); see {stderr}")
+            finally:
+                if not succeeded:
+                    # A failed controller can leave a stopped source behind,
+                    # even when the controller has already been reaped.
+                    with suppress(ProcessLookupError):
+                        os.killpg(process.pid, signal.SIGKILL)
+                    process.wait()
+                record.update(exit_code=process.returncode,
+                              elapsed_seconds=round(time.monotonic() - started, 3))
+                save()
+        if not succeeded:
+            raise RuntimeError(f"{name} failed ({process.returncode}); see {stderr}")
         return stdout.read_text()
 
     def pending_read(profile: str, driver: list[str]) -> list[str]:
@@ -509,12 +514,17 @@ def main() -> int:
             if manifest["native_executed"]
             else "passed-rust-fixture-only"
         )
-    except Exception as error:
-        manifest.update(status="failed", error=str(error))
+    except (Exception, KeyboardInterrupt) as error:
+        detail = str(error) or type(error).__name__
+        manifest.update(status="failed", error=detail)
         save()
-        print(str(error), file=sys.stderr)
+        print(detail, file=sys.stderr)
         return 1
 
 
 if __name__ == "__main__":
+    def interrupted(signum, _frame):
+        raise InterruptedError(f"interrupted by {signal.Signals(signum).name}")
+
+    signal.signal(signal.SIGTERM, interrupted)
     sys.exit(main())
