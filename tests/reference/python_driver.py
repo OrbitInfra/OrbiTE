@@ -27,6 +27,8 @@ class Buffer:
     def unregister(self) -> None:
         self.registrations[0].close()
         del self.registrations[0]
+
+    def check_export(self) -> None:
         if self.registrations:
             try:
                 self.backing.append(0)
@@ -43,6 +45,28 @@ def observe(*fields: object) -> None:
 
 def text(field: str) -> str:
     return "" if field == "-" else field
+
+
+def finish_batch(batch: orbite.Batch, label: str, count: int) -> None:
+    tasks = batch.wait(5)
+    if len(tasks) != count or any(
+        task.state != orbite.TaskState.COMPLETED
+        or not task.locally_drained
+        or task.failure is not None
+        or task.physical_owner != index
+        for index, task in enumerate(tasks)
+    ):
+        raise RuntimeError(f"transfer {label} failed: {tasks}")
+    for _ in range(2):
+        if batch.tasks() != tasks:
+            raise RuntimeError(f"terminal status changed for {label}")
+    observe(
+        "RESULT",
+        label,
+        "completed",
+        len(tasks),
+        sum(task.transferred_bytes for task in tasks),
+    )
 
 
 def transfer(
@@ -71,6 +95,26 @@ def transfer(
             )
     op = orbite.TransferOp.WRITE if operation == "WRITE" else orbite.TransferOp.READ
     note = None if name == "~" else orbite.Notification(text(name), text(message))
+    if operation == "READ_PAIR_UNREGISTER":
+        if len(requests) != 2 or note is not None or len(remote.registrations) < 2:
+            raise ValueError(
+                "paired read needs two requests, no notification and a registration alias"
+            )
+        lo, hi = sorted(requests, key=lambda req: req.local_address)
+        if lo.local_address + lo.length > hi.local_address:
+            raise ValueError("paired read destinations overlap")
+        with requester.allocate_batch(1) as first:
+            first.submit(op, peer, [requests[0]])
+            with requester.allocate_batch(1) as second:
+                second.submit(op, peer, [requests[1]])
+                if requester.stats()["allocated_batches"] != 2:
+                    raise RuntimeError("expected two live batch handles")
+                remote.unregister()
+                observe("LIVE", label, 2)
+                finish_batch(second, f"{label}-second", 1)
+            finish_batch(first, f"{label}-first", 1)
+        remote.check_export()
+        return
     with requester.allocate_batch(max(1, len(requests))) as batch:
         if operation == "READ_SPLIT":
             if not requests or note is not None:
@@ -79,25 +123,7 @@ def transfer(
                 batch.submit(op, peer, [request])
         else:
             batch.submit(op, peer, requests, note)
-        tasks = batch.wait(5)
-        if len(tasks) != len(requests) or any(
-            task.state != orbite.TaskState.COMPLETED
-            or not task.locally_drained
-            or task.failure is not None
-            or task.physical_owner != index
-            for index, task in enumerate(tasks)
-        ):
-            raise RuntimeError(f"transfer {label} failed: {tasks}")
-        for _ in range(2):
-            if batch.tasks() != tasks:
-                raise RuntimeError(f"terminal status changed for {label}")
-    observe(
-        "RESULT",
-        label,
-        "completed",
-        len(tasks),
-        sum(task.transferred_bytes for task in tasks),
-    )
+        finish_batch(batch, label, len(requests))
 
 
 def replay(trace: Path) -> None:
@@ -168,6 +194,7 @@ def replay(trace: Path) -> None:
                     observe("REGISTER_BATCH", name, len(aliases))
                 case ["UNREGISTER", name]:
                     buffers[name].unregister()
+                    buffers[name].check_export()
                 case ["DESCRIBE", label]:
                     if peer is not None:
                         peer.close()
@@ -202,7 +229,7 @@ def replay(trace: Path) -> None:
                         label,
                         buffer.backing[offset : buffer.end(offset, length)].hex(),
                     )
-                case ["READ" | "WRITE" | "READ_SPLIT", _, _, _, _]:
+                case [("READ" | "WRITE" | "READ_SPLIT" | "READ_PAIR_UNREGISTER"), _, _, _, _]:
                     transfer(requester, peer, buffers, fields)
                 case ["NOTIFY", label, route, name, message]:
                     note = orbite.Notification(text(name), text(message))

@@ -4,7 +4,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use orbite::{
-    BatchState, EngineConfig, HostMemory, Notification, NotificationStatus, Permission,
+    Batch, BatchState, EngineConfig, HostMemory, Notification, NotificationStatus, Permission,
     RegisteredMemory, TransferEngine, TransferOp, TransferRequest,
 };
 
@@ -14,6 +14,17 @@ struct Buffer {
     memory: Arc<HostMemory>,
     registration: Option<RegisteredMemory>,
     references: usize,
+}
+
+impl Buffer {
+    fn unregister(&mut self, engine: &TransferEngine) -> Result<(), Box<dyn Error>> {
+        engine.unregister_memory(self.registration.as_ref().ok_or("buffer not registered")?)?;
+        self.references -= 1;
+        if self.references == 0 {
+            self.registration = None;
+        }
+        Ok(())
+    }
 }
 
 fn text(value: &str) -> String {
@@ -35,6 +46,32 @@ fn hex(bytes: &[u8]) -> String {
         result.push(char::from(DIGITS[(byte & 15) as usize]));
     }
     result
+}
+
+fn finish_batch(mut batch: Batch, label: &str, notified: bool) -> Result<(), Box<dyn Error>> {
+    let report = batch.wait(TIMEOUT)?;
+    if report.state != BatchState::Completed || !report.locally_drained {
+        return Err(format!("transfer {label} failed: {report:?}").into());
+    }
+    for _ in 0..2 {
+        if batch.status()? != report {
+            return Err("terminal status changed".into());
+        }
+    }
+    if notified
+        && !matches!(
+            *batch.submissions()?[0].notification,
+            NotificationStatus::Delivered
+        )
+    {
+        return Err(format!("notification {label} failed").into());
+    }
+    batch.free()?;
+    println!(
+        "OBS\tRESULT\t{label}\tcompleted\t{}\t{}",
+        report.completed_tasks, report.transferred_bytes
+    );
+    Ok(())
 }
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -137,16 +174,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 } else {
                     &requester
                 };
-                engine.unregister_memory(
-                    buffer
-                        .registration
-                        .as_ref()
-                        .ok_or("buffer not registered")?,
-                )?;
-                buffer.references -= 1;
-                if buffer.references == 0 {
-                    buffer.registration = None;
-                }
+                buffer.unregister(engine)?;
             }
             ["DESCRIBE", label] => {
                 let refreshed =
@@ -187,7 +215,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 println!("OBS\tBYTES\t{label}\t{}", hex(&bytes));
             }
             [
-                operation @ ("READ" | "WRITE" | "READ_SPLIT"),
+                operation @ ("READ" | "WRITE" | "READ_SPLIT" | "READ_PAIR_UNREGISTER"),
                 label,
                 slices,
                 name,
@@ -212,6 +240,42 @@ fn main() -> Result<(), Box<dyn Error>> {
                         ));
                     }
                 }
+                if *operation == "READ_PAIR_UNREGISTER" {
+                    let [a, b] = requests.as_slice() else {
+                        return Err("paired read needs two requests".into());
+                    };
+                    let (lo, hi) = if a.local_address <= b.local_address {
+                        (a, b)
+                    } else {
+                        (b, a)
+                    };
+                    let source_buffer = buffers.get_mut("source").ok_or("unknown source")?;
+                    if *name != "~"
+                        || source_buffer.references < 2
+                        || hi.local_address - lo.local_address < lo.length as u64
+                    {
+                        return Err("paired read needs disjoint destinations, no notification and a registration alias".into());
+                    }
+                    let submit = |request: &TransferRequest| {
+                        requester.submit_async(
+                            TransferOp::Read,
+                            peer,
+                            std::slice::from_ref(request),
+                            None,
+                            TIMEOUT,
+                        )
+                    };
+                    let first = submit(a)?;
+                    let second = submit(b)?;
+                    if first.id()? == second.id()? || requester.stats()?.allocated_batches != 2 {
+                        return Err("expected two live batch handles".into());
+                    }
+                    source_buffer.unregister(&source)?;
+                    println!("OBS\tLIVE\t{label}\t2");
+                    finish_batch(second, &format!("{label}-second"), false)?;
+                    finish_batch(first, &format!("{label}-first"), false)?;
+                    continue;
+                }
                 let split = *operation == "READ_SPLIT";
                 let operation = if *operation == "WRITE" {
                     TransferOp::Write
@@ -220,7 +284,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 };
                 let notification =
                     (*name != "~").then(|| Notification::new(text(name), text(message)));
-                let mut batch = if split {
+                let batch = if split {
                     if notification.is_some() || requests.is_empty() {
                         return Err("split trace needs nonempty unnotified requests".into());
                     }
@@ -248,29 +312,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                         TIMEOUT,
                     )?
                 };
-                let report = batch.wait(TIMEOUT)?;
-                if report.state != BatchState::Completed || !report.locally_drained {
-                    return Err(format!("transfer {label} failed: {report:?}").into());
-                }
-                for _ in 0..2 {
-                    if batch.status()? != report {
-                        return Err("terminal status changed".into());
-                    }
-                }
-                if *name != "~"
-                    && !requests.is_empty()
-                    && !matches!(
-                        *batch.submissions()?[0].notification,
-                        NotificationStatus::Delivered
-                    )
-                {
-                    return Err(format!("notification {label} failed").into());
-                }
-                batch.free()?;
-                println!(
-                    "OBS\tRESULT\t{label}\tcompleted\t{}\t{}",
-                    report.completed_tasks, report.transferred_bytes
-                );
+                finish_batch(batch, label, notification.is_some() && !requests.is_empty())?;
             }
             ["NOTIFY", label, mode, name, message] => {
                 let notification = Notification::new(text(name), text(message));

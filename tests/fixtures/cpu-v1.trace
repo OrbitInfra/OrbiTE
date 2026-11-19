@@ -24,7 +24,8 @@ NOTIFY duplicate remote scope first
 NOTIFY empty-message remote - -
 TAKE remote
 TAKE remote-empty
-UNREGISTER source
+READ_PAIR_UNREGISTER paired 33:45:5,50:5:3 ~ -
+BYTES paired-bytes local 0 64
 DESCRIBE still-exported
 WRITE duplicate-first-permission 0:56:8 ~ -
 BYTES final-source source 0 64

@@ -83,9 +83,10 @@ implemented. The [P2 descriptor audit](architecture.md#peer-retirement)
 covers immutable snapshots and whole-batch refresh before registration IDs
 are bound. The [installed Python wheel replay](cpu-oracle.md#installed-python-wheel)
 covers the shared CPU/TCP trace. CI requires both Linux wheel profiles and the rebuilt
-sdist wheel to match the same 25 observations as the Rust and frozen TENT
+sdist wheel to match the same 29 observations as the Rust and frozen TENT
 drivers. The trace checks registrations, bytes, task receipts, notifications
-and final cleanup. The full native comparison also runs the frozen
+and final cleanup, including reverse retirement of two live READ batches.
+The full native comparison also runs the frozen
 [tebench byte checks](cpu-oracle.md#frozen-tebench-byte-checks) on DRAM/TCP.
 The remaining P0 cases and the installed hardware queue are listed below.
 
@@ -149,9 +150,10 @@ Done:
 - **P0.1 — shared CPU comparison trace (Implemented).** Unmodified frozen TENT
   and the public Rust and installed Python APIs run one deterministic
   registration, READ/WRITE, batch and notification trace over real host memory
-  and TCP. Each must match 25 observations, and six comparator controls must
-  reject broken results. See [CPU oracle](cpu-oracle.md). It covers selected
-  valid-input CPU behavior.
+  and TCP. Two independent batches survive a non-final source unregister and
+  are polled and freed in reverse submit order. Each driver must match 29
+  observations; seven comparator controls must reject broken results. See the
+  [CPU oracle](cpu-oracle.md) for the covered valid-input behavior.
 
 - **P0 native tebench bytes (Implemented).** The frozen benchmark writes and reads
   guarded CPU memory over TCP. A single-byte mismatch must fail and restoring
@@ -169,8 +171,9 @@ Open:
 - [ ] Extend the CPU oracle beyond the shared valid-input trace with further
   native/Python behavior, Python guard cases and hardware tebench profiles, with
   hardware triggers where needed.
-- [ ] Extend the shared trace to allowed concurrent transitions, faults, broken
-  lifetime/epoch controls against independent native and Rust runs.
+- [ ] Drive pending-transfer interleavings, faults and stale-epoch or broken-lifetime
+  controls against independent native and Rust runs. The two-handle case
+  does not hold either transfer pending.
 - [ ] Write the run-manifest schema and freeze workload-specific resource and
   performance guards before formal measurements.
 

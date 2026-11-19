@@ -46,7 +46,7 @@ checks the actual Rust and TENT outputs against each other.
 | --- | --- | --- |
 | F04 host registration | Existing backing, single and batch duplicate registration, first permission retained during subsequent WRITE, partial/final unregister and descriptor refresh | Failed provider free, overlapping native registrations and retained DMA |
 | F05/F07/F08 CPU movement | Noncontiguous batched READ, offset WRITE, exact bytes/sentinels and completed byte counts | Native error mapping, partial posts, cancellation and failover |
-| F08 batch lifetime | Drivers allocate/submit/poll/free; the first READ appends two groups to one capacity reservation; terminal polling repeats without redelivery | Asynchronous multi-target hooks and merged task aliases |
+| F08 batch lifetime | Drivers allocate/submit/poll/free; the first READ appends two groups to one capacity reservation; two independent READ handles retire in reverse order across a non-final source unregister; terminal polling repeats without redelivery | Asynchronous multi-target hooks and merged task aliases |
 | F11 notifications | Explicit local/remote, attached READ/WRITE, empty submission, deliberate repeats, empty names/messages and empty polls | Ambiguous native receipts, provider fallback and durable/deduplicated delivery |
 | Selected F09 C output | Native notification result reuse, reset on free and repeated free | Frozen TENT output contract only; OrbiTE C ABI is out of scope |
 
@@ -59,21 +59,26 @@ reference. New duplicate descriptors in one native batch are outside this trace.
 `FILL` and `BYTES` specify offsets/lengths. `READ`/`WRITE` take a label,
 comma-separated `local_offset:remote_offset:length` slices, notification name
 and message. `READ_SPLIT` submits each slice separately into one allocated
-batch, without notification. The Rust driver seals after append. The Python
-driver waits for physically drained task receipts via `Batch.wait` and checks
+batch, without notification. The Rust driver seals after append.
+`READ_PAIR_UNREGISTER` submits two single-slice READs into disjoint local
+ranges using separate batch handles, then drops one duplicate source
+registration. The drivers wait for and free the second handle before the first.
+Different slice lengths expose receipt swaps; `BYTES` checks both destinations
+and their untouched guards. Both handles must coexist, but either transfer may
+already have finished at unregister. The Python driver waits for physically drained task receipts via `Batch.wait` and checks
 counts and byte totals from the returned tasks. All drivers observe terminal
-status repeatedly and free each batch before cleanup. `~` disables the attached
-notification; `-` means empty strings
-or an empty slice list. `NOTIFY` selects local/remote delivery; `TAKE` drains
+status repeatedly and free each batch before cleanup. If the native replay fails before drain,
+the isolated process exits without destroying a potentially active TENT engine.
+`~` disables the attached notification; `-` means empty strings or an empty slice list. `NOTIFY` selects local/remote delivery; `TAKE` drains
 the source inbox. Fixtures use bounded, valid ranges and C-string-compatible
 messages. Random addresses, IDs and timing are excluded from observations;
 each driver checks that descriptors identify its actual backing.
 
 Lines beginning `OBS` are compared exactly. Native errors, failed processes,
 timeouts, missing observations, extra messages and missing cleanup fail the run.
-Six comparator controls deliberately corrupt bytes/counts/status or remove/add
-observations and require rejection. These are comparator checks, not network,
-epoch or lifetime fault injection. The existing Rust tests retain their real
+Seven comparator controls deliberately corrupt bytes/counts/status, swap the
+two batches' byte counts, or remove/add observations and require rejection. These are comparator checks,
+not network, epoch or lifetime fault injection. The existing Rust tests retain their real
 restart, partial-body, close/drain and lost-receipt controls; running this shared
 trace does not qualify corresponding behavior in unmodified native TENT.
 
@@ -110,7 +115,7 @@ python3 tests/reference/run.py \
 ```
 
 The full run reports `passed-cpu-trace` after both trace runners exit
-successfully, all 25 observations match and the tebench byte controls pass.
+successfully, all 29 observations match and the tebench byte controls pass.
 Its manifest preserves exact inputs,
 commands, command outcomes, binary hashes, native dependency paths/hashes,
 observations, comparator controls and provenance. Failures keep their logs and
@@ -139,16 +144,16 @@ virtualenv in the external output directory, installs the supplied wheel with
 `pip --no-index --no-deps`, then runs the driver there in isolated Python mode.
 The driver checks its import path inside that virtualenv. The manifest records
 the wheel SHA-256, the interpreter version, commands, input hashes and the same
-six comparator controls. The wheel trace executes without building Rust or TENT.
+seven comparator controls. The wheel trace executes without building Rust or TENT.
 
 ```sh
 python -I tests/reference/run.py --python-wheel "$WHEEL" \
   --output /var/tmp/orbite-wheel-trace-001
 ```
 
-The result `passed-python-wheel-trace` requires all 25 observations, including
-duplicate registration and permission retention, guard bytes, empty batches,
-and notification order and multiplicity. Live aliases must keep the Python
+The result `passed-python-wheel-trace` requires all 29 observations, including
+duplicate registration and permission retention, guard bytes, independent batch
+receipts, empty batches, and notification order and multiplicity. Live aliases must keep the Python
 exporter pinned, and final unregister must allow resizing. Before emitting
 cleanup the driver closes every registration, batch and segment guard, checks
 the memory and batch charges on both engines, and closes both engines.
