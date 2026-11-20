@@ -275,7 +275,7 @@ def main() -> int:
             wheel = args.python_wheel.resolve()
             if wheel.suffix != ".whl" or not wheel.is_file():
                 raise ValueError(f"expected an existing wheel: {wheel}")
-            manifest["profile"] = "Installed CPython wheel, loopback TCP: two-engine trace and three-process stopped-source READs on one segment with independent peer progress"
+            manifest["profile"] = "Installed CPython wheel, loopback TCP: shared trace, stopped-source READs with independent peer progress, and same-endpoint source replacement"
             manifest["python_wheel"] = {"path": str(wheel), "sha256": digest(wheel)}
             venv = output / "venv"
             python = str(venv / "bin/python")
@@ -307,7 +307,8 @@ def main() -> int:
             )
             compare(expected, observations(actual))
             manifest["observations"] = len(expected)
-            read_control("pending_read", "python", [python, "-I", "-B", str(REPO / driver)])
+            for case in ("pending_read", "restart_read"):
+                read_control(case, "python", [python, "-I", "-B", str(REPO / driver)])
             return passed("passed-python-wheel-trace")
 
         manifest["rustc"] = run("rustc-version", ["rustc", "-Vv"]).strip()

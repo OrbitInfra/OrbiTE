@@ -150,8 +150,10 @@ attempt cannot rebind a prepared WRITE to a replacement at the same address.
 Source-side validation still rejects retired registrations, and a newly
 responding epoch cannot replace the old one.
 The [same-endpoint restart control](cpu-oracle.md#same-endpoint-source-restart)
-holds both incarnations on one live requester. The old READ drains with an
-epoch mismatch before local retirement, and the new handle reads the replacement's bytes.
+holds both incarnations on one live requester in Rust and the installed Python
+wheel. The old READ drains with an epoch mismatch before local retirement, and
+the new handle reads the replacement's bytes. Closing a Python `RemoteSegment`
+removes its binding handle. A later submit through it fails before admission.
 
 This deliberately differs from frozen
 `segment_manager.cpp::getRemoteCached`, `invalidateAllCacheForRemote` and

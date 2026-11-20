@@ -70,13 +70,28 @@ def finish_batch(batch: orbite.Batch, label: str, count: int) -> None:
     )
 
 
+def check_released(name: str, engine: orbite.TransferEngine) -> None:
+    stats = engine.stats()
+    for key in (
+        "retained_regions",
+        "retained_bytes",
+        "allocated_batches",
+        "allocated_requests",
+        "requester_workers",
+        "inflight_batches",
+        "inflight_bytes",
+    ):
+        if stats[key] != 0:
+            raise RuntimeError(f"{name} retains {key}: {stats[key]}")
+
+
 def command(expected: str) -> None:
     if input() != expected:
         raise RuntimeError(f"expected controller command {expected}")
 
 
-def pending_source(payload: str) -> None:
-    with orbite.TransferEngine(orbite.EngineConfig()) as engine:
+def pending_source(payload: str, port: int = 0) -> None:
+    with orbite.TransferEngine(orbite.EngineConfig(bind_addr=f"127.0.0.1:{port}")) as engine:
         options = orbite.MemoryOptions(permission=orbite.Permission.REMOTE_READ)
         with engine.register_buffer(bytearray(payload, "ascii"), options):
             print("READY", engine.endpoint(), engine.source_epoch(), flush=True)
@@ -163,6 +178,78 @@ def pending_reads(slow_peer: str, fast_peer: str) -> None:
         del retained
         if owner() is not None or charges() != (0, 0, 0, 0, 0):
             raise RuntimeError("drained READ retained its exporter or charges")
+
+
+def restart_read(peer: str) -> None:
+    guard = b"\xee" * 5
+    destination = bytearray(guard)
+
+    def request(
+        segment: orbite.RemoteSegment, registration: orbite.RegisteredMemory
+    ) -> orbite.TransferRequest:
+        is_file, [(address, size, _)] = segment.info()
+        if is_file or size != len(guard) - 2:
+            raise RuntimeError("expected one three-byte restart source")
+        return orbite.TransferRequest(registration.address + 1, address, size, orbite.Transport.TCP)
+
+    def read(segment: orbite.RemoteSegment, req: orbite.TransferRequest, label: str) -> None:
+        with engine.allocate_batch(1) as batch:
+            batch.submit(orbite.TransferOp.READ, segment, [req])
+            finish_batch(batch, label, 1)
+        observe("BYTES", label, destination.hex())
+
+    with orbite.TransferEngine(orbite.EngineConfig()) as engine:
+        with (
+            engine.open_segment(*peer.split()) as old,
+            engine.register_buffer(
+                destination, orbite.MemoryOptions(permission=orbite.Permission.LOCAL_ONLY)
+            ) as registration,
+        ):
+            old_request = request(old, registration)
+            read(old, old_request, "old")
+            destination[:] = guard
+            with engine.open_segment(*input().split()) as fresh:
+                if fresh.endpoint != old.endpoint or fresh.epoch == old.epoch:
+                    raise RuntimeError("expected a new epoch at the original endpoint")
+                try:
+                    engine.open_segment(old.endpoint, old.epoch)
+                except orbite.EpochMismatchError as error:
+                    # Task failures carry the native message without the operation prefix.
+                    epoch_message = str(error).removeprefix("open_segment: ")
+                else:
+                    raise RuntimeError("Describe accepted the old epoch")
+                with engine.allocate_batch(1) as stale:
+                    stale.submit(orbite.TransferOp.READ, old, [old_request])
+                    [task] = stale.wait(5)
+                    if (
+                        task.state != orbite.TaskState.FAILED
+                        or task.failure != orbite.TransferFailure(epoch_message, "none")
+                        or not task.locally_drained
+                        or task.transferred_bytes != 0
+                    ):
+                        raise RuntimeError(f"stale READ returned {task}")
+                    if destination != guard:
+                        raise RuntimeError(f"stale READ changed the destination: {destination.hex()}")
+                old.close()
+                with engine.allocate_batch(1) as rejected:
+                    try:
+                        rejected.submit(orbite.TransferOp.READ, old, [old_request])
+                    except orbite.InvalidRangeError:
+                        if rejected.tasks():
+                            raise RuntimeError("closed handle admitted a task")
+                    else:
+                        raise RuntimeError("closed Python handle accepted a READ")
+                if destination != guard:
+                    raise RuntimeError(f"closed handle changed the destination: {destination.hex()}")
+                print(
+                    f"old Describe and READ: {task.failure.message}, {task.transferred_bytes} bytes, "
+                    f"effect={task.failure.remote_effect}, drained, destination={destination.hex()}",
+                    file=sys.stderr,
+                )
+                print("RETIRED old", flush=True)
+                read(fresh, request(fresh, registration), "new")
+        destination.append(0)  # Final unregister must release the bytearray export.
+        check_released("restart requester", engine)
 
 
 def transfer(
@@ -350,18 +437,7 @@ def replay(trace: Path) -> None:
         if peer is not None:
             peer.close()
         for name, engine in engines.items():
-            stats = engine.stats()
-            for key in (
-                "retained_regions",
-                "retained_bytes",
-                "allocated_batches",
-                "allocated_requests",
-                "requester_workers",
-                "inflight_batches",
-                "inflight_bytes",
-            ):
-                if stats[key] != 0:
-                    raise RuntimeError(f"{name} retains {key}: {stats[key]}")
+            check_released(name, engine)
     observe("CLEANUP", "ok")
 
 
@@ -377,9 +453,13 @@ if __name__ == "__main__":
     match sys.argv[1:]:
         case ["--pending-source", payload]:
             pending_source(payload)
+        case ["--pending-source", payload, port]:
+            pending_source(payload, int(port))
+        case ["--restart-read", peer]:
+            restart_read(peer)
         case ["--pending-reads", slow, fast]:
             pending_reads(slow, fast)
         case [trace]:
             replay(Path(trace))
         case _:
-            raise ValueError("expected trace path or pending READ role")
+            raise ValueError("expected trace path or READ role")
