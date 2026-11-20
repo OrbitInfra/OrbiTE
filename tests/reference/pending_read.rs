@@ -20,14 +20,15 @@ fn command(expected: &str) -> Result<()> {
 
 pub(super) const BULK_BYTES: usize = 64 << 20;
 
-fn read_engine(length: usize) -> Result<TransferEngine> {
+fn read_engine(length: usize, port: u16) -> Result<TransferEngine> {
     let mut config = EngineConfig::default();
+    config.bind_addr.set_port(port);
     config.max_transfer_bytes = config.max_transfer_bytes.max(length);
     Ok(TransferEngine::new(config)?)
 }
 
-pub(super) fn source(payload: Box<[u8]>) -> Result<()> {
-    let engine = read_engine(payload.len())?;
+pub(super) fn source(payload: Box<[u8]>, port: u16) -> Result<()> {
+    let engine = read_engine(payload.len(), port)?;
     let memory = Arc::new(HostMemory::new(payload)?);
     let reg =
         engine.register_host_memory(memory.clone(), 0, memory.len(), Permission::RemoteRead)?;
@@ -58,6 +59,86 @@ fn open(engine: &TransferEngine, peer: &str) -> Result<RemoteSegment> {
     Ok(engine.open_segment(addr.parse()?, epoch.parse()?, TIMEOUT)?)
 }
 
+pub(super) fn restart(peer: &str) -> Result<()> {
+    let engine = Arc::new(TransferEngine::new(EngineConfig::default())?);
+    let old = open(&engine, peer)?;
+    let guard = [0xee; 5];
+    let dst = engine.register_memory(Box::new(guard), Permission::LocalOnly)?;
+    let request = |segment: &RemoteSegment| -> Result<_> {
+        let [region] = segment.regions() else {
+            return Err("expected one restart source region".into());
+        };
+        if region.len() != guard.len() - 2 {
+            return Err("unexpected restart source length".into());
+        }
+        Ok(TransferRequest::new(
+            Transport::Tcp,
+            dst.base_address() + 1,
+            region.base_address(),
+            region.len(),
+        ))
+    };
+    let read = |segment: &RemoteSegment, label: &str| -> Result<()> {
+        let batch = engine.submit_async(
+            TransferOp::Read,
+            segment,
+            &[request(segment)?],
+            None,
+            TIMEOUT,
+        )?;
+        finish_batch(batch, label, false)?;
+        let mut bytes = [0; 5];
+        dst.read(0, &mut bytes)?;
+        println!("OBS\tBYTES\t{label}\t{}", hex(&bytes));
+        Ok(())
+    };
+    read(&old, "old")?;
+    dst.write(0, &guard)?;
+    let mut replacement = String::new();
+    io::stdin().read_line(&mut replacement)?;
+    let fresh = open(&engine, replacement.trim_end())?;
+    if fresh.endpoint() != old.endpoint() || fresh.source_epoch() == old.source_epoch() {
+        return Err("expected a new source epoch at the original endpoint".into());
+    }
+    if !matches!(
+        engine.open_segment(old.endpoint(), old.source_epoch(), TIMEOUT),
+        Err(orbite::Error::EpochMismatch)
+    ) {
+        return Err("old Describe did not return EpochMismatch".into());
+    }
+    let old_request = [request(&old)?];
+    let report = engine.submit_and_wait(TransferOp::Read, &old, &old_request, TIMEOUT)?;
+    let fenced = report.failure.as_ref().is_some_and(|failure| {
+        matches!(failure.error, orbite::Error::EpochMismatch)
+            && failure.remote_effect == RemoteEffect::None
+    });
+    if !fenced
+        || !report.locally_drained
+        || (report.completed_requests, report.transferred_bytes) != (0, 0)
+    {
+        return Err(format!("stale READ returned {report:?}").into());
+    }
+    let mut bytes = [0; 5];
+    dst.read(0, &mut bytes)?;
+    if bytes != guard {
+        return Err(format!("stale READ changed the destination: {bytes:?}").into());
+    }
+    eprintln!("old Describe and READ: EpochMismatch, zero bytes, drained, destination intact");
+    engine.close_segment(old.endpoint(), old.source_epoch(), TIMEOUT)?;
+    if !matches!(
+        engine.submit_and_wait(TransferOp::Read, &old, &old_request, TIMEOUT),
+        Err(orbite::Error::PeerClosed)
+    ) {
+        return Err("closed descriptor still admitted a READ".into());
+    }
+    println!("RETIRED old");
+    read(&fresh, "new")?;
+    engine.close_segment(fresh.endpoint(), fresh.source_epoch(), TIMEOUT)?;
+    engine.unregister_memory(&dst)?;
+    engine.close(TIMEOUT)?;
+    Ok(())
+}
+
 pub(super) fn interrupted(peer: &str, outcome: &str) -> Result<()> {
     let (state, task_state, bytes, fill) = match outcome {
         "cut" => (BatchState::Failed, TaskState::Failed, 0, 0xee),
@@ -69,7 +150,7 @@ pub(super) fn interrupted(peer: &str, outcome: &str) -> Result<()> {
         ),
         _ => return Err("unknown READ outcome".into()),
     };
-    let engine = Arc::new(read_engine(BULK_BYTES)?);
+    let engine = Arc::new(read_engine(BULK_BYTES, 0)?);
     let peer = open(&engine, peer)?;
     let [region] = peer.regions() else {
         return Err("expected one READ source".into());
