@@ -20,6 +20,11 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 CONTRACT = json.loads((REPO / "tests/reference/contract.json").read_text())
+READ_CONTROLS = {
+    "pending_read": [],
+    "interrupted_read": ["--interrupted"],
+    "restart_read": ["--restart"],
+}
 
 
 def digest(path: Path) -> str:
@@ -218,14 +223,13 @@ def main() -> int:
             raise RuntimeError(f"{name} failed ({process.returncode}); see {stderr}")
         return stdout.read_text()
 
-    def pending_read(profile: str, driver: list[str], *, interrupted: bool = False) -> list[str]:
-        case = "interrupted_read" if interrupted else "pending_read"
+    def read_control(case: str, profile: str, driver: list[str]) -> list[str]:
         receipts = run(
             f"{profile}-{case.replace('_', '-')}",
             [sys.executable, "-I", "-B", str(REPO / "tests/reference/pending_read.py"),
-             *(["--interrupted"] if interrupted else []), *driver],
+             *READ_CONTROLS[case], *driver],
             cwd=output,
-            timeout=60 if interrupted else 30,
+            timeout=60 if case == "interrupted_read" else 30,
         ).splitlines()
         manifest.setdefault(case, {})[profile] = receipts
         return receipts
@@ -303,7 +307,7 @@ def main() -> int:
             )
             compare(expected, observations(actual))
             manifest["observations"] = len(expected)
-            pending_read("python", [python, "-I", "-B", str(REPO / driver)])
+            read_control("pending_read", "python", [python, "-I", "-B", str(REPO / driver)])
             return passed("passed-python-wheel-trace")
 
         manifest["rustc"] = run("rustc-version", ["rustc", "-Vv"]).strip()
@@ -323,8 +327,10 @@ def main() -> int:
         rust_output = run("rust-trace", [str(rust_binary), str(trace)], timeout=30)
         rust_records = observations(rust_output)
         compare(expected, rust_records)
-        rust_pending = pending_read("rust", [str(rust_binary)])
-        rust_interrupted = pending_read("rust", [str(rust_binary)], interrupted=True)
+        rust_reads = {
+            case: read_control(case, "rust", [str(rust_binary)])
+            for case in READ_CONTROLS
+        }
         rust_linkage = run("rust-linkage", ["ldd", str(rust_binary)])
         if re.search(r"lib(?:tent|mooncake|asio)", rust_linkage):
             raise RuntimeError("Rust runner unexpectedly depends on a Mooncake runtime")
@@ -474,8 +480,8 @@ def main() -> int:
             native_records = observations(native_output)
             compare(expected, native_records)
             compare(rust_records, native_records)
-            compare(rust_pending, pending_read("tent", [str(binary)]))
-            compare(rust_interrupted, pending_read("tent", [str(binary)], interrupted=True))
+            for case, receipts in rust_reads.items():
+                compare(receipts, read_control(case, "tent", [str(binary)]))
             tebench = build / "mooncake-transfer-engine/benchmark/tebench"
             manifest["tebench"] = {
                 "path": str(tebench),

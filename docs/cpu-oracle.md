@@ -145,6 +145,29 @@ free is busy, and verifies backing and budget release after physical drain.
 Frozen TENT keeps its caller-owned registration until terminal status. Only
 the source designated for interruption may exit on `SIGKILL`.
 
+### Same-endpoint source restart
+
+One requester reads `old` from a registered three-byte source. After that
+source exits cleanly, a new process registers `new` at the same loopback
+control endpoint. The controller waits for the new source to advertise the
+original endpoint before releasing the requester. Both drivers must retire
+the old handle, read the new marker through a fresh handle, preserve the
+one-byte destination guards on both reads and exit cleanly.
+
+The Rust requester opens the new epoch while retaining the original handle.
+Before local retirement, Describe with the old epoch and a READ through the
+old handle must both report `EpochMismatch`. The READ must drain with zero
+completed requests, zero bytes and `RemoteEffect::None`. Its destination and
+guards must still contain their reset value. After explicit retirement the
+same handle must report `PeerClosed` at admission.
+
+Frozen TENT identifies a segment by name and has no source-epoch argument.
+Its requester explicitly closes the old segment and reopens the name. The
+new ID must differ, and looking up the retired ID must fail in the local
+segment index. Only the fresh descriptor is used to read the replacement.
+The manifest's `restart_read` records the shared receipts. The Rust driver's
+stderr also records its epoch check.
+
 ## Run the gates
 
 Use Linux with readable `/proc/net/tcp`, Rust 1.85+, Python 3.11.8+, Git, CMake,
@@ -179,7 +202,8 @@ python3 tests/reference/run.py \
 ```
 
 The full run reports `passed-cpu-trace` after both trace runners exit
-successfully, all 29 observations match, the stopped-source and interrupted READ receipts agree,
+successfully, all 29 observations match, the stopped-source, interrupted and
+same-endpoint restart READ receipts agree,
 and the tebench byte controls pass.
 Its manifest preserves exact inputs,
 commands, command outcomes, binary hashes, native dependency paths/hashes,

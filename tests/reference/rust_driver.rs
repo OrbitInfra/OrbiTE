@@ -80,10 +80,16 @@ fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     let path = match args.as_slice() {
         [mode, payload] if mode == "--pending-source" => {
-            return pending_read::source(payload.as_bytes().into());
+            return pending_read::source(payload.as_bytes().into(), 0);
+        }
+        [mode, payload, port] if mode == "--pending-source" => {
+            return pending_read::source(payload.as_bytes().into(), port.parse()?);
         }
         [mode] if mode == "--bulk-read-source" => {
-            return pending_read::source(vec![0x6d; pending_read::BULK_BYTES].into());
+            return pending_read::source(vec![0x6d; pending_read::BULK_BYTES].into(), 0);
+        }
+        [mode, peer] if mode == "--restart-read" => {
+            return pending_read::restart(peer);
         }
         [mode, peer, outcome] if mode == "--interrupted-read" => {
             return pending_read::interrupted(peer, outcome);

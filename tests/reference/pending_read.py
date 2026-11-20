@@ -92,6 +92,30 @@ def check(driver):
         print("CLEANUP", flush=True)
 
 
+def restart_read(driver):
+    with Drivers(driver) as peers:
+        original, peer = peers.source("--pending-source", "old")
+        reader = peers.start("--restart-read", peer)
+        expect(reader, "OBS\tRESULT\told\tcompleted\t1\t3")
+        expect(reader, "OBS\tBYTES\told\tee6f6c64ee")
+        send(original, "close")
+        finish(original)
+
+        endpoint = peer.split()[0]
+        port = endpoint.rsplit(":", 1)[1]
+        replacement, fresh = peers.source("--pending-source", "new", port)
+        if fresh.split()[0] != endpoint:
+            raise RuntimeError(f"replacement moved from {endpoint} to {fresh!r}")
+        send(reader, fresh)
+        expect(reader, "RETIRED old")
+        expect(reader, "OBS\tRESULT\tnew\tcompleted\t1\t3")
+        expect(reader, "OBS\tBYTES\tnew\tee6e6577ee")
+        finish(reader)
+        send(replacement, "close")
+        finish(replacement)
+        print("CLEANUP", flush=True)
+
+
 def socket_queues(source):
     # One snapshot of both directions of this source's established IPv4 connections.
     queues = {}
@@ -197,5 +221,7 @@ if __name__ == "__main__":
     if sys.argv[1] == "--interrupted":
         for cut in (False, True):
             interrupted_read(sys.argv[2:], cut)
+    elif sys.argv[1] == "--restart":
+        restart_read(sys.argv[2:])
     else:
         check(sys.argv[1:])

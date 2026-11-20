@@ -149,6 +149,9 @@ fixed when preparation resolves the requests; a source rejection during an
 attempt cannot rebind a prepared WRITE to a replacement at the same address.
 Source-side validation still rejects retired registrations, and a newly
 responding epoch cannot replace the old one.
+The [same-endpoint restart control](cpu-oracle.md#same-endpoint-source-restart)
+holds both incarnations on one live requester. The old READ drains with an
+epoch mismatch before local retirement, and the new handle reads the replacement's bytes.
 
 This deliberately differs from frozen
 `segment_manager.cpp::getRemoteCached`, `invalidateAllCacheForRemote` and

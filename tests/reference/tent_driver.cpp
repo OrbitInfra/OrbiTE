@@ -166,6 +166,53 @@ uint64_t source_address(tent_engine_t te, tent_segment_id_t id, size_t length) {
   return address;
 }
 
+void restart_read(const std::string &peer) {
+  std::array<unsigned char, 5> dst;
+  auto requester = engine();
+  auto *te = requester.get();
+  try {
+    dst.fill(0xee);
+    checked(tent_register_memory_with_perm(te, dst.data(), dst.size(),
+                                           PERM_LOCAL_READ_WRITE),
+            "register restart destination");
+    auto read = [&](tent_segment_id_t segment, const char *label) {
+      tent_request_t req{};
+      req.opcode = OPCODE_READ;
+      req.transport_hint = TRANSPORT_TCP;
+      req.source = dst.data() + 1;
+      req.target_id = segment;
+      req.length = dst.size() - 2;
+      req.target_offset = source_address(te, segment, req.length);
+      const auto batch = allocate_batch(te, 1);
+      checked(tent_submit(te, batch, &req, 1), "submit restart READ");
+      finish_batch(te, batch, 1, label);
+      std::cout << "OBS\tBYTES\t" << label << '\t'
+                << hex(dst.data(), dst.size()) << std::endl;
+    };
+    tent_segment_id_t old{}, fresh{};
+    checked(tent_open_segment(te, &old, peer.c_str()), "open original source");
+    read(old, "old");
+    dst.fill(0xee);
+    command(peer); // The replacement advertised the same segment name.
+    checked(tent_close_segment(te, old), "retire original handle");
+    checked(tent_open_segment(te, &fresh, peer.c_str()), "open replacement");
+    require(fresh != old, "replacement reused the retired segment ID");
+    // closeRemote removes the ID from the local segment index. Inspect it
+    // through the public metadata API without submitting its old address.
+    tent_segment_info_t info{};
+    const int retired = tent_get_segment_info(te, old, &info);
+    tent_free_segment_info(&info);
+    require(retired != 0, "retired segment still exposes its descriptor");
+    std::cout << "RETIRED old" << std::endl;
+    read(fresh, "new");
+    checked(tent_close_segment(te, fresh), "close replacement");
+    checked(tent_unregister_memory(te, dst.data(), dst.size()),
+            "unregister restart destination");
+  } catch (const std::exception &error) {
+    stop_trace(error);
+  }
+}
+
 void check_pending(tent_engine_t te, tent_batch_id_t id) {
   tent_status_t task{}, batch{};
   checked(tent_task_status(te, id, 0, &task), "pending task status");
@@ -641,8 +688,15 @@ int main(int argc, char **argv) {
       tent_set_config(key.c_str(),
                       std::string(transport) == "tcp" ? "true" : "false");
     }
-    if (argc == 3 && std::string(argv[1]) == "--pending-source") {
+    if ((argc == 3 || argc == 4) &&
+        std::string(argv[1]) == "--pending-source") {
+      if (argc == 4)
+        tent_set_config("rpc_server_port", argv[3]);
       pending_source(argv[2]);
+      return 0;
+    }
+    if (argc == 3 && std::string(argv[1]) == "--restart-read") {
+      restart_read(argv[2]);
       return 0;
     }
     if (argc == 2 && std::string(argv[1]) == "--bulk-read-source") {

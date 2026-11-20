@@ -94,6 +94,9 @@ The full native comparison also runs the frozen
 The Rust and native drivers also compare [interrupted READ replies](cpu-oracle.md#interrupted-read-reply).
 After a partial reply reaches the requester, resuming the source must complete
 the entire READ. Killing the source must leave the destination and guards intact.
+The [same-endpoint restart](cpu-oracle.md#same-endpoint-source-restart) keeps the
+requester alive across two source processes and checks old-handle retirement and
+fresh READ bytes. Rust also checks its source-epoch fence before local retirement.
 The remaining P0 cases and the installed hardware queue are listed below.
 
 Follow the maintainer's 2026-11-09 order, one PR at a time, stopping for review
@@ -163,6 +166,10 @@ Done:
   three-process case holds one source stopped, checks independent completion
   on the other peer, and observes two same-peer batches pending before
   resumption. Both receipts and guarded destinations are checked at retirement.
+  Independent Rust and native READ controls also cover a reply interrupted
+  by source loss and a replacement source on the same control endpoint.
+  Rust checks `EpochMismatch` on the original descriptor. Frozen TENT checks
+  its retired segment ID after closing and reopening the name.
 
 - **P0 native tebench bytes (Implemented).** The frozen benchmark writes and reads
   guarded CPU memory over TCP. A single-byte mismatch must fail and restoring
@@ -180,9 +187,6 @@ Open:
 - [ ] Extend the CPU oracle beyond the shared valid-input trace with further
   native/Python behavior, Python guard cases and hardware tebench profiles, with
   hardware triggers where needed.
-- [ ] Extend the independent native and Rust runs to stale-epoch or
-  broken-lifetime controls. The READ cases cover healthy resumption, two
-  pending READs on one segment and source loss partway through a TCP reply.
 - [ ] Write the run-manifest schema and freeze workload-specific resource and
   performance guards before formal measurements.
 
