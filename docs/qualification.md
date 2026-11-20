@@ -31,6 +31,10 @@ requires one peer's READ to complete and release its batch while another
 source is stopped. The manifest records two same-peer batches pending before
 resumption, their receipts in reverse submission order, and all three guarded
 destinations. Failure or timeout of any child fails the gate. Its
+[interrupted READ control](cpu-oracle.md#interrupted-read-reply) compares Rust
+and frozen TENT with a partial bulk reply on Linux loopback. Both check every
+destination byte after resumption and after source death. The run records
+socket queue observations separately from task and batch byte counts. Its
 [tebench gate](cpu-oracle.md#frozen-tebench-byte-checks)
 records a seeded WRITE, a verified READ, a one-byte rejection and a verified
 READ after restoration on CPU/TCP. Three frozen RPC prefixes and a real frozen client exercise

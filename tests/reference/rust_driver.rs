@@ -79,7 +79,15 @@ fn finish_batch(mut batch: Batch, label: &str, notified: bool) -> Result<(), Box
 fn main() -> Result<(), Box<dyn Error>> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     let path = match args.as_slice() {
-        [mode, payload] if mode == "--pending-source" => return pending_read::source(payload),
+        [mode, payload] if mode == "--pending-source" => {
+            return pending_read::source(payload.as_bytes().into());
+        }
+        [mode] if mode == "--bulk-read-source" => {
+            return pending_read::source(vec![0x6d; pending_read::BULK_BYTES].into());
+        }
+        [mode, peer, outcome] if mode == "--interrupted-read" => {
+            return pending_read::interrupted(peer, outcome);
+        }
         [mode, slow, fast] if mode == "--pending-reads" => return pending_read::reads(slow, fast),
         [path] => path,
         _ => return Err("expected trace path or pending READ role".into()),

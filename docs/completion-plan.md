@@ -91,6 +91,9 @@ requires a healthy peer's READ to drain and two READs on the stopped peer to
 remain pending together. After resumption their handles retire in reverse order.
 The full native comparison also runs the frozen
 [tebench byte checks](cpu-oracle.md#frozen-tebench-byte-checks) on DRAM/TCP.
+The Rust and native drivers also compare [interrupted READ replies](cpu-oracle.md#interrupted-read-reply).
+After a partial reply reaches the requester, resuming the source must complete
+the entire READ. Killing the source must leave the destination and guards intact.
 The remaining P0 cases and the installed hardware queue are listed below.
 
 Follow the maintainer's 2026-11-09 order, one PR at a time, stopping for review
@@ -177,9 +180,9 @@ Open:
 - [ ] Extend the CPU oracle beyond the shared valid-input trace with further
   native/Python behavior, Python guard cases and hardware tebench profiles, with
   hardware triggers where needed.
-- [ ] Extend the independent native and Rust runs to interrupted replies and
-  stale-epoch or broken-lifetime controls. The stopped-source case covers
-  healthy resumption, including two pending READs on one segment.
+- [ ] Extend the independent native and Rust runs to stale-epoch or
+  broken-lifetime controls. The READ cases cover healthy resumption, two
+  pending READs on one segment and source loss partway through a TCP reply.
 - [ ] Write the run-manifest schema and freeze workload-specific resource and
   performance guards before formal measurements.
 

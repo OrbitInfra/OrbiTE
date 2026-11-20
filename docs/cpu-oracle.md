@@ -111,12 +111,40 @@ reading a pending destination or interpreting either wire format.
 
 The stop establishes overlap in the lifetime of both same-peer batches. After
 resumption either transfer can finish first. Only the order of handle retirement
-is prescribed. Peer death and interrupted replies remain separate cases.
+is prescribed.
+
+### Interrupted READ reply
+
+The Rust API and frozen TENT C ABI each run two 8 MiB READs in fresh loopback
+processes. The source holds `0x6d` throughout its registered region. The
+destination and its one-byte guards start at `0xee`. After opening the genuine
+descriptor, the controller stops the source, submits one READ and waits for
+request bytes to reach that source's socket. It then stops the requester and
+resumes the source.
+
+The controller observes the two ends of that connection through Linux
+`/proc/net/tcp`. At least 32 KiB must reach the stopped requester's receive
+queue. With both children stopped, the sum of queued send and receive bytes
+must still be below the requested length. The controller resumes only the
+requester, waits for both queues to empty on the established connection, and
+requires the task and batch to remain pending with zero committed bytes.
+The command's stderr records the observed queue sizes. These include framing
+and vary with the Linux TCP window.
+
+In the first run the source resumes. All 8 MiB must commit and both guards
+must survive. In the second the controller kills the stopped source. Both
+task and batch must report failure and zero committed bytes, and the entire
+destination must retain its original contents. Each driver frees the batch.
+Rust withdraws registration before the prefix arrives, checks that a pending
+free is busy, and verifies backing and budget release after physical drain.
+Frozen TENT keeps its caller-owned registration until terminal status. Only
+the source designated for interruption may exit on `SIGKILL`.
 
 ## Run the gates
 
-Use Linux, Rust 1.85+, Python 3.11.8+, Git, CMake, a C++20 compiler and permission
-to bind loopback sockets. Select a **new external directory for each run**;
+Use Linux with readable `/proc/net/tcp`, Rust 1.85+, Python 3.11.8+, Git, CMake,
+a C++20 compiler and permission to bind loopback sockets and signal the child
+processes. Select a **new external directory for each run**;
 the runner refuses to overwrite evidence or put it inside a source checkout.
 
 The fast source gate needs no native libraries or downloads:
@@ -146,7 +174,7 @@ python3 tests/reference/run.py \
 ```
 
 The full run reports `passed-cpu-trace` after both trace runners exit
-successfully, all 29 observations match, the stopped-source receipts agree,
+successfully, all 29 observations match, the stopped-source and interrupted READ receipts agree,
 and the tebench byte controls pass.
 Its manifest preserves exact inputs,
 commands, command outcomes, binary hashes, native dependency paths/hashes,

@@ -218,14 +218,16 @@ def main() -> int:
             raise RuntimeError(f"{name} failed ({process.returncode}); see {stderr}")
         return stdout.read_text()
 
-    def pending_read(profile: str, driver: list[str]) -> list[str]:
+    def pending_read(profile: str, driver: list[str], *, interrupted: bool = False) -> list[str]:
+        case = "interrupted_read" if interrupted else "pending_read"
         receipts = run(
-            f"{profile}-pending-read",
-            [sys.executable, "-I", "-B", str(REPO / "tests/reference/pending_read.py"), *driver],
+            f"{profile}-{case.replace('_', '-')}",
+            [sys.executable, "-I", "-B", str(REPO / "tests/reference/pending_read.py"),
+             *(["--interrupted"] if interrupted else []), *driver],
             cwd=output,
-            timeout=30,
+            timeout=60 if interrupted else 30,
         ).splitlines()
-        manifest.setdefault("pending_read", {})[profile] = receipts
+        manifest.setdefault(case, {})[profile] = receipts
         return receipts
 
     try:
@@ -322,6 +324,7 @@ def main() -> int:
         rust_records = observations(rust_output)
         compare(expected, rust_records)
         rust_pending = pending_read("rust", [str(rust_binary)])
+        rust_interrupted = pending_read("rust", [str(rust_binary)], interrupted=True)
         rust_linkage = run("rust-linkage", ["ldd", str(rust_binary)])
         if re.search(r"lib(?:tent|mooncake|asio)", rust_linkage):
             raise RuntimeError("Rust runner unexpectedly depends on a Mooncake runtime")
@@ -472,6 +475,7 @@ def main() -> int:
             compare(expected, native_records)
             compare(rust_records, native_records)
             compare(rust_pending, pending_read("tent", [str(binary)]))
+            compare(rust_interrupted, pending_read("tent", [str(binary)], interrupted=True))
             tebench = build / "mooncake-transfer-engine/benchmark/tebench"
             manifest["tebench"] = {
                 "path": str(tebench),

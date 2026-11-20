@@ -155,6 +155,98 @@ void pending_source(std::string payload) {
   }
 }
 
+uint64_t source_address(tent_engine_t te, tent_segment_id_t id, size_t length) {
+  tent_segment_info_t info{};
+  checked(tent_get_segment_info(te, id, &info), "describe peer");
+  const bool valid =
+      info.num_buffers == 1 && info.buffers && info.buffers[0].length == length;
+  const uint64_t address = valid ? info.buffers[0].base : 0;
+  tent_free_segment_info(&info);
+  require(valid, "unexpected READ source region");
+  return address;
+}
+
+void check_pending(tent_engine_t te, tent_batch_id_t id) {
+  tent_status_t task{}, batch{};
+  checked(tent_task_status(te, id, 0, &task), "pending task status");
+  checked(tent_overall_status(te, id, &batch), "pending batch status");
+  for (auto status : {task, batch})
+    require(
+        (status.status == STATUS_WAITING || status.status == STATUS_PENDING) &&
+            status.transferred_bytes == 0,
+        "READ no longer pending");
+}
+
+constexpr size_t kBulkReadBytes = 8 << 20;
+
+void interrupted_read(const char *peer, const std::string &outcome) {
+  require(outcome == "cut" || outcome == "resume", "unknown READ outcome");
+  const bool cut = outcome == "cut";
+  std::vector<unsigned char> dst(kBulkReadBytes + 2, 0xee);
+  // The control measures a single READ. A new connection to the killed source
+  // would exercise retry policy after the reply was already interrupted.
+  tent_set_config("transports/tcp/max_retry_count", "0");
+  auto requester = engine();
+  auto *te = requester.get();
+  try {
+    tent_request_t req{};
+    req.opcode = OPCODE_READ;
+    req.transport_hint = TRANSPORT_TCP;
+    req.source = dst.data() + 1;
+    req.length = kBulkReadBytes;
+    checked(tent_register_memory_with_perm(te, dst.data(), dst.size(),
+                                           PERM_LOCAL_READ_WRITE),
+            "register destination");
+    checked(tent_open_segment(te, &req.target_id, peer), "open READ source");
+    req.target_offset = source_address(te, req.target_id, req.length);
+    auto id = allocate_batch(te, 1);
+    std::cout << "OPEN" << std::endl;
+    command("submit");
+    checked(tent_submit(te, id, &req, 1), "submit READ");
+    check_pending(te, id);
+    std::cout << "PENDING read" << std::endl;
+    command("prefix");
+    check_pending(te, id);
+    std::cout << "PENDING prefix" << std::endl;
+    command(outcome);
+    tent_status_t batch{}, task{};
+    const auto end = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    for (;;) {
+      checked(tent_overall_status(te, id, &batch), "READ status");
+      if (batch.status != STATUS_PENDING && batch.status != STATUS_WAITING)
+        break;
+      require(std::chrono::steady_clock::now() < end, "READ did not retire");
+      std::this_thread::sleep_for(std::chrono::microseconds(100));
+    }
+    const size_t committed = cut ? 0 : kBulkReadBytes;
+    checked(tent_task_status(te, id, 0, &task), "terminal READ task");
+    require(batch.status == (cut ? STATUS_FAILED : STATUS_COMPLETED) &&
+                task.status == batch.status &&
+                batch.transferred_bytes == committed &&
+                task.transferred_bytes == committed,
+            "unexpected terminal READ receipt");
+    checked(tent_free_batch(te, id), "free READ batch");
+    require(tent_task_status(te, id, 0, &task) != 0,
+            "freed READ still exposes a task");
+    const auto fill = cut ? 0xee : 0x6d;
+    require(
+        dst.front() == 0xee && dst.back() == 0xee &&
+            std::all_of(dst.begin() + 1, dst.end() - 1,
+                        [fill](unsigned char byte) { return byte == fill; }),
+        "READ changed the wrong destination bytes");
+    checked(tent_unregister_memory(te, dst.data(), dst.size()),
+            "unregister destination");
+    checked(tent_close_segment(te, req.target_id), "close READ source");
+    std::cout << "OBS\tRESULT\t" << outcome << '\t'
+              << (batch.status == STATUS_FAILED ? "failed" : "completed")
+              << '\t' << batch.transferred_bytes << '\n'
+              << "OBS\tBYTES\t" << outcome << '\t' << committed
+              << "\tguards-intact" << std::endl;
+  } catch (const std::exception &error) {
+    stop_trace(error);
+  }
+}
+
 void pending_reads(const char *slow, const char *fast) {
   std::array<std::array<unsigned char, 8>, 3> dst;
   auto requester = engine();
@@ -180,14 +272,7 @@ void pending_reads(const char *slow, const char *fast) {
     // Opening a segment invalidates the submit thread's descriptor cache.
     // Resolve both addresses after both opens, while both peers can reply.
     for (size_t i = 0; i < names.size(); ++i) {
-      tent_segment_info_t info{};
-      checked(tent_get_segment_info(te, req[i].target_id, &info),
-              "describe peer");
-      require(info.num_buffers == 1 && info.buffers &&
-                  info.buffers[0].length == 8,
-              "expected one eight-byte source");
-      req[i].target_offset = info.buffers[0].base;
-      tent_free_segment_info(&info);
+      req[i].target_offset = source_address(te, req[i].target_id, 8);
     }
     req[2].target_id = req[0].target_id;
     req[2].target_offset = req[0].target_offset + 3;
@@ -209,26 +294,16 @@ void pending_reads(const char *slow, const char *fast) {
     std::cout << "OPEN" << std::endl;
     command("stopped");
     auto first = submit(0);
-    auto check_pending = [&](tent_batch_id_t id) {
-      tent_status_t task{}, batch{};
-      checked(tent_task_status(te, id, 0, &task), "pending task status");
-      checked(tent_overall_status(te, id, &batch), "pending batch status");
-      for (auto status : {task, batch})
-        require((status.status == STATUS_WAITING ||
-                 status.status == STATUS_PENDING) &&
-                    status.transferred_bytes == 0,
-                "READ no longer pending");
-    };
-    check_pending(first);
+    check_pending(te, first);
     auto second = submit(1);
     require(second != first, "live batches share an ID");
     finish(1, second, "second");
-    check_pending(first);
+    check_pending(te, first);
     std::cout << "PENDING first" << std::endl;
     auto later = submit(2);
     require(later != first, "same-peer batches share an ID");
-    check_pending(first);
-    check_pending(later);
+    check_pending(te, first);
+    check_pending(te, later);
     std::cout << "PENDING first later" << std::endl;
     command("resumed");
     finish(2, later, "later");
@@ -558,6 +633,14 @@ int main(int argc, char **argv) {
     }
     if (argc == 3 && std::string(argv[1]) == "--pending-source") {
       pending_source(argv[2]);
+      return 0;
+    }
+    if (argc == 2 && std::string(argv[1]) == "--bulk-read-source") {
+      pending_source(std::string(kBulkReadBytes, 0x6d));
+      return 0;
+    }
+    if (argc == 4 && std::string(argv[1]) == "--interrupted-read") {
+      interrupted_read(argv[2], argv[3]);
       return 0;
     }
     if (argc == 4 && std::string(argv[1]) == "--pending-reads") {
