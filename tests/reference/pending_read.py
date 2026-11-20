@@ -113,7 +113,7 @@ def wait_for(label, sample):
 
 
 def interrupted_read(driver, cut):
-    length = 8 << 20
+    length = 64 << 20
     min_reply = 32 << 10
     outcome = "cut" if cut else "resume"
     with Drivers(driver) as peers:
@@ -148,12 +148,14 @@ def interrupted_read(driver, cut):
 
         wait_for("bulk reply queued at stopped reader", partial_reply)
         stop(source)
-        queues = socket_queues(server)
-        tx = queues[server, client][0]
-        rx = queues[client, server][1]
+        # /proc visits sockets in arbitrary order. ACKs can advance while both
+        # processes are stopped. Sample TX first so bytes moving to RX can
+        # only make this upper bound larger.
+        tx = socket_queues(server)[server, client][0]
+        rx = socket_queues(server)[client, server][1]
         if not (min_reply <= rx and tx + rx < length):
             raise RuntimeError(
-                f"reply is not bounded below the full READ: tx={tx}, rx={rx}"
+                f"cannot prove a partial {length}-byte READ: tx={tx}, rx={rx}"
             )
         print(
             f"{outcome}: stopped reader rx_queue={rx}, stopped source tx_queue={tx}",
@@ -163,8 +165,10 @@ def interrupted_read(driver, cut):
         reader.send_signal(signal.SIGCONT)
 
         def prefix_consumed():
-            queues = socket_queues(server)
-            return queues[server, client][0] == 0 and queues[client, server][1] == 0
+            return (
+                socket_queues(server)[server, client][0] == 0
+                and socket_queues(server)[client, server][1] == 0
+            )
 
         wait_for(
             "both established queues empty with source still stopped", prefix_consumed

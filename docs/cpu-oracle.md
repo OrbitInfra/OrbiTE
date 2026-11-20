@@ -115,8 +115,9 @@ is prescribed.
 
 ### Interrupted READ reply
 
-The Rust API and frozen TENT C ABI each run two 8 MiB READs in fresh loopback
-processes. The source holds `0x6d` throughout its registered region. The
+The Rust API and frozen TENT C ABI each run two 64 MiB READs in fresh loopback
+processes. OrbiTE configures its public per-transfer limit for that size. The
+source holds `0x6d` throughout its registered region. The
 destination and its one-byte guards start at `0xee`. Each requester first reads
 and verifies one byte and resets that destination byte. Frozen TENT uses one
 TCP worker here so its thread-local descriptor is already resolved when the
@@ -126,14 +127,16 @@ resumes the source.
 
 The controller observes the two ends of that connection through Linux
 `/proc/net/tcp`. At least 32 KiB must reach the stopped requester's receive
-queue. With both children stopped, the sum of queued send and receive bytes
-must still be below the requested length. The controller resumes only the
+queue. With both children stopped, the controller samples the source send queue
+first and the requester receive queue second. Their sum must still be below
+the requested length. A Linux configuration that can queue the entire reply
+fails this check. The controller resumes only the
 requester, waits for both queues to empty on the established connection, and
 requires the task and batch to remain pending with zero committed bytes.
 The command's stderr records the observed queue sizes. These include framing
 and vary with the Linux TCP window.
 
-In the first run the source resumes. All 8 MiB must commit and both guards
+In the first run the source resumes. All 64 MiB must commit and both guards
 must survive. In the second the controller kills the stopped source. Both
 task and batch must report failure and zero committed bytes, and the entire
 destination must retain its original contents. Each driver frees the batch.

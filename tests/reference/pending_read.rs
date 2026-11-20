@@ -18,10 +18,16 @@ fn command(expected: &str) -> Result<()> {
     Ok(())
 }
 
-pub(super) const BULK_BYTES: usize = 8 << 20;
+pub(super) const BULK_BYTES: usize = 64 << 20;
+
+fn read_engine(length: usize) -> Result<TransferEngine> {
+    let mut config = EngineConfig::default();
+    config.max_transfer_bytes = config.max_transfer_bytes.max(length);
+    Ok(TransferEngine::new(config)?)
+}
 
 pub(super) fn source(payload: Box<[u8]>) -> Result<()> {
-    let engine = TransferEngine::new(EngineConfig::default())?;
+    let engine = read_engine(payload.len())?;
     let memory = Arc::new(HostMemory::new(payload)?);
     let reg =
         engine.register_host_memory(memory.clone(), 0, memory.len(), Permission::RemoteRead)?;
@@ -63,7 +69,7 @@ pub(super) fn interrupted(peer: &str, outcome: &str) -> Result<()> {
         ),
         _ => return Err("unknown READ outcome".into()),
     };
-    let engine = Arc::new(TransferEngine::new(EngineConfig::default())?);
+    let engine = Arc::new(read_engine(BULK_BYTES)?);
     let peer = open(&engine, peer)?;
     let [region] = peer.regions() else {
         return Err("expected one READ source".into());

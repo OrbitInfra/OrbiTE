@@ -177,7 +177,7 @@ void check_pending(tent_engine_t te, tent_batch_id_t id) {
         "READ no longer pending");
 }
 
-constexpr size_t kBulkReadBytes = 8 << 20;
+constexpr size_t kBulkReadBytes = 64 << 20;
 
 void interrupted_read(const char *peer, const std::string &outcome) {
   require(outcome == "cut" || outcome == "resume", "unknown READ outcome");
