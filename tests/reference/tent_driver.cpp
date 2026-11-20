@@ -186,6 +186,9 @@ void interrupted_read(const char *peer, const std::string &outcome) {
   // The control measures a single READ. A new connection to the killed source
   // would exercise retry policy after the reply was already interrupted.
   tent_set_config("transports/tcp/max_retry_count", "0");
+  // TENT caches descriptors on each TCP worker. Warm the worker that will
+  // issue the measured READ before the controller pauses either process.
+  tent_set_config("transports/tcp/max_concurrent_tasks", "1");
   auto requester = engine();
   auto *te = requester.get();
   try {
@@ -199,6 +202,13 @@ void interrupted_read(const char *peer, const std::string &outcome) {
             "register destination");
     checked(tent_open_segment(te, &req.target_id, peer), "open READ source");
     req.target_offset = source_address(te, req.target_id, req.length);
+    auto warm = req;
+    warm.length = 1;
+    auto warm_id = allocate_batch(te, 1);
+    checked(tent_submit(te, warm_id, &warm, 1), "warm READ connection");
+    finish_batch(te, warm_id, 1, "warmup");
+    require(dst[1] == 0x6d, "warm READ returned the wrong byte");
+    dst[1] = 0xee;
     auto id = allocate_batch(te, 1);
     std::cout << "OPEN" << std::endl;
     command("submit");

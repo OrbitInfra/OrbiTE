@@ -71,12 +71,23 @@ pub(super) fn interrupted(peer: &str, outcome: &str) -> Result<()> {
     let dst = Arc::new(HostMemory::new(vec![0xee; BULK_BYTES + 2].into())?);
     let owner = Arc::downgrade(&dst);
     let reg = engine.register_host_memory(dst.clone(), 0, dst.len(), Permission::LocalOnly)?;
-    let read = TransferRequest::new(
-        Transport::Tcp,
-        dst.base_address() + 1,
-        region.base_address(),
-        BULK_BYTES,
-    );
+    let request = |length| {
+        TransferRequest::new(
+            Transport::Tcp,
+            dst.base_address() + 1,
+            region.base_address(),
+            length,
+        )
+    };
+    let warm = engine.submit_async(TransferOp::Read, &peer, &[request(1)], None, TIMEOUT)?;
+    finish_batch(warm, "warmup", false)?;
+    let mut first = [0; 1];
+    dst.read(1, &mut first)?;
+    if first != [0x6d] {
+        return Err("warm READ returned the wrong byte".into());
+    }
+    dst.write(1, &[0xee])?;
+    let read = request(BULK_BYTES);
     println!("OPEN");
     command("submit")?;
     let mut batch = engine.submit_async(

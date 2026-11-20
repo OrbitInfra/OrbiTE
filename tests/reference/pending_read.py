@@ -119,6 +119,7 @@ def interrupted_read(driver, cut):
     with Drivers(driver) as peers:
         source, peer = peers.source("--bulk-read-source")
         reader = peers.start("--interrupted-read", peer, outcome)
+        expect(reader, "OBS\tRESULT\twarmup\tcompleted\t1\t1")
         expect(reader, "OPEN")
         # No READ reply can arrive until the requester has submitted and stopped.
         stop(source)

@@ -117,8 +117,10 @@ is prescribed.
 
 The Rust API and frozen TENT C ABI each run two 8 MiB READs in fresh loopback
 processes. The source holds `0x6d` throughout its registered region. The
-destination and its one-byte guards start at `0xee`. After opening the genuine
-descriptor, the controller stops the source, submits one READ and waits for
+destination and its one-byte guards start at `0xee`. Each requester first reads
+and verifies one byte and resets that destination byte. Frozen TENT uses one
+TCP worker here so its thread-local descriptor is already resolved when the
+bulk READ starts. The controller stops the source, submits the bulk READ and waits for
 request bytes to reach that source's socket. It then stops the requester and
 resumes the source.
 
