@@ -115,6 +115,12 @@ its budget, and the Python guard rejects close until drain. A later READ on
 the stopped segment owns a separate destination and budget. Both remain
 charged while pending and can be retired in reverse order after resumption.
 
+Standard TCP receives a READ reply into task-owned storage and commits to
+the caller's destination only after the complete payload arrives. The
+[interrupted READ control](cpu-oracle.md#interrupted-read-reply) checks that
+an observed socket prefix can coexist with zero committed bytes and a busy
+destination. A connection lost at this point fails the task with zero bytes.
+
 ## Peer retirement
 
 `runtime/segment_manager.rs` owns a bounded table of endpoint/epoch identities.
