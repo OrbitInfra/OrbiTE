@@ -75,6 +75,8 @@ each driver checks that descriptors identify its actual backing.
 
 Lines beginning `OBS` are compared exactly. Native errors, failed processes,
 timeouts, missing observations, extra messages and missing cleanup fail the run.
+The controller consumes any buffered output through EOF. Its regression test
+requires a duplicate final receipt from a successful child to fail.
 Seven comparator controls deliberately corrupt bytes/counts/status, swap the
 two batches' byte counts, or remove/add observations and require rejection. These are comparator checks,
 not network, epoch or lifetime fault injection. The existing Rust tests retain their real

@@ -55,9 +55,12 @@ def send(child, command):
 
 
 def finish(child):
-    extra, _ = child.communicate()
-    if child.returncode or extra:
-        raise RuntimeError(f"{child.args} exited {child.returncode}: {extra!r}")
+    child.stdin.close()
+    # readline() may already have buffered another receipt above the pipe.
+    extra = child.stdout.read()
+    code = child.wait()
+    if code or extra:
+        raise RuntimeError(f"{child.args} exited {code}: {extra!r}")
 
 
 def stop(child):
