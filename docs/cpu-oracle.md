@@ -2,8 +2,8 @@
 
 P0.1 supplies one executable behavior trace for the CPU/TCP profile. The public
 OrbiTE Rust API, the frozen native TENT C ABI and the installed OrbiTE Python API
-run independently. Both the shared trace and the stopped-source case use real
-host backing and loopback TCP within each runtime.
+run independently. The shared trace, stopped-source case and same-endpoint
+restart use real host backing and loopback TCP within each runtime.
 
 ## Reference and build boundary
 
@@ -152,7 +152,7 @@ the source designated for interruption may exit on `SIGKILL`.
 One requester reads `old` from a registered three-byte source. After that
 source exits cleanly, a new process registers `new` at the same loopback
 control endpoint. The controller waits for the new source to advertise the
-original endpoint before releasing the requester. Both drivers must retire
+original endpoint before releasing the requester. All three drivers must retire
 the old handle, read the new marker through a fresh handle, preserve the
 one-byte destination guards on both reads and exit cleanly.
 
@@ -163,12 +163,22 @@ completed requests, zero bytes and `RemoteEffect::None`. Its destination and
 guards must still contain their reset value. After explicit retirement the
 same handle must report `PeerClosed` at admission.
 
+The installed Python wheel opens both epochs in the same requester.
+Opening the old epoch must raise `EpochMismatchError`. Submitting a READ
+through the still-open old handle returns one failed, drained task with the
+same failure message and `remote_effect="none"`. It reports zero bytes. The
+driver checks the entire destination after drain. Once `RemoteSegment.close()`
+releases the Python handle, another submit through that handle must raise
+`InvalidRangeError` and admit zero tasks. After the fresh READ, unregistering
+allows the destination bytearray to resize and the requester releases its batch
+and memory charges.
+
 Frozen TENT identifies a segment by name and has no source-epoch argument.
 Its requester explicitly closes the old segment and reopens the name. The
 new ID must differ, and looking up the retired ID must fail in the local
 segment index. Only the fresh descriptor is used to read the replacement.
-The manifest's `restart_read` records the shared receipts. The Rust driver's
-stderr also records its epoch check.
+The manifest's `restart_read` records the six receipts for each driver run.
+The Rust and Python drivers also record their epoch checks on stderr.
 
 ## Run the gates
 
@@ -242,8 +252,8 @@ python -I tests/reference/run.py --python-wheel "$WHEEL" \
   --output /var/tmp/orbite-wheel-trace-001
 ```
 
-The result `passed-python-wheel-trace` requires the stopped-source case and all
-29 shared trace observations, including
+The result `passed-python-wheel-trace` requires the stopped-source case, the
+same-endpoint restart and all 29 shared trace observations, including
 duplicate registration and permission retention, guard bytes, independent batch
 receipts, empty batches, and notification order and multiplicity. Live aliases must keep the Python
 exporter pinned, and final unregister must allow resizing. Before emitting

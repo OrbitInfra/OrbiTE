@@ -37,8 +37,9 @@ destination byte after resumption and after source death. The run records
 socket queue observations separately from task and batch byte counts. The
 [restart control](cpu-oracle.md#same-endpoint-source-restart) compares the
 retirement and guarded READ receipts from two successive source processes on
-one endpoint. Rust also requires a stale READ to drain with `EpochMismatch`
-and zero bytes while the replacement is serving. The
+one endpoint. Rust and the installed Python wheel require a stale READ to drain
+with an epoch mismatch, zero transferred bytes and intact destination guards
+while the replacement is serving. The
 [tebench gate](cpu-oracle.md#frozen-tebench-byte-checks)
 records a seeded WRITE, a verified READ, a one-byte rejection and a verified
 READ after restoration on CPU/TCP. Three frozen RPC prefixes and a real frozen client exercise
@@ -254,9 +255,11 @@ The Python driver verifies that live duplicate registrations pin the exporter
 and final unregister permits resizing. In the separate stopped-source case a
 busy registration rejects close after the other peer has drained. Two batches
 on the stopped segment retain separate charges until peer progress resumes.
-The exporter is released after its own READ completes. The `cpu-trace-*` artifacts preserve
-the exact wheel SHA-256, fixture and driver hashes, seven comparator controls,
-and both sets of receipts. These results cover the installed CPU/TCP profile.
+The exporter is released after its own READ completes. For a same-endpoint
+restart, the wheel must reject the old epoch, release the old handle and read
+the replacement's three bytes with intact guards. The `cpu-trace-*` artifacts
+preserve the exact wheel SHA-256, fixture and driver hashes, seven comparator
+controls and the shared trace, stopped-source and restart receipts. These results cover the installed CPU/TCP profile.
 
 The specific installed tests are
 `test_installed_distribution_and_surface`, `test_two_process_tcp_installed_wheel`,

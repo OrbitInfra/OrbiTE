@@ -96,7 +96,9 @@ After a partial reply reaches the requester, resuming the source must complete
 the entire READ. Killing the source must leave the destination and guards intact.
 The [same-endpoint restart](cpu-oracle.md#same-endpoint-source-restart) keeps the
 requester alive across two source processes and checks old-handle retirement and
-fresh READ bytes. Rust also checks its source-epoch fence before local retirement.
+fresh READ bytes. Both Rust and the installed Python wheel reject the old epoch
+while the replacement serves. The next CPU wheel control is the interrupted
+bulk READ with a partial reply.
 The remaining P0 cases and the installed hardware queue are listed below.
 
 Follow the maintainer's 2026-11-09 order, one PR at a time, stopping for review
@@ -166,10 +168,10 @@ Done:
   three-process case holds one source stopped, checks independent completion
   on the other peer, and observes two same-peer batches pending before
   resumption. Both receipts and guarded destinations are checked at retirement.
-  Independent Rust and native READ controls also cover a reply interrupted
-  by source loss and a replacement source on the same control endpoint.
-  Rust checks `EpochMismatch` on the original descriptor. Frozen TENT checks
-  its retired segment ID after closing and reopening the name.
+  Rust and native TENT also cover a reply interrupted by source loss. All
+  three drivers cover source replacement on the same control endpoint. Rust
+  and Python check the old epoch before closing the original descriptor.
+  Frozen TENT checks its retired segment ID after closing and reopening the name.
 
 - **P0 native tebench bytes (Implemented).** The frozen benchmark writes and reads
   guarded CPU memory over TCP. A single-byte mismatch must fail and restoring
