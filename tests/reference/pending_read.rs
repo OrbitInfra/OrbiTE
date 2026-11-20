@@ -108,8 +108,6 @@ pub(super) fn restart(peer: &str) -> Result<()> {
     }
     let old_request = [request(&old)?];
     let report = engine.submit_and_wait(TransferOp::Read, &old, &old_request, TIMEOUT)?;
-    let mut bytes = [0; 5];
-    dst.read(0, &mut bytes)?;
     let fenced = report.failure.as_ref().is_some_and(|failure| {
         matches!(failure.error, orbite::Error::EpochMismatch)
             && failure.remote_effect == RemoteEffect::None
@@ -117,9 +115,13 @@ pub(super) fn restart(peer: &str) -> Result<()> {
     if !fenced
         || !report.locally_drained
         || (report.completed_requests, report.transferred_bytes) != (0, 0)
-        || bytes != guard
     {
-        return Err(format!("stale READ returned {report:?} with destination {bytes:?}").into());
+        return Err(format!("stale READ returned {report:?}").into());
+    }
+    let mut bytes = [0; 5];
+    dst.read(0, &mut bytes)?;
+    if bytes != guard {
+        return Err(format!("stale READ changed the destination: {bytes:?}").into());
     }
     eprintln!("old Describe and READ: EpochMismatch, zero bytes, drained, destination intact");
     engine.close_segment(old.endpoint(), old.source_epoch(), TIMEOUT)?;
