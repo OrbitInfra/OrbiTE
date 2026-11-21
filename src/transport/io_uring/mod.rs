@@ -251,7 +251,11 @@ pub(crate) struct Submitted {
 unsafe impl Send for Submitted {}
 
 impl Submitted {
-    /// Peek, then briefly wait for the single-request caller's completion.
+    pub(crate) fn consumed(&self) -> usize {
+        self.drain.consumed
+    }
+
+    /// Wait briefly for the caller's entire submitted prefix.
     /// Expiry or an enter error hands the unchanged owner to the drain worker;
     /// neither is a release receipt or permission to submit the SQE again.
     pub(crate) fn complete_small(
@@ -262,27 +266,39 @@ impl Submitted {
         if self.drain.status.is_err() || self.drain.consumed == 0 {
             return Ok(self.report(operation, progress));
         }
-        if self.drain.consumed == 1 {
-            let receipt = match self.live.ring.peek() {
-                Ok(Some(cqe)) => Some(cqe),
-                Ok(None) => self.wait_small(),
-                Err(_) => None,
+        if self.drain.consumed > 1 {
+            let until = (Instant::now() + SMALL_WAIT).min(self.deadline);
+            // Leave every CQE in the ring unless all are visible. The worker
+            // can then use the ordinary drain, even after a short submission.
+            return if self
+                .live
+                .ring
+                .batch_ready(self.drain.consumed as u32, until)
+            {
+                Ok(self.finish(operation, progress))
+            } else {
+                Err(self)
             };
-            if let Some((id, result)) = receipt {
-                if id != 0
-                    || !observe(
-                        &mut self.live.tasks,
-                        0,
-                        result,
-                        operation,
-                        self.deadline,
-                        progress,
-                    )
-                {
-                    self.drain.status = Err(-libc::EPROTO);
-                }
-                return Ok(self.report(operation, progress));
+        }
+        let receipt = match self.live.ring.peek() {
+            Ok(Some(cqe)) => Some(cqe),
+            Ok(None) => self.wait_small(),
+            Err(_) => None,
+        };
+        if let Some((id, result)) = receipt {
+            if id != 0
+                || !observe(
+                    &mut self.live.tasks,
+                    0,
+                    result,
+                    operation,
+                    self.deadline,
+                    progress,
+                )
+            {
+                self.drain.status = Err(-libc::EPROTO);
             }
+            return Ok(self.report(operation, progress));
         }
         Err(self)
     }

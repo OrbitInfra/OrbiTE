@@ -18,7 +18,7 @@ fn caller_wait_is_bounded_by_one_window_the_request_deadline_and_three_enters() 
                 ring: ring::create(1)?,
                 trace: trace.clone(),
                 _lifetime: Arc::new(()),
-                receipt: None,
+                receipts: Default::default(),
                 ready: false,
                 no_space: false,
             }),

@@ -24,6 +24,10 @@ on:
         description: Use the frozen OrbiTE baseline and fail on any CPU workload outside its limits
         type: boolean
         default: false
+      repeat_baseline:
+        description: Measure the same frozen OrbiTE binary in both sweeps to assess run-to-run variation
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -33,7 +37,7 @@ jobs:
     # Release PRs run this same job through release.yml, once per revision.
     if: ${{ !startsWith(github.head_ref, 'release/') || inputs.release_gate }}
     runs-on: ubuntu-24.04
-    timeout-minutes: ${{ (inputs.baseline_ref != '' || inputs.enforce_cpu_guards) && 240 || 120 }}
+    timeout-minutes: ${{ (inputs.baseline_ref != '' || inputs.enforce_cpu_guards || inputs.repeat_baseline) && 240 || 120 }}
     strategy:
       fail-fast: false
       matrix:
@@ -49,15 +53,15 @@ jobs:
         with:
           fetch-depth: 0
       - name: Select the paired measurement revision
-        if: inputs.baseline_ref != '' || inputs.enforce_cpu_guards
+        if: inputs.baseline_ref != '' || inputs.enforce_cpu_guards || inputs.repeat_baseline
         env:
           BASELINE_REF: ${{ inputs.baseline_ref }}
-          ENFORCE: ${{ inputs.enforce_cpu_guards }}
+          FROZEN_PAIR: ${{ inputs.enforce_cpu_guards || inputs.repeat_baseline }}
           DIAGNOSTIC: ${{ inputs.profile_only || inputs.tail_profile_only }}
         run: |
           frozen=$(PYTHONPATH=benches python3 -Bc 'from guards import ORBITE_BASELINE; print(ORBITE_BASELINE)')
           ref=$(git rev-parse --verify --end-of-options "${BASELINE_REF:-$frozen}^{commit}")
-          if [[ "$ENFORCE" == true && ( "$ref" != "$frozen" || "$DIAGNOSTIC" == true ) ]]; then
+          if [[ "$FROZEN_PAIR" == true && ( "$ref" != "$frozen" || "$DIAGNOSTIC" == true ) ]]; then
             echo "Formal CPU guards require the frozen OrbiTE revision and untraced sweeps" >&2
             exit 2
           fi
@@ -121,7 +125,7 @@ jobs:
           fi
           python3 benches/run.py --reference "$RUNNER_TEMP/orbite-native-cpu" --output "$RUNNER_TEMP/orbite-profiles" --ext4 "$ORBITE_EXT4_DIR" --samples 1000 --warmup 3 --workers 2 --trials 3 --tail-profile-only
       - name: Matched baseline sweeps on the same runner
-        if: (inputs.baseline_ref != '' || inputs.enforce_cpu_guards) && !inputs.profile_only && !inputs.tail_profile_only
+        if: (inputs.baseline_ref != '' || inputs.enforce_cpu_guards || inputs.repeat_baseline) && !inputs.profile_only && !inputs.tail_profile_only
         env:
           CARGO_TARGET_DIR: ${{ runner.temp }}/baseline-target
         run: |
@@ -134,7 +138,15 @@ jobs:
           python3 benches/run.py "${args[@]}" --reference "$RUNNER_TEMP/orbite-native-cpu" --output "$RUNNER_TEMP/orbite-bench-before" --ext4 "$ORBITE_EXT4_DIR" --samples 100 --warmup 3 --workers 2 --trials 3
       - name: Matched byte-checked CPU sweeps (no hardware)
         if: '!inputs.profile_only && !inputs.tail_profile_only'
-        run: python3 benches/run.py --reference "$RUNNER_TEMP/orbite-native-cpu" --output "$RUNNER_TEMP/orbite-bench" --ext4 "$ORBITE_EXT4_DIR" --samples 100 --warmup 3 --workers 2 --trials 3
+        env:
+          REPEAT_BASELINE: ${{ inputs.repeat_baseline }}
+        run: |
+          args=()
+          if [[ "$REPEAT_BASELINE" == true ]]; then
+            export CARGO_TARGET_DIR="$RUNNER_TEMP/baseline-target"
+            args+=(--orbite-source "$RUNNER_TEMP/orbite-before")
+          fi
+          python3 benches/run.py "${args[@]}" --reference "$RUNNER_TEMP/orbite-native-cpu" --output "$RUNNER_TEMP/orbite-bench" --ext4 "$ORBITE_EXT4_DIR" --samples 100 --warmup 3 --workers 2 --trials 3
       - name: Record CPU workload guard verdicts
         if: '!inputs.profile_only && !inputs.tail_profile_only'
         env:

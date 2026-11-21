@@ -150,9 +150,51 @@ remain usable with the descriptive `compare.py` report.
 
 Keep every crossing visible. Hosted clock, scheduler and virtual-disk
 variation can move a median even with identical source. A rerun may inform
-attribution and must retain both reports. Virtual ext4 measures this warmed
+attribution and must retain both reports. Dispatch the same workflow with
+`repeat_baseline=true` for two complete sweeps using the same frozen OrbiTE
+checkout and binary on each runner. Both sweeps use independent processes and
+also measure frozen TENT. The guard report labels baseline crossings in this
+control `same-revision-variation` and rejects a mismatched OrbiTE binary hash. Virtual ext4 measures this warmed
 guest workload. Physical NVMe tails, mixed load, faults and Python API
 correctness have separate gates.
+
+### Buffered small WRITE groups
+
+In the [pre-change
+comparison](https://github.com/OrbitInfra/OrbiTE/actions/runs/44861551257), stable and Rust
+1.85 crossed the same metric on 5 of 96 OrbiTE baseline workloads and 30 of 64 matched TENT
+workloads. For warmed tmpfs WRITE at eight gapped 4 KiB offsets, OrbiTE delivered 29% of
+TENT goodput on both toolchains and used about 2.9 times its CPU per byte.
+
+The [identical-binary repeat](https://github.com/OrbitInfra/OrbiTE/actions/runs/44868059481)
+produced 20/96 self-baseline crossings on stable and 18/96 on Rust 1.85. Of the 5 shapes
+that crossed on both toolchains, 4 shared a metric. All five earlier self-baseline signals
+fell inside their limits on both toolchains. Of the 30 earlier TENT gaps, 28 reproduced at
+least one common metric. Each runner used the same OrbiTE and TENT binary hashes for both
+sweeps, with fresh processes and independent sweep IDs.
+
+The [same-runner comparison](https://github.com/OrbitInfra/OrbiTE/actions/runs/44868978517)
+pairs frozen OrbiTE with the buffered-WRITE change at `625f0ed5`. The table shows the
+medians of three trials for the target workload. Columns give frozen OrbiTE → candidate,
+followed by frozen TENT from the candidate sweep in parentheses.
+
+| Rust | Verified GiB/s | p99 µs | CPU ns/byte | Peak RSS KiB |
+|---|---:|---:|---:|---:|
+| stable | 0.179 → 0.366 (0.367) | 219.5 → 157.3 (164.0) | 6.68 → 3.01 (3.17) | 3760 → 3892 (18616) |
+| 1.85.0 | 0.143 → 0.318 (0.287) | 318.8 → 223.7 (214.1) | 8.20 → 3.41 (4.00) | 3596 → 3568 (18660) |
+
+Both toolchains met all four TENT targets for the gapped WRITE. In the same paired run, five
+other workloads crossed a common self-baseline guard. Ext4 WRITE goodput crossed for a
+single 4 KiB block and eight gapped 4 KiB blocks. The single 4 KiB tmpfs READ and WRITE and
+the SHM contiguous 8 × 4 KiB READ crossed the p99 guard. These signals stay open for
+follow-up.
+
+Independent Linux aarch64 tracing counted one batch-worker start per target batch before the
+change and zero after, with one ring setup in both cases. The target kept all eight physical
+owners. The 64-request control still started a worker. The [full crossing
+tables](https://github.com/OrbitInfra/OrbiTE/pull/221) retain results for the other CPU
+cases. See [file submission and drain](storage.md#dram-transfers-with-io_uring) for bounds,
+incomplete CQ sets and worker failure.
 
 ## TCP profile and connection reuse
 
@@ -339,13 +381,13 @@ separate `perf stat` WRITE sample changes p50/process-CPU from 197/193 to
 Blocking CQ waits still sleep and wake. These diagnostic runs do not replace
 the untraced paired comparison.
 
-The caller now submits one contiguous host request of at most 64 KiB on an
+The single-request change submits one contiguous host request of at most 64 KiB on an
 idle batch, checks the CQ once, then waits up to 200 µs, capped by the request
 deadline. At most three interrupted/unready waits share that window. A CQE
 finishes through the normal prefix and admission owners. A missed window or
 enter error moves the same ring to the existing drain worker without resubmission.
 Runtime queues, background progress, eligible fallback, CUDA/pinned producer
-waits, vectors and larger groups retain their worker path. No ring pool,
+waits and vectors use the worker. The later [buffered WRITE comparison](#buffered-small-write-groups) covers small groups. No ring pool,
 thread pool or coordinator is added. The [owner controls](storage.md) preserve
 preflight, partial-submit drain, exact short prefixes and quarantine. The
 late-CQE tmpfs/ext4 control counts zero worker starts; disabling only the
@@ -553,7 +595,7 @@ The proposed engine explanations can be narrowed:
   `aligned_file_batches_use_one_ring_without_bounce_for_gaps_or_contiguous_ranges`
   control fails every bounce allocation and checks one ring, full bytes and
   guards for READ/WRITE, 8/64 blocks, contiguous/gapped, ext4/tmpfs.
-- OrbiTE creates **one batch worker** per multi-request submission; TENT
+- The traced direct-I/O workload creates **one OrbiTE batch worker** per multi-request submission; TENT
   creates none. Before-first-SQE time in OrbiTE's slow 64-block samples is
   105–148 µs in the fixed paired traces, much shorter than the block wait. Removing thread creation
   cannot by itself explain or eliminate the measured millisecond tail.

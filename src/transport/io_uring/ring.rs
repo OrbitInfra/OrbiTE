@@ -13,6 +13,10 @@ pub(super) trait Ring: Send {
     fn submit(&mut self, count: u32) -> io::Result<usize>;
     fn peek(&mut self) -> io::Result<Option<(u64, i32)>>;
     fn reap(&mut self, until: Instant) -> io::Result<(u64, i32)>;
+    // Adapters without a non-consuming CQ count defer the group to the worker.
+    fn batch_ready(&mut self, _count: u32, _until: Instant) -> bool {
+        false
+    }
 }
 
 pub(super) fn create(count: u32) -> io::Result<Box<dyn Ring>> {
@@ -63,22 +67,37 @@ impl Ring for IoUring {
                 return Ok((cqe.user_data(), cqe.result()));
             }
             if self.params().is_feature_ext_arg() {
-                let ts = types::Timespec::from(wait);
-                let args = types::SubmitArgs::new().timespec(&ts);
-                // SAFETY: EXT_ARG selects SubmitArgs' kernel layout, and ts lives
-                // through enter. Zero submissions keeps any unconsumed tail untouched.
-                unsafe {
-                    self.submitter().enter(
-                        0,
-                        1,
-                        (EnterFlags::GETEVENTS | EnterFlags::EXT_ARG).bits(),
-                        Some(&args),
-                    )
-                }?;
+                wait_completions(self, 1, wait)?;
             } else {
                 wait_readable(self, wait)?;
             }
         }
+    }
+    fn batch_ready(&mut self, count: u32, until: Instant) -> bool {
+        if self.completion().len() >= count as usize {
+            return true;
+        }
+        let wait = until.saturating_duration_since(Instant::now());
+        if wait.is_zero() || !self.params().is_feature_ext_arg() {
+            return false;
+        }
+        wait_completions(self, count, wait).is_ok() && self.completion().len() >= count as usize
+    }
+}
+
+#[allow(unsafe_code)]
+fn wait_completions(ring: &IoUring, count: u32, wait: Duration) -> io::Result<usize> {
+    let ts = types::Timespec::from(wait);
+    let args = types::SubmitArgs::new().timespec(&ts);
+    // SAFETY: EXT_ARG selects SubmitArgs' kernel layout, and ts lives through
+    // enter. Zero submissions keeps any unconsumed SQ tail untouched.
+    unsafe {
+        ring.submitter().enter(
+            0,
+            count,
+            (EnterFlags::GETEVENTS | EnterFlags::EXT_ARG).bits(),
+            Some(&args),
+        )
     }
 }
 

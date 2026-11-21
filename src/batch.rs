@@ -480,7 +480,7 @@ impl Batch {
             Ok(report) => progress.finish_group(engine, job, report),
             Err(pending) => {
                 job.pending_file = Some(pending);
-                // No CQE: move the live ring to the existing worker, never
+                // Move the live ring and all its CQEs to the existing worker, never
                 // prepare or submit again. A spawn failure keeps all owners.
                 if let Err(error) = self.start_worker(progress, engine) {
                     let code = match &error {
@@ -1268,7 +1268,7 @@ impl BatchProgress {
                 transferred_bytes: 0,
                 failure: Some(TransferFailure {
                     request_index: 0,
-                    affected_requests: 1,
+                    affected_requests: job.pending_file.as_ref().map_or(1, |p| p.consumed()),
                     error: Error::Unquiesced { operation, code },
                     remote_effect: if job.prepared.operation == TransferOp::Write {
                         RemoteEffect::Unknown

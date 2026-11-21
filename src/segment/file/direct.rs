@@ -63,6 +63,16 @@ impl DirectFile {
 }
 
 impl FileLease {
+    #[cfg(feature = "io-uring")]
+    pub(crate) fn known_buffered(&self) -> bool {
+        self.permit.0.lock().is_ok_and(|state| {
+            state
+                .direct
+                .as_ref()
+                .is_some_and(|direct| direct.file.is_none())
+        })
+    }
+
     /// Linux validates DIO alignment for each vector element independently.
     #[cfg(feature = "io-uring")]
     pub(crate) fn file_for_iovecs(&self, offset: u64, iovecs: &[libc::iovec]) -> Result<Arc<File>> {
