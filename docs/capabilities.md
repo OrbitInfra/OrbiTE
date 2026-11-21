@@ -77,6 +77,8 @@ The [frozen tebench byte gate](cpu-oracle.md#frozen-tebench-byte-checks) exercis
 a completed native TCP read with a wrong payload byte and checks recovery after
 the target restores it.
 
+The [CPU result manifest](cpu-oracle.md#cpu-result-manifest) identifies the
+drivers and byte receipts required for each correctness profile.
 [CPU benchmark and fault fixtures](benchmarks.md) cover verified size/batch
 sweeps and the software backend lifetime matrix. They add no hardware
 qualification; GPU/RDMA/GDS installed fault fixtures remain queued.

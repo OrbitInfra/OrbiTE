@@ -404,8 +404,18 @@ jobs:
         if: matrix.features == ''
         run: |
           python3 tests/reference/run.py --rust-only --output "$RUNNER_TEMP/orbite-cpu-trace-${{ matrix.toolchain }}"
+          python3 -I -B tests/reference/test_manifest.py "$RUNNER_TEMP/orbite-cpu-trace-${{ matrix.toolchain }}/manifest.json"
           python3 -c 'import sys; sys.path.insert(0, "benches"); from analyze_io_tail import controls; controls()'
           python3 -c 'import sys; sys.path.insert(0, "benches"); from compare import controls; controls()'
+      - name: Preserve Rust CPU trace receipts
+        if: always() && matrix.features == ''
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: rust-cpu-trace-${{ matrix.toolchain }}
+          path: |
+            ${{ runner.temp }}/orbite-cpu-trace-${{ matrix.toolchain }}/manifest.json
+            ${{ runner.temp }}/orbite-cpu-trace-${{ matrix.toolchain }}/*.stdout
+            ${{ runner.temp }}/orbite-cpu-trace-${{ matrix.toolchain }}/*.stderr
       - name: Native peer supervision ownership control
         if: matrix.toolchain == 'stable' && matrix.features == ''
         run: python3 -B -m unittest discover -s tests/hardware -p 'test_*.py'

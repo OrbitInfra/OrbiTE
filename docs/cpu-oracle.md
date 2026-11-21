@@ -188,6 +188,54 @@ segment index. Only the fresh descriptor is used to read the replacement.
 The manifest's `restart_read` records the six receipts for each driver run.
 The Rust and Python drivers also record their epoch checks on stderr.
 
+## CPU result manifest
+
+Each run writes `manifest.json`, named command records and adjoining stdout
+and stderr files. The [v1 schema for passing manifests](../tests/reference/manifest.schema.json)
+defines the exact READ receipts and driver sets. Every required driver must match
+all 29 ordered observations in [the shared trace](../tests/fixtures/cpu-v1.expected).
+Every profile must reject all seven comparator controls. The checker compares
+the actual trace output, each READ's stdout and the per-driver receipts in the
+manifest. One driver's results cannot supply another driver's evidence.
+
+| Passing status | Required drivers | Required READ receipts per driver | Additional evidence |
+| --- | --- | --- | --- |
+| `passed-rust-fixture-only` | Rust on Linux | Stopped source (10), interrupted reply (14), same-endpoint restart (6) | Rust build, linkage, executable identity and stale-epoch receipt |
+| `passed-cpu-trace` | Rust **and** frozen TENT on Linux | All 10, 14 and 6 for **each** driver | Clean pinned TENT and pybind11 revisions, native build and linkage, guarded tebench WRITE/READ, rejection of a corrupt byte and successful read after restoration |
+| `passed-python-wheel-trace` | Installed Python wheel on Linux | All 10, 14 and 6 | Wheel identity, isolated installation, interpreter, stale-epoch receipt and EOF or connection reset on the interrupted READ |
+| `passed-portable-python-wheel-trace` | Installed Python wheel on other supported POSIX hosts | Stopped source (10) and same-endpoint restart (6) | Same wheel and restart evidence. `unavailable_controls.interrupted_read` gives the reason the Linux socket-queue control could not run |
+
+The 14 interrupted READ receipts cover both source resumption and source loss.
+The log must show a partial reply on each connection. Rust and Python check
+the stale source epoch before retiring the old descriptor. Frozen TENT checks
+its retired local segment ID. In the native tebench gate the seeded WRITE,
+valid READ and restored READ must succeed. The corrupt READ must terminate
+with `SIGABRT` and the byte-mismatch diagnostic. The target must close cleanly.
+
+The runner validates the requested profile before publishing its passing
+status. A missing driver, case, observation, sidecar, failed command, timeout
+or inconsistent byte result fails the run. A run still marked `running` is
+incomplete. A `failed` manifest retains the recorded error and any partial
+logs. Neither status satisfies a passing profile. A missing Linux socket
+facility fails the Linux profile.
+
+To recheck a downloaded artifact, keep its logs beside the manifest and use
+the checker from a checkout with the matching CPU contract. It uses only the
+Python standard library. For a review that requires the frozen comparison, run
+
+```sh
+python3 -I tests/reference/manifest.py /path/to/manifest.json --expect passed-cpu-trace
+```
+
+A complete matching bundle exits with zero. Other results exit nonzero with
+the offending field, command or file. Omitting `--expect` verifies the profile
+that the manifest actually declares. The checker resolves logs beside the
+manifest even when its recorded build paths point to a different machine.
+Binary and wheel digests identify the tested artifacts. Older v1 archives can
+be rechecked when they contain these receipts and the associated logs.
+The matched CPU benchmark checks the frozen comparison bundle before it
+collects measurements.
+
 ## Run the gates
 
 Use Linux with readable `/proc/net/tcp`, Rust 1.85+, Python 3.11.8+, Git, CMake,

@@ -98,8 +98,9 @@ the entire READ. Killing the source must leave the destination and guards intact
 The [same-endpoint restart](cpu-oracle.md#same-endpoint-source-restart) keeps the
 requester alive across two source processes and checks old-handle retirement and
 fresh READ bytes. Both Rust and the installed Python wheel reject the old epoch
-while the replacement serves. The next P0 task is to specify the CPU run-manifest
-schema, including which receipts each profile requires for a pass.
+while the replacement serves. The [CPU result manifest](cpu-oracle.md#cpu-result-manifest)
+defines the required drivers, receipts and logs for each pass. The runner and
+the offline checker enforce the same contract.
 The remaining P0 cases and the installed hardware queue are listed below.
 
 Follow the maintainer's 2026-11-09 order, one PR at a time, stopping for review
@@ -174,6 +175,8 @@ Done:
   on the same control endpoint. Rust
   and Python check the old epoch before closing the original descriptor.
   Frozen TENT checks its retired segment ID after closing and reopening the name.
+  The v1 result schema covers the Rust fixture, frozen comparison, installed
+  Linux wheel and portable wheel. Incomplete runs retain their diagnostics.
 
 - **P0 native tebench bytes (Implemented).** The frozen benchmark writes and reads
   guarded CPU memory over TCP. A single-byte mismatch must fail and restoring
@@ -191,8 +194,8 @@ Open:
 - [ ] Extend the CPU oracle beyond the shared valid-input trace with further
   native/Python behavior, Python guard cases and hardware tebench profiles, with
   hardware triggers where needed.
-- [ ] Write the run-manifest schema and freeze workload-specific resource and
-  performance guards before formal measurements.
+- [ ] Freeze workload-specific resource and performance guards before formal
+  measurements. The CPU correctness manifest is defined above.
 
 Exit: every in-scope owner has reference paths, negative controls and result formats, and the oracle runs its CPU controls independently of OrbitKV.
 

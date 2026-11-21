@@ -56,7 +56,9 @@ jobs:
           sudo sysctl -w kernel.perf_event_paranoid=-1
           sudo sysctl -w kernel.kptr_restrict=0
       - name: Compare frozen native TENT and OrbiTE
-        run: python3 tests/reference/run.py --fetch-reference --output "$RUNNER_TEMP/orbite-native-cpu"
+        run: |
+          python3 tests/reference/run.py --fetch-reference --output "$RUNNER_TEMP/orbite-native-cpu"
+          python3 -I -B tests/reference/test_manifest.py "$RUNNER_TEMP/orbite-native-cpu/manifest.json"
       - name: Reject the frozen TENT client at the native listener
         run: |
           native="$RUNNER_TEMP/orbite-native-cpu"

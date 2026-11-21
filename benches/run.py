@@ -8,9 +8,11 @@ from pathlib import Path
 import platform
 import statistics
 import subprocess
+import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-CONTRACT = json.loads((ROOT / "tests/reference/contract.json").read_text())
+sys.path.insert(0, str(ROOT / "tests/reference"))
+from manifest import CONTRACT, load_manifest, validate as validate_cpu_manifest
 
 
 def summarize(row, count, payload):
@@ -85,9 +87,8 @@ def main():
     source = ref / "reference"
     if run("tent-revision", ["git", "-C", source, "rev-parse", "HEAD"]).strip() != CONTRACT["tent_revision"]:
         raise ValueError("not the frozen TENT reference")
-    oracle = json.loads((ref / "manifest.json").read_text())
-    if oracle["status"] != "passed-cpu-trace" or not oracle["native_executed"]:
-        raise ValueError("reference CPU oracle must pass first")
+    oracle = load_manifest(ref / "manifest.json")
+    validate_cpu_manifest(oracle, ref, "passed-cpu-trace")
     for path, expected in [(a.ext4, "ext4"), (a.tmpfs, "tmpfs")]:
         if run(expected+"-fs", ["findmnt", "-n", "-o", "FSTYPE", "-T", path]).strip() != expected:
             raise ValueError(f"{path} is not {expected}")
