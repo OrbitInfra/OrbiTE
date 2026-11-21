@@ -388,24 +388,36 @@ impl TransferEngine {
         let PreparedTarget::File { requests, .. } = &submission.payload else {
             return false;
         };
-        // Keep queued/deferred policy and CUDA producer waits on their existing
-        // worker. One small host request can use a bounded caller CQ wait.
-        let [request] = requests.as_slice() else {
+        let Some(first) = requests.first() else {
             return false;
         };
+        // Bound caller-side preparation as well as the CQ wait. Multi-request
+        // writes use this path only after the retained file proved buffered.
+        const MAX_REQUESTS: usize = 8;
+        const MAX_BYTES: usize = 64 << 10;
         self.runtime_queue.is_none()
             && self.progress_worker.is_none()
-            && request.length <= 64 << 10
-            && request.selection.transport == Transport::IoUring
-            && (self.config.max_failover_attempts == 0 || !request.selection.has_fallback())
-            && !request.parts.vectored()
-            && !request.parts.has_cuda()
-            && request.parts[0].local.as_ref().is_some_and(|m| {
-                #[cfg(feature = "cuda")]
-                if m.is_cuda_pinned_host() {
-                    return false;
-                }
-                m.memory_type() == crate::MemoryType::Cpu
+            && requests.len() <= MAX_REQUESTS
+            && requests
+                .iter()
+                .map(|r| r.length)
+                .try_fold(0usize, usize::checked_add)
+                .is_some_and(|n| n <= MAX_BYTES)
+            && (requests.len() == 1
+                || (submission.operation == TransferOp::Write && first.lease.known_buffered()))
+            && first.selection.transport == Transport::IoUring
+            && (self.config.max_failover_attempts == 0 || !first.selection.has_fallback())
+            && requests.iter().zip(&submission.owners).all(|(r, owner)| {
+                r.selection == first.selection
+                    && owner.deadline == submission.owners[0].deadline
+                    && !r.parts.vectored()
+                    && r.parts[0].local.as_ref().is_some_and(|m| {
+                        #[cfg(feature = "cuda")]
+                        if m.is_cuda_pinned_host() {
+                            return false;
+                        }
+                        m.memory_type() == crate::MemoryType::Cpu
+                    })
             })
     }
 
@@ -431,28 +443,38 @@ impl TransferEngine {
         let run = || -> Result<crate::transport::io_uring::Submitted> {
             let owner = &submission.owners[0];
             owner.start(|| progress.0.cancel_requested(progress.1))?;
-            #[cfg(feature = "metrics")]
-            if let Some(m) = &owner.metrics {
-                m.dispatched();
-                m.begin(Transport::IoUring);
-            }
-            if attempts.begin_file_group(0, 1) == 0 {
-                return Err(Error::Cancelled);
-            }
             let PreparedTarget::File { requests, .. } = &submission.payload else {
                 return Err(Error::Internal("inline file target"));
             };
+            #[cfg(feature = "metrics")]
+            for o in &submission.owners {
+                if let Some(m) = &o.metrics {
+                    m.dispatched();
+                    m.begin(Transport::IoUring);
+                }
+            }
+            let count = attempts.begin_file_group(0, requests.len());
+            if count == 0 {
+                return Err(Error::Cancelled);
+            }
             self.io_uring
                 .as_ref()
                 .ok_or(Error::Unavailable("io_uring"))?
-                .start_host(submission.operation, requests, 1, owner.deadline)
+                .start_host(
+                    submission.operation,
+                    &requests[..count],
+                    requests.len(),
+                    owner.deadline,
+                )
         };
         match run() {
             Ok(started) => match started.complete_small(submission.operation, Some((&attempts, 0)))
             {
                 Ok(done) => report = done,
                 Err(pending) => {
-                    attempts.posted(0);
+                    for i in 0..pending.consumed() {
+                        attempts.posted(i);
+                    }
                     return Err(pending);
                 }
             },
@@ -491,22 +513,37 @@ impl TransferEngine {
         &self,
         submission: &PreparedSubmission,
         progress: (&BatchProgress, usize),
-        report: BatchReport,
+        mut report: BatchReport,
     ) -> BatchReport {
+        let count = submission.owners.len();
+        // begin_file_group stops at the first queued cancellation. Only that
+        // admitted prefix reached the native owner, including after a handoff.
+        if report.failure.is_none() && report.completed_requests < count {
+            report.failure = Some(TransferFailure {
+                request_index: report.completed_requests,
+                affected_requests: 1,
+                error: Error::Cancelled,
+                remote_effect: RemoteEffect::None,
+            });
+        }
         #[cfg(feature = "metrics")]
-        for o in &submission.owners {
+        for (i, o) in submission.owners.iter().enumerate() {
             if let Some(m) = &o.metrics {
                 m.finish(
-                    report.failure.as_ref().map(|f| &f.error),
+                    report
+                        .failure
+                        .as_ref()
+                        .filter(|f| i >= f.request_index)
+                        .map(|f| &f.error),
                     m.file_posted.load(std::sync::atomic::Ordering::Relaxed),
                 );
             }
         }
-        let report = self.finish_file_group(submission, 0, 1, Some(progress), report);
+        let report = self.finish_file_group(submission, 0, count, Some(progress), report);
         #[cfg(feature = "metrics")]
-        for o in &submission.owners {
+        for (i, o) in submission.owners.iter().enumerate() {
             if let Some(m) = &o.metrics {
-                m.settle_skipped(|| progress.0.cancel_requested(progress.1));
+                m.settle_skipped(|| progress.0.cancel_requested(progress.1 + i));
             }
         }
         report

@@ -334,6 +334,10 @@ for up to 200 µs, capped by its request deadline. At most three EINTR/EAGAIN
 attempts share the same window. Unlike TENT's nonblocking caller status polling,
 this brief wait can finish a late CQE without a thread handoff. A timeout or
 enter error transfers the unchanged ring to the batch worker.
+For a known buffered file, a group of at most eight plain host WRITEs totaling
+64 KiB or less may use the caller under the same policy and deadline. One
+deadline-capped timed enter can wait for the consumed SQ prefix. The single
+CQ owner leaves all completions visible for the worker if the set is incomplete.
 `late_small_cqe_waits_on_caller_without_a_worker_on_tmpfs_and_direct_ext4` holds
 a real CQE past the initial peek and counts zero worker starts.
 `caller_wait_interruptions_errors_and_short_cqe_never_resubmit` checks the shared

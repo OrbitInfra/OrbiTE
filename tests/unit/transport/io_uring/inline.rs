@@ -8,6 +8,8 @@ struct Trace {
     reaps: usize,
     waits: Vec<Instant>,
     wait_ready: bool,
+    group_checks: Vec<(u32, Instant)>,
+    submit_limit: Option<u32>,
     errors: std::collections::VecDeque<i32>,
     alive: std::sync::Weak<()>,
 }
@@ -15,7 +17,7 @@ struct Observed {
     ring: Box<dyn Ring>,
     trace: Arc<Mutex<Trace>>,
     _lifetime: Arc<()>,
-    receipt: Option<(u64, i32)>,
+    receipts: std::collections::VecDeque<(u64, i32)>,
     ready: bool,
     no_space: bool,
 }
@@ -33,22 +35,35 @@ impl Ring for Observed {
         let mut trace = self.trace.lock().unwrap();
         trace.submits += 1;
         trace.submitter = Some(std::thread::current().id());
+        let count = if let Some(left) = &mut trace.submit_limit {
+            if *left == 0 {
+                return Err(io::Error::from_raw_os_error(libc::EIO));
+            }
+            count.min(std::mem::take(left))
+        } else {
+            count
+        };
         drop(trace);
         let n = self.ring.submit(count)?;
-        if n == 1 {
-            // Hold a real kernel receipt to make caller completion deterministic.
-            // No fabricated CQE and no sleep controls the path under test.
-            self.receipt = Some(self.ring.reap(Instant::now() + EVENTUAL_PROGRESS)?);
+        for _ in 0..n {
+            // Hold real CQEs and expose them in reverse order, so independent
+            // task publication and handoff do not depend on kernel timing.
+            self.receipts
+                .push_front(self.ring.reap(Instant::now() + EVENTUAL_PROGRESS)?);
         }
         Ok(n)
     }
     fn peek(&mut self) -> io::Result<Option<(u64, i32)>> {
         self.trace.lock().unwrap().peeks += 1;
         Ok(if self.ready {
-            self.receipt.take()
+            self.receipts.pop_front()
         } else {
             None
         })
+    }
+    fn batch_ready(&mut self, count: u32, until: Instant) -> bool {
+        self.trace.lock().unwrap().group_checks.push((count, until));
+        self.ready && self.receipts.len() >= count as usize
     }
     fn reap(&mut self, until: Instant) -> io::Result<(u64, i32)> {
         let mut t = self.trace.lock().unwrap();
@@ -63,8 +78,8 @@ impl Ring for Observed {
             }
         }
         drop(t);
-        self.receipt
-            .take()
+        self.receipts
+            .pop_front()
             .map_or_else(|| self.ring.reap(until), Ok)
     }
 }
@@ -105,13 +120,16 @@ fn observed_at(
             ring: ring::create(count)?,
             trace: copy.clone(),
             _lifetime: alive,
-            receipt: None,
+            receipts: Default::default(),
             ready,
             no_space,
         }))
     });
     Ok((f, trace))
 }
+
+#[path = "inline_group.rs"]
+mod group;
 
 #[path = "inline_wait.rs"]
 mod wait;

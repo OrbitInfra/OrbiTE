@@ -141,8 +141,13 @@ background progress and route fallback do not apply. After one nonblocking CQ
 check, it may block for a CQE for at most 200 µs or the remaining request deadline,
 whichever is shorter. The wait uses the ring’s timed `GETEVENTS` enter (or
 ring-fd readiness on older kernels), with zero submissions. At most three
-interrupted/unready waits share that one window; there is no spin. A CQE finishes
-through the normal prefix and admission owners without creating a worker. On
+interrupted/unready waits share that one window; there is no spin. For a previously probed buffered file, an idle batch can also submit up to
+eight plain host WRITEs with a common route and deadline, totaling at most
+64 KiB. The caller checks the number of visible CQEs and can make one timed
+wait for the entire consumed SQ prefix. Only a full set is reaped on the
+caller. Each offset, native loan, and completion stays independent. If the
+timed group wait is unavailable, incomplete or interrupted, the worker drains
+the submitted prefix. Both paths publish the usual per-task receipts. On
 expiry or an enter error, the existing batch worker takes the same ring and
 drains it; it never resubmits the request. This bounded caller wait deliberately
 differs from frozen TENT’s nonblocking caller status polling, so an abandoned
