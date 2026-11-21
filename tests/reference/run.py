@@ -275,7 +275,7 @@ def main() -> int:
             wheel = args.python_wheel.resolve()
             if wheel.suffix != ".whl" or not wheel.is_file():
                 raise ValueError(f"expected an existing wheel: {wheel}")
-            manifest["profile"] = "Installed CPython wheel, loopback TCP: shared trace, stopped-source READs with independent peer progress, and same-endpoint source replacement"
+            manifest["profile"] = "Installed CPython wheel, host memory over loopback TCP"
             manifest["python_wheel"] = {"path": str(wheel), "sha256": digest(wheel)}
             venv = output / "venv"
             python = str(venv / "bin/python")
@@ -307,8 +307,15 @@ def main() -> int:
             )
             compare(expected, observations(actual))
             manifest["observations"] = len(expected)
-            for case in ("pending_read", "restart_read"):
+            for case in READ_CONTROLS:
+                if case == "interrupted_read" and sys.platform != "linux":
+                    reason = "Interrupted READ requires Linux /proc/net/tcp to observe a partial reply"
+                    print(reason, file=sys.stderr)
+                    manifest["unavailable_controls"] = {case: reason}
+                    continue
                 read_control(case, "python", [python, "-I", "-B", str(REPO / driver)])
+            if "unavailable_controls" in manifest:
+                return passed("passed-portable-python-wheel-trace")
             return passed("passed-python-wheel-trace")
 
         manifest["rustc"] = run("rustc-version", ["rustc", "-Vv"]).strip()

@@ -91,14 +91,15 @@ requires a healthy peer's READ to drain and two READs on the stopped peer to
 remain pending together. After resumption their handles retire in reverse order.
 The full native comparison also runs the frozen
 [tebench byte checks](cpu-oracle.md#frozen-tebench-byte-checks) on DRAM/TCP.
-The Rust and native drivers also compare [interrupted READ replies](cpu-oracle.md#interrupted-read-reply).
-After a partial reply reaches the requester, resuming the source must complete
+The Rust, frozen TENT and installed Linux wheel drivers also compare
+[interrupted 64 MiB READ replies](cpu-oracle.md#interrupted-read-reply).
+After the requester consumes a prefix, resuming the source must complete
 the entire READ. Killing the source must leave the destination and guards intact.
 The [same-endpoint restart](cpu-oracle.md#same-endpoint-source-restart) keeps the
 requester alive across two source processes and checks old-handle retirement and
 fresh READ bytes. Both Rust and the installed Python wheel reject the old epoch
-while the replacement serves. The next CPU wheel control is the interrupted
-bulk READ with a partial reply.
+while the replacement serves. The next P0 task is to specify the CPU run-manifest
+schema, including which receipts each profile requires for a pass.
 The remaining P0 cases and the installed hardware queue are listed below.
 
 Follow the maintainer's 2026-11-09 order, one PR at a time, stopping for review
@@ -168,8 +169,9 @@ Done:
   three-process case holds one source stopped, checks independent completion
   on the other peer, and observes two same-peer batches pending before
   resumption. Both receipts and guarded destinations are checked at retirement.
-  Rust and native TENT also cover a reply interrupted by source loss. All
-  three drivers cover source replacement on the same control endpoint. Rust
+  All three Linux drivers verify full commit on source resumption and zero
+  commit on loss after a partial READ reply. They also cover source replacement
+  on the same control endpoint. Rust
   and Python check the old epoch before closing the original descriptor.
   Frozen TENT checks its retired segment ID after closing and reopening the name.
 
