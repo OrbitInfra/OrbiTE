@@ -81,8 +81,9 @@ def controls():
         raise ValueError("verification comparison accepted a changed Rust workload")
 
 
-def load(path):
-    manifest = json.loads((path / "manifest.json").read_text())
+def load(path, *, manifest=None, row_metrics=None):
+    if manifest is None:
+        manifest = json.loads((path / "manifest.json").read_text())
     if manifest["status"] != "passed":
         raise ValueError("incomplete benchmark run")
     records, identities = collections.defaultdict(list), set()
@@ -95,12 +96,29 @@ def load(path):
         if identity in identities:
             raise ValueError("duplicate row")
         identities.add(identity)
-        records[key].append(summarize(row, manifest["parameters"]["samples"], row["block"] * row["batch"]))
+        stats = summarize(row, manifest["parameters"]["samples"], row["block"] * row["batch"])
+        if row_metrics is not None:
+            stats.update(row_metrics(path, row))
+        records[key].append(stats)
     if len(identities) != manifest["verified_rows"]:
         raise ValueError("missing verified rows")
     if any(len(v) != manifest["parameters"]["trials"] for v in records.values()):
         raise ValueError("missing trial")
     return manifest, identities, records
+
+
+def match_runs(before, after, *, reset=False, verification=False):
+    clock = match_cpu(before["cpu"], after["cpu"])
+    match_reset(before["file_state"], after["file_state"], reset)
+    match_verification(before.get("verification_io"), after.get("verification_io"), verification)
+    for key in ("host", "kernel", "affinity", "rustc", "cxx", "tent_revision", "caller_threads", "workers_per_engine", "tent_rpc_pools", "merge", "engine_max_failover_attempts", "tent_tcp_local_retry", "poll", "metrics", "timing", "checks", "builds"):
+        if before[key] != after[key]:
+            raise ValueError(f"unmatched {key}")
+    for key in ("samples", "warmup", "workers", "trials", "sizes", "batches", "ext4", "tmpfs"):
+        if before["parameters"][key] != after["parameters"][key]:
+            raise ValueError(f"unmatched parameter {key}")
+    match_harness(before["harness_sha256"], after["harness_sha256"], reset, verification)
+    return clock
 
 
 def main():
@@ -118,16 +136,7 @@ def main():
     after, after_ids, new = load(args.after)
     if before_ids != after_ids:
         raise ValueError("different workload rows")
-    clock_observation = match_cpu(before["cpu"], after["cpu"])
-    match_reset(before["file_state"], after["file_state"], args.reset_comparison)
-    match_verification(before.get("verification_io"), after.get("verification_io"), args.verification_comparison)
-    for key in ("host", "kernel", "affinity", "rustc", "cxx", "tent_revision", "caller_threads", "workers_per_engine", "tent_rpc_pools", "merge", "engine_max_failover_attempts", "tent_tcp_local_retry", "poll", "metrics", "timing", "checks", "builds"):
-        if before[key] != after[key]:
-            raise ValueError(f"unmatched {key}")
-    for key in ("samples", "warmup", "workers", "trials", "sizes", "batches", "ext4", "tmpfs"):
-        if before["parameters"][key] != after["parameters"][key]:
-            raise ValueError(f"unmatched parameter {key}")
-    match_harness(before["harness_sha256"], after["harness_sha256"], args.reset_comparison, args.verification_comparison)
+    clock_observation = match_runs(before, after, reset=args.reset_comparison, verification=args.verification_comparison)
     print(f"Before `{before['orbite_revision'][:8]}`; after `{after['orbite_revision'][:8]}`; "
           f"host `{after['host']}`; {len(after_ids)} verified rows on each side.")
     if clock_observation:

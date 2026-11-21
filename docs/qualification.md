@@ -452,6 +452,12 @@ and background Auto stays on DMA unless explicitly configured.
 
 ## CPU benchmark evidence
 
+Apply the [CPU workload thresholds](benchmarks.md#cpu-workload-thresholds)
+per Linux toolchain, workload and baseline. An archived sweep marked
+`passed` completed its byte checks. Performance qualification requires a
+separate strict guard report with every comparison within limits. Historical
+ratios below retain their original measurement conditions and RSS coverage.
+
 S26's [method and reproduction commands](benchmarks.md) pin the workload,
 compiler and host in external CI artifacts. [Run 42362843122](https://github.com/OrbitInfra/OrbiTE/actions/runs/42362843122)
 completed 480 verified rows on each of stable and Rust 1.85.0 on 2026-11-07.

@@ -100,7 +100,8 @@ requester alive across two source processes and checks old-handle retirement and
 fresh READ bytes. Both Rust and the installed Python wheel reject the old epoch
 while the replacement serves. The [CPU result manifest](cpu-oracle.md#cpu-result-manifest)
 defines the required drivers, receipts and logs for each pass. The runner and
-the offline checker enforce the same contract.
+the offline checker enforce the same contract. The [CPU workload thresholds](benchmarks.md#cpu-workload-thresholds)
+fix the baselines and assess goodput, p99, CPU per byte and peak RSS per case.
 The remaining P0 cases and the installed hardware queue are listed below.
 
 Follow the maintainer's 2026-11-09 order, one PR at a time, stopping for review
@@ -182,6 +183,12 @@ Done:
   guarded CPU memory over TCP. A single-byte mismatch must fail and restoring
   that byte must recover a passing read.
 
+- **S26 CPU performance and resource thresholds (Implemented).** Each measured
+  CPU shape has a fixed OrbiTE regression baseline. The four TENT-matched
+  profiles also have reference targets. A fresh Linux process supplies RSS
+  for each trial. The [measurement and verdict rules](benchmarks.md#cpu-workload-thresholds)
+  retain every missing comparison and every threshold miss.
+
 - **S16 — reference fixtures.** Retain the CPU trace contract and three frozen
   request prefixes used by native-listener rejection. Compatibility inventories
   and unused codec/metadata captures are removed; OrbiTE's wire fixtures live
@@ -194,8 +201,8 @@ Open:
 - [ ] Extend the CPU oracle beyond the shared valid-input trace with further
   native/Python behavior, Python guard cases and hardware tebench profiles, with
   hardware triggers where needed.
-- [ ] Freeze workload-specific resource and performance guards before formal
-  measurements. The CPU correctness manifest is defined above.
+- [ ] Define the remaining installed device and physical-storage workload
+  baselines before their formal measurements.
 
 Exit: every in-scope owner has reference paths, negative controls and result formats, and the oracle runs its CPU controls independently of OrbitKV.
 
@@ -514,9 +521,9 @@ hardware pass; the [design proposal](nixl-backend.md) adds no NIXL dependency.
   plugin/bridge and its CPU byte/lifetime controls; installed GPU/storage
   plugin profiles remain separate from native qualification.
 - [ ] Matched TENT/OrbiTE comparisons (small/large, fragmented, READ/WRITE,
-  cold/warm, mixed priority, CPU/device/file, multirail). Initial guards:
-  goodput ≥ 0.95, p99 latency ≤ 1.05 and CPU-per-byte and peak-RSS ≤ 1.10 of the
-  frozen reference, ratified in P0 before formal runs.
+  cold/warm, mixed priority, CPU/device/file, multirail). The [CPU policy](benchmarks.md#cpu-workload-thresholds)
+  fixes goodput ≥ 0.95, p99 latency ≤ 1.05 and CPU per byte and peak RSS ≤ 1.10
+  of the applicable baseline. Installed profiles retain their own measurement gates.
 - [ ] Packaged crates, CLI and wheels tested outside the
   checkout, with provider discovery, runtime paths and provenance.
 - [ ] Installed manifests prove no C++ Mooncake engine/common/Store dependency.
