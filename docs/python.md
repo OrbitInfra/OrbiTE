@@ -149,6 +149,9 @@ file segments, policy/intent/priority/deadline routing, exceptions, notification
 GIL release, queued cancel and exporter retention under timeout and early drop.
 The [same-endpoint restart test](cpu-oracle.md#same-endpoint-source-restart)
 checks the old epoch and reads the replacement through a new descriptor.
+The [interrupted READ test](cpu-oracle.md#interrupted-read-reply) checks how
+long a pending READ retains its Python buffer and verifies every byte after
+the source resumes or exits midway through a 64 MiB reply.
 The combined wheel runs CUDA exporter controls through a CPU driver shim.
 The sdist is rebuilt, installed and tested separately. See
 [qualification](qualification.md#python-wheels) for exact CI evidence.

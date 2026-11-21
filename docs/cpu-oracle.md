@@ -117,9 +117,9 @@ is prescribed.
 
 ### Interrupted READ reply
 
-The Rust API and frozen TENT C ABI each run two 64 MiB READs in fresh loopback
-processes. OrbiTE configures its public per-transfer limit for that size. The
-source holds `0x6d` throughout its registered region. The
+The Rust API, installed Linux Python wheel and frozen TENT C ABI each run two
+64 MiB READs in fresh loopback processes. OrbiTE configures its public
+per-transfer limit for that size. The source holds `0x6d` throughout its registered region. The
 destination and its one-byte guards start at `0xee`. Each requester first reads
 and verifies one byte and resets that destination byte. Frozen TENT uses one
 TCP worker here so its thread-local descriptor is already resolved when the
@@ -134,18 +134,26 @@ first and the requester receive queue second. Their sum must still be below
 the requested length. A Linux configuration that can queue the entire reply
 fails this check. The controller resumes only the
 requester, waits for both queues to empty on the established connection, and
-requires the task and batch to remain pending with zero committed bytes.
+requires the READ to remain pending with zero committed bytes. Rust and frozen
+TENT check both task and batch status. Python exposes the task receipt.
 The command's stderr records the observed queue sizes. These include framing
 and vary with the Linux TCP window.
 
 In the first run the source resumes. All 64 MiB must commit and both guards
-must survive. In the second the controller kills the stopped source. Both
-task and batch must report failure and zero committed bytes, and the entire
+must survive. In the second the controller kills the stopped source. The
+READ must report failure and zero committed bytes, and the entire
 destination must retain its original contents. Each driver frees the batch.
 Rust withdraws registration before the prefix arrives, checks that a pending
 free is busy, and verifies backing and budget release after physical drain.
 Frozen TENT keeps its caller-owned registration until terminal status. Only
 the source designated for interruption may exit on `SIGKILL`.
+
+The Python requester drops its own reference to the destination after submitting
+the bulk READ. At the observed prefix, closing the batch or registration must
+fail and the exporter and its memory charges must still be held. After a cut,
+the task must report EOF or connection reset with no remote effect. After
+either outcome the requester waits for local drain, checks every destination
+byte and both guards, and verifies that unregister releases the exporter.
 
 ### Same-endpoint source restart
 
@@ -252,8 +260,9 @@ python -I tests/reference/run.py --python-wheel "$WHEEL" \
   --output /var/tmp/orbite-wheel-trace-001
 ```
 
-The result `passed-python-wheel-trace` requires the stopped-source case, the
-same-endpoint restart and all 29 shared trace observations, including
+The Linux result `passed-python-wheel-trace` requires both interrupted READ
+outcomes, the stopped-source case, the same-endpoint restart and all 29 shared
+trace observations, including
 duplicate registration and permission retention, guard bytes, independent batch
 receipts, empty batches, and notification order and multiplicity. Live aliases must keep the Python
 exporter pinned, and final unregister must allow resizing. Before emitting
@@ -261,6 +270,9 @@ cleanup the driver closes every registration, batch and segment guard, checks
 the memory and batch charges on both engines, and closes both engines.
 The wheel matrix runs this
 gate on CPU + io_uring and combined wheels and on the rebuilt sdist wheel.
+On other POSIX hosts the portable cases report `passed-portable-python-wheel-trace`.
+The manifest records the missing Linux socket-queue control. On Linux an
+unreadable `/proc/net/tcp` or an unobserved partial reply fails the run.
 See [wheel qualification](qualification.md#python-wheels) for its scope.
 
 ## Isolated RDMA geometry function

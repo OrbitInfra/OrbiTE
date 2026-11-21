@@ -257,9 +257,14 @@ busy registration rejects close after the other peer has drained. Two batches
 on the stopped segment retain separate charges until peer progress resumes.
 The exporter is released after its own READ completes. For a same-endpoint
 restart, the wheel must reject the old epoch, release the old handle and read
-the replacement's three bytes with intact guards. The `cpu-trace-*` artifacts
+the replacement's three bytes with intact guards. For an [interrupted 64 MiB
+READ](cpu-oracle.md#interrupted-read-reply), Linux socket queues establish that
+the requester consumed a partial reply. Resuming the source must deliver the
+full payload. Killing it must leave every destination byte intact. Both paths
+check the task receipt, exporter lifetime, guards and final charges. The `cpu-trace-*` artifacts
 preserve the exact wheel SHA-256, fixture and driver hashes, seven comparator
-controls and the shared trace, stopped-source and restart receipts. These results cover the installed CPU/TCP profile.
+controls, socket-queue observations and receipts for all three READ controls.
+These results cover the installed CPU/TCP profile.
 
 The specific installed tests are
 `test_installed_distribution_and_surface`, `test_two_process_tcp_installed_wheel`,

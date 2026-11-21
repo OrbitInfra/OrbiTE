@@ -120,6 +120,9 @@ the caller's destination only after the complete payload arrives. The
 [interrupted READ control](cpu-oracle.md#interrupted-read-reply) checks that
 an observed socket prefix can coexist with zero committed bytes and a busy
 destination. A connection lost at this point fails the task with zero bytes.
+The installed Python wheel observes this boundary through the task receipt.
+While the reply is incomplete, the batch and its buffer registration reject
+close. After local drain the requester can inspect the bytes and release the exporter.
 
 ## Peer retirement
 
