@@ -9,7 +9,6 @@ import hashlib
 import json
 import os
 import platform
-import re
 import shlex
 import signal
 import subprocess
@@ -20,7 +19,7 @@ from pathlib import Path
 
 # The installed-wheel gate invokes this script with python -I.
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from manifest import CONTRACT, READ_CONTROLS, check_rust_linkage, validate
+from manifest import CONTRACT, NATIVE_LIBRARY_PREFIXES, READ_CONTROLS, check_rust_linkage, linked_libraries, validate
 
 REPO = Path(__file__).resolve().parents[2]
 
@@ -31,13 +30,9 @@ def digest(path: Path) -> str:
 
 def dependencies(linkage: str, build: Path) -> dict:
     result = {}
-    for name, path in re.findall(r"^\s*(\S+)\s+=>\s+(\S+)", linkage, re.MULTILINE):
-        if path == "not":
-            raise RuntimeError("missing native dependency: " + name)
+    for name, path in linked_libraries(linkage).items():
         resolved = Path(path).resolve()
-        if name.startswith(
-            ("libtent", "libtransfer_engine", "libmooncake", "libasio")
-        ) and not resolved.is_relative_to(build):
+        if name.startswith(NATIVE_LIBRARY_PREFIXES) and not resolved.is_relative_to(build):
             raise RuntimeError(
                 "native dependency escaped isolated build: " + str(resolved)
             )

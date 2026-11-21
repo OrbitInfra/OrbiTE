@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import math
+import posixpath
 import re
 import sys
 from pathlib import Path
@@ -18,6 +19,7 @@ ROOT = HERE.parents[1]
 SCHEMA = json.loads((HERE / "manifest.schema.json").read_text())
 CONTRACT = json.loads((HERE / "contract.json").read_text())
 PROFILES = {rule["properties"]["status"]["const"]: rule for rule in SCHEMA["oneOf"]}
+NATIVE_LIBRARY_PREFIXES = ("libtent", "libtransfer_engine", "libmooncake", "libasio")
 READ_CONTROLS = {"pending_read": [], "interrupted_read": ["--interrupted"], "restart_read": ["--restart"]}
 
 DRIVER_COMMANDS = {
@@ -122,10 +124,20 @@ def check_receipts(label, actual, expected):
         raise ValueError(f"{label}: receipt {first + 1} differs (expected {len(expected)}, got {len(actual)})")
 
 
+def linked_libraries(log):
+    entries = re.findall(r"^[ \t]*(\S+)[ \t]+=>[ \t]+(.+?)(?:[ \t]+\(0x[0-9a-fA-F]+\))?[ \t]*$", log, re.MULTILINE)
+    libraries = dict(entries)
+    require(entries and len(libraries) == len(entries), "ldd: missing or duplicate library receipts")
+    for name, path in entries:
+        require(path.startswith("/"), f"ldd: unresolved {name}")
+    return libraries
+
+
 def check_rust_linkage(log):
+    if log.strip() != "statically linked":
+        linked_libraries(log)
     require(
-        bool(log.strip()) and not re.search(r"lib(?:tent|mooncake|asio)|=>\s+not found", log),
-        "rust-linkage: missing linkage or unexpected native dependency",
+        not any(prefix in log for prefix in NATIVE_LIBRARY_PREFIXES), "rust-linkage: unexpected native dependency"
     )
 
 
@@ -329,13 +341,22 @@ def check_native(manifest, output):
     for name in ("tent-status", "tent-final-status"):
         require(not (output / f"{name}.stdout").read_text().strip(), f"{name}: dirty frozen source")
     check_artifact(manifest["tebench"], "tebench")
+    build = Path(manifest["native_binary"]["path"]).parent / "tent-build"
     for name, dependencies in (
-        ("native", manifest["native_dependencies"]),
+        ("tent", manifest["native_dependencies"]),
         ("tebench", manifest["tebench"].get("dependencies")),
     ):
         require(isinstance(dependencies, dict) and dependencies, f"{name}: missing native dependencies")
+        linked = linked_libraries((output / f"{name}-linkage.stdout").read_text())
+        require(dependencies.keys() == linked.keys(), f"{name}: linkage differs from dependency inventory")
         for soname, artifact in dependencies.items():
             check_artifact(artifact, f"{name} dependency {soname}")
+            if soname.startswith(NATIVE_LIBRARY_PREFIXES):
+                for path in (linked[soname], artifact["path"]):
+                    require(
+                        Path(posixpath.normpath(path)).is_relative_to(build),
+                        f"{name}: {soname} outside frozen build",
+                    )
     required_keys(manifest["native_dependencies"], ("libtent_shared.so",), "native_dependencies")
     library = manifest["native_dependencies"]["libtent_shared.so"]
     require(

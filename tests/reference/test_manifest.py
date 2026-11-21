@@ -48,6 +48,9 @@ def controls(path):
             "missing comparator control", original | {"negative_controls": original["negative_controls"][:-1]}
         )
         for driver in original["pending_read"]:
+            if driver == "rust":
+                linkage = (output / "rust-linkage.stdout").read_text()
+                bad_log("rust-linkage.stdout", linkage + "\nlibtransfer_engine.so => /ref/libtransfer_engine.so\n")
             trace = f"{driver}-trace.stdout"
             bad_log(trace, None)
             bad_log(trace, (output / trace).read_text().replace("OBS\tCLEANUP\tok", "OBS\tCLEANUP\tbroken"))
@@ -71,6 +74,8 @@ def controls(path):
         if "unavailable_controls" in original:
             rejected("portable without a reason", original | {"unavailable_controls": {}})
         if "tent" in original["pending_read"]:
+            for name in ("tent-linkage.stdout", "tebench-linkage.stdout"):
+                bad_log(name, "")
             bad_log("tebench-target.stdout", "READY 127.0.0.1:0\nFLIPPED 8191\nRESTORED\nCLOSED\n")
             bad_log("tebench-corrupt.stderr", "")
             bad_log("tebench-restored.stdout", "")
