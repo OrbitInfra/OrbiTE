@@ -188,8 +188,8 @@ Done:
   profiles also have reference targets. A fresh Linux process supplies RSS
   for each trial. The [measurement and verdict rules](benchmarks.md#cpu-workload-thresholds)
   retain every missing comparison and every threshold miss. The same-binary
-  repeat measures run-to-run variation. The first paired optimization targets
-  warmed tmpfs gapped WRITE at 8 × 4 KiB and keeps one CQE per physical request.
+  repeat measures run-to-run variation. The [buffered WRITE comparison](benchmarks.md#buffered-small-write-groups)
+  measures caller completion on warmed tmpfs at eight gapped 4 KiB offsets.
 
 - **S16 — reference fixtures.** Retain the CPU trace contract and three frozen
   request prefixes used by native-listener rejection. Compatibility inventories
