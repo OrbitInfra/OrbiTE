@@ -224,6 +224,9 @@ Metrics use `orbite_` names with the same recording cells and histogram buckets.
 ## Engine and transport boundary
 
 The CPU oracle and three frozen TENT RPC request prefixes remain test inputs.
+The [CPU result manifest](cpu-oracle.md#cpu-result-manifest) binds each run
+to the receipts of its required drivers. The runner checks the captured logs
+before publishing a pass. The same check works on downloaded CI artifacts.
 Compatibility inventories and unused serializer captures are removed. The Rust
 control plane retains its own codec and in-source fixtures.
 The [wire and consumer boundary](tent-parity.md#wire-and-consumer-boundaries)

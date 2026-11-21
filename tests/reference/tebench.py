@@ -4,7 +4,6 @@ import json
 import math
 import os
 import re
-import resource
 import select
 import signal
 import subprocess
@@ -12,8 +11,48 @@ import sys
 from pathlib import Path
 
 
+BLOCK, BATCH, GUARD = 4096, 2, 32
+
+
+def initiator_command(binary, endpoint, operation):
+    return [
+        str(binary),
+        "--backend=tent",
+        "--metadata_type=p2p",
+        "--seg_type=DRAM",
+        "--xport_type=tcp",
+        "--tent_transport_hint=tcp",
+        "--duration=1",
+        "--start_num_threads=1",
+        "--max_num_threads=1",
+        "--total_buffer_size=16384",
+        f"--start_block_size={BLOCK}",
+        f"--max_block_size={BLOCK}",
+        f"--start_batch_size={BATCH}",
+        f"--max_batch_size={BATCH}",
+        f"--target_offset={GUARD}",
+        f"--target_seg_name={endpoint}",
+        f"--op_type={operation}",
+    ]
+
+
+def check_workload_row(stdout, label):
+    rows = [
+        s.split()
+        for s in stdout.splitlines()
+        if s.split()[:2] == [str(BLOCK), str(BATCH)]
+    ]
+    if (
+        len(rows) != 1
+        or len(rows[0]) != 8
+        or not all(math.isfinite(float(x)) for x in rows[0][2:])
+        or float(rows[0][2]) <= 0
+    ):
+        raise ValueError(f"{label} produced no completed workload row")
+
+
 def check(binary: Path, driver: Path, output: Path) -> dict:
-    block, batch, guard = 4096, 2, 32
+    block, batch, guard = BLOCK, BATCH, GUARD
     commands = []
     target_command = [str(driver), "--tebench-target"]
     with (
@@ -44,27 +83,8 @@ def check(binary: Path, driver: Path, output: Path) -> dict:
                 raise RuntimeError(
                     "tebench target did not advertise its loopback segment"
                 )
-            common = [
-                str(binary),
-                "--backend=tent",
-                "--metadata_type=p2p",
-                "--seg_type=DRAM",
-                "--xport_type=tcp",
-                "--tent_transport_hint=tcp",
-                "--duration=1",
-                "--start_num_threads=1",
-                "--max_num_threads=1",
-                "--total_buffer_size=16384",
-                f"--start_block_size={block}",
-                f"--max_block_size={block}",
-                f"--start_batch_size={batch}",
-                f"--max_batch_size={batch}",
-                f"--target_offset={guard}",
-                f"--target_seg_name={ready[1]}",
-            ]
-
             def initiate(label, operation, *, corrupt=False):
-                command = [*common, f"--op_type={operation}"]
+                command = initiator_command(binary, ready[1], operation)
                 stdout = output / f"tebench-{label}.stdout"
                 stderr = output / f"tebench-{label}.stderr"
                 with stdout.open("w") as out, stderr.open("w") as err:
@@ -84,20 +104,7 @@ def check(binary: Path, driver: Path, output: Path) -> dict:
                         )
                     return
                 result.check_returncode()
-                rows = [
-                    s.split()
-                    for s in stdout.read_text().splitlines()
-                    if s.split()[:2] == [str(block), str(batch)]
-                ]
-                if (
-                    len(rows) != 1
-                    or len(rows[0]) != 8
-                    or not all(math.isfinite(float(x)) for x in rows[0][2:])
-                    or float(rows[0][2]) <= 0
-                ):
-                    raise ValueError(
-                        f"{label} produced no completed workload row; see {stdout}"
-                    )
+                check_workload_row(stdout.read_text(), label)
 
             initiate("seed", "write_seed")
             initiate("read", "read_verify")
@@ -124,6 +131,8 @@ def check(binary: Path, driver: Path, output: Path) -> dict:
 
 
 if __name__ == "__main__":
+    import resource
+
     # The intentional native mismatch terminates with SIGABRT. Keep its log.
     resource.setrlimit(resource.RLIMIT_CORE, (0, 0))
     os.environ["GLOG_logtostderr"] = "1"

@@ -9,7 +9,6 @@ import hashlib
 import json
 import os
 import platform
-import re
 import shlex
 import signal
 import subprocess
@@ -18,13 +17,11 @@ import tarfile
 import time
 from pathlib import Path
 
+# The installed-wheel gate invokes this script with python -I.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from manifest import CONTRACT, NATIVE_LIBRARY_PREFIXES, READ_CONTROLS, check_rust_linkage, linked_libraries, validate
+
 REPO = Path(__file__).resolve().parents[2]
-CONTRACT = json.loads((REPO / "tests/reference/contract.json").read_text())
-READ_CONTROLS = {
-    "pending_read": [],
-    "interrupted_read": ["--interrupted"],
-    "restart_read": ["--restart"],
-}
 
 
 def digest(path: Path) -> str:
@@ -33,13 +30,9 @@ def digest(path: Path) -> str:
 
 def dependencies(linkage: str, build: Path) -> dict:
     result = {}
-    for name, path in re.findall(r"^\s*(\S+)\s+=>\s+(\S+)", linkage, re.MULTILINE):
-        if path == "not":
-            raise RuntimeError("missing native dependency: " + name)
+    for name, path in linked_libraries(linkage).items():
         resolved = Path(path).resolve()
-        if name.startswith(
-            ("libtent", "libtransfer_engine", "libmooncake", "libasio")
-        ) and not resolved.is_relative_to(build):
+        if name.startswith(NATIVE_LIBRARY_PREFIXES) and not resolved.is_relative_to(build):
             raise RuntimeError(
                 "native dependency escaped isolated build: " + str(resolved)
             )
@@ -155,6 +148,10 @@ def main() -> int:
         parser.error("--rust-only does not consume a YLT archive")
     if args.python_wheel and args.ylt_archive:
         parser.error("--python-wheel does not consume a YLT archive")
+    if args.python_wheel:
+        expected_status = "passed-python-wheel-trace" if sys.platform == "linux" else "passed-portable-python-wheel-trace"
+    else:
+        expected_status = "passed-rust-fixture-only" if args.rust_only else "passed-cpu-trace"
     output.mkdir(parents=True, exist_ok=False)
     manifest = {
         "schema_version": 1,
@@ -170,12 +167,15 @@ def main() -> int:
     manifest_path = output / "manifest.json"
 
     def save() -> None:
-        manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+        pending = manifest_path.with_suffix(".tmp")
+        pending.write_text(json.dumps(manifest, indent=2) + "\n")
+        pending.replace(manifest_path)
 
-    def passed(status: str) -> int:
-        manifest["status"] = status
+    def passed() -> int:
+        validate({**manifest, "status": expected_status}, output)
+        manifest["status"] = expected_status
         save()
-        print(f"{status}: {manifest['observations']} observations; {manifest_path}")
+        print(f"{expected_status}: {manifest['observations']} observations; {manifest_path}")
         return 0
 
     # Do not inherit a consumer's native loader paths or Mooncake configuration.
@@ -251,6 +251,8 @@ def main() -> int:
             Path(CONTRACT["trace"]),
             Path(CONTRACT["expected"]),
             Path("tests/reference/contract.json"),
+            Path("tests/reference/manifest.schema.json"),
+            Path("tests/reference/manifest.py"),
             Path("tests/reference/run.py"),
             Path("tests/reference/pending_read.py"),
         ]
@@ -314,9 +316,7 @@ def main() -> int:
                     manifest["unavailable_controls"] = {case: reason}
                     continue
                 read_control(case, "python", [python, "-I", "-B", str(REPO / driver)])
-            if "unavailable_controls" in manifest:
-                return passed("passed-portable-python-wheel-trace")
-            return passed("passed-python-wheel-trace")
+            return passed()
 
         manifest["rustc"] = run("rustc-version", ["rustc", "-Vv"]).strip()
         run(
@@ -340,8 +340,7 @@ def main() -> int:
             for case in READ_CONTROLS
         }
         rust_linkage = run("rust-linkage", ["ldd", str(rust_binary)])
-        if re.search(r"lib(?:tent|mooncake|asio)", rust_linkage):
-            raise RuntimeError("Rust runner unexpectedly depends on a Mooncake runtime")
+        check_rust_linkage(rust_linkage)
         manifest["rust_binary"] = {
             "path": str(rust_binary),
             "sha256": digest(rust_binary),
@@ -527,11 +526,7 @@ def main() -> int:
                 "sha256": digest(binary),
                 "library_sha256": digest(library),
             }
-        return passed(
-            "passed-cpu-trace"
-            if manifest["native_executed"]
-            else "passed-rust-fixture-only"
-        )
+        return passed()
     except (Exception, KeyboardInterrupt) as error:
         detail = str(error) or type(error).__name__
         manifest.update(status="failed", error=detail)

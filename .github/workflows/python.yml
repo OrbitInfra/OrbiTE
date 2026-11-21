@@ -79,6 +79,7 @@ jobs:
           for profile in wheel-cpu wheel-combined; do
             python -I tests/reference/run.py --python-wheel "$RUNNER_TEMP/$profile"/*.whl \
               --output "$RUNNER_TEMP/cpu-trace/$profile"
+            python -I -B tests/reference/test_manifest.py "$RUNNER_TEMP/cpu-trace/$profile/manifest.json"
           done
       - name: Run the publication wheel in a clean container without native libraries
         run: bash .github/scripts/check-clean-wheel.sh "$RUNNER_TEMP/wheel-combined" "${{ matrix.python }}"
@@ -103,6 +104,7 @@ jobs:
           python scripts/check-package-contents.py "$RUNNER_TEMP/sdist"/*.tar.gz "$RUNNER_TEMP/sdist-wheel"/*.whl
           python -I tests/reference/run.py --python-wheel "$RUNNER_TEMP/sdist-wheel"/*.whl \
             --output "$RUNNER_TEMP/cpu-trace/sdist-wheel"
+          python -I -B tests/reference/test_manifest.py "$RUNNER_TEMP/cpu-trace/sdist-wheel/manifest.json"
       - name: Preserve installed CPU trace evidence
         if: always()
         uses: actions/upload-artifact@v7.0.2

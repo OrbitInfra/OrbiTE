@@ -1,0 +1,113 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "OrbiTE CPU oracle v1 passing manifest",
+  "description": "The offline checker also verifies the required command logs beside the manifest against the CPU trace and READ receipts.",
+  "type": "object",
+  "required": ["schema_version", "status", "platform", "profile", "qualification", "native_executed", "performance_claim", "source", "contract", "input_sha256", "commands", "observations", "negative_controls", "pending_read", "restart_read"],
+  "$defs": {
+    "text": {"type": "string", "minLength": 1},
+    "digest": {"type": "string", "pattern": "^[a-f0-9]{64}$"},
+    "artifact": {
+      "type": "object", "required": ["path", "sha256"],
+      "properties": {"path": {"$ref": "#/$defs/text"}, "sha256": {"$ref": "#/$defs/digest"}}
+    },
+    "command": {
+      "type": "object", "required": ["name", "command", "cwd", "stdout", "stderr", "exit_code", "elapsed_seconds"],
+      "properties": {
+        "name": {"type": "string", "pattern": "^[a-z0-9-]+$"},
+        "command": {"type": "array", "minItems": 1, "items": {"type": "string"}},
+        "cwd": {"$ref": "#/$defs/text"}, "stdout": {"$ref": "#/$defs/text"}, "stderr": {"$ref": "#/$defs/text"},
+        "exit_code": {"const": 0}, "timed_out": {"const": false}, "elapsed_seconds": {"type": "number", "minimum": 0}
+      }
+    }
+  },
+  "properties": {
+    "schema_version": {"const": 1}, "performance_claim": {"const": false}, "error": false,
+    "platform": {"$ref": "#/$defs/text"}, "profile": {"$ref": "#/$defs/text"}, "qualification": {"$ref": "#/$defs/text"},
+    "source": {
+      "type": "object", "required": ["revision", "origin", "dirty"],
+      "properties": {"revision": {"type": "string", "pattern": "^[a-f0-9]{40}$"}},
+      "oneOf": [
+        {"properties": {"origin": {"const": "git"}, "dirty": {"type": "boolean"}}},
+        {"properties": {"origin": {"const": "cargo-package"}, "dirty": {"type": "null"}}}
+      ]
+    },
+    "contract": {"type": "object"}, "input_sha256": {"type": "object", "additionalProperties": {"$ref": "#/$defs/digest"}},
+    "commands": {"type": "array", "items": {"$ref": "#/$defs/command"}},
+    "observations": {"const": 29},
+    "negative_controls": {"const": ["corrupt-byte", "wrong-byte-count", "nonterminal-status", "duplicate-message", "swapped-batch-byte-counts", "missing-cleanup", "extra-observation"]},
+    "pending_read": {
+      "type": "object", "additionalProperties": {"const": [
+        "OPEN", "OBS\tRESULT\tsecond\tcompleted\t1\t3", "OBS\tBYTES\tsecond\tee74776feeeeeeee",
+        "PENDING first", "PENDING first later", "OBS\tRESULT\tlater\tcompleted\t1\t2",
+        "OBS\tBYTES\tlater\tee7374eeeeeeeeee", "OBS\tRESULT\tfirst\tcompleted\t1\t5",
+        "OBS\tBYTES\tfirst\tee6669727374eeee", "CLEANUP"
+      ]}
+    },
+    "interrupted_read": {
+      "type": "object", "additionalProperties": {"const": [
+        "OBS\tRESULT\twarmup\tcompleted\t1\t1", "OPEN", "PENDING read", "PENDING prefix",
+        "OBS\tRESULT\tresume\tcompleted\t67108864", "OBS\tBYTES\tresume\t67108864\tguards-intact", "CLEANUP",
+        "OBS\tRESULT\twarmup\tcompleted\t1\t1", "OPEN", "PENDING read", "PENDING prefix",
+        "OBS\tRESULT\tcut\tfailed\t0", "OBS\tBYTES\tcut\t0\tguards-intact", "CLEANUP"
+      ]}
+    },
+    "restart_read": {
+      "type": "object", "additionalProperties": {"const": [
+        "OBS\tRESULT\told\tcompleted\t1\t3", "OBS\tBYTES\told\tee6f6c64ee", "RETIRED old",
+        "OBS\tRESULT\tnew\tcompleted\t1\t3", "OBS\tBYTES\tnew\tee6e6577ee", "CLEANUP"
+      ]}
+    },
+    "rustc": {"$ref": "#/$defs/text"}, "cxx": {"$ref": "#/$defs/text"}, "python": {"$ref": "#/$defs/text"},
+    "rust_binary": {"$ref": "#/$defs/artifact"}, "python_wheel": {"$ref": "#/$defs/artifact"},
+    "native_binary": {
+      "$ref": "#/$defs/artifact", "required": ["library_sha256"], "properties": {"library_sha256": {"$ref": "#/$defs/digest"}}
+    },
+    "native_dependencies": {"type": "object", "required": ["libtent_shared.so"], "additionalProperties": {"$ref": "#/$defs/artifact"}},
+    "tebench": {
+      "$ref": "#/$defs/artifact", "required": ["target", "commands", "dependencies", "payload_bytes", "guard_bytes_each_side", "corrupt_offset"],
+      "properties": {
+        "target": {"type": "array", "minItems": 2, "maxItems": 2},
+        "dependencies": {"type": "object", "minProperties": 1, "additionalProperties": {"$ref": "#/$defs/artifact"}},
+        "payload_bytes": {"const": 8192}, "guard_bytes_each_side": {"const": 32}, "corrupt_offset": {"const": 8191},
+        "commands": {
+          "type": "array", "minItems": 4, "items": false,
+          "prefixItems": [
+            {"properties": {"case": {"const": "seed"}, "exit_code": {"const": 0}}},
+            {"properties": {"case": {"const": "read"}, "exit_code": {"const": 0}}},
+            {"properties": {"case": {"const": "corrupt"}, "exit_code": {"const": -6}}},
+            {"properties": {"case": {"const": "restored"}, "exit_code": {"const": 0}}}
+          ],
+          "allOf": [{"items": {"type": "object", "required": ["case", "command", "exit_code"], "properties": {"command": {"type": "array", "minItems": 1, "items": {"type": "string"}}}}}]
+        }
+      }
+    }
+  },
+  "oneOf": [
+    {
+      "properties": {"status": {"const": "passed-rust-fixture-only"}, "native_executed": {"const": false}, "platform": {"pattern": "^Linux-"}, "unavailable_controls": false, "python_wheel": false, "native_binary": false, "tebench": false},
+      "required": ["rustc", "rust_binary", "interrupted_read"],
+      "patternProperties": {"_read$": {"required": ["rust"], "maxProperties": 1}}
+    },
+    {
+      "properties": {"status": {"const": "passed-cpu-trace"}, "native_executed": {"const": true}, "platform": {"pattern": "^Linux-"}, "unavailable_controls": false, "python_wheel": false},
+      "required": ["rustc", "rust_binary", "cxx", "native_binary", "native_dependencies", "tebench", "interrupted_read"],
+      "patternProperties": {"_read$": {"required": ["rust", "tent"], "maxProperties": 2}}
+    },
+    {
+      "properties": {"status": {"const": "passed-python-wheel-trace"}, "native_executed": {"const": false}, "platform": {"pattern": "^Linux-"}, "unavailable_controls": false, "native_binary": false, "rust_binary": false, "tebench": false},
+      "required": ["python", "python_wheel", "interrupted_read"],
+      "patternProperties": {"_read$": {"required": ["python"], "maxProperties": 1}}
+    },
+    {
+      "properties": {
+        "status": {"const": "passed-portable-python-wheel-trace"}, "native_executed": {"const": false},
+        "platform": {"not": {"pattern": "^Linux-"}}, "interrupted_read": false, "native_binary": false, "rust_binary": false, "tebench": false,
+        "unavailable_controls": {"type": "object", "required": ["interrupted_read"], "additionalProperties": false,
+          "properties": {"interrupted_read": {"type": "string", "minLength": 1}}}
+      },
+      "required": ["python", "python_wheel", "unavailable_controls"],
+      "patternProperties": {"_read$": {"required": ["python"], "maxProperties": 1}}
+    }
+  ]
+}

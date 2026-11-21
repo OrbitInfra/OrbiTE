@@ -26,7 +26,11 @@ features on Linux, and checks that native features are rejected on other
 targets; these compile checks exercise no device.
 
 The CPU oracle compares real registered memory and TCP traces against the
-frozen reference. Its [stopped-source gate](cpu-oracle.md#pending-read-across-two-peers)
+frozen reference. The [result manifest](cpu-oracle.md#cpu-result-manifest)
+defines which drivers and receipts qualify a particular run. Rust CI archives
+the manifest and logs as `rust-cpu-trace-*`, native comparison jobs as
+`frozen-tent-cpu-*` and wheel jobs as `cpu-trace-*`.
+Its [stopped-source gate](cpu-oracle.md#pending-read-across-two-peers)
 requires one peer's READ to complete and release its batch while another
 source is stopped. The manifest records two same-peer batches pending before
 resumption, their receipts in reverse submission order, and all three guarded

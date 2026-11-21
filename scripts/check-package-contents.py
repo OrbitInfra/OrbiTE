@@ -31,6 +31,7 @@ def check_names(names, tracked, wheel=False):
         require(allowed, f"unexpected package path: {name}")
         if not wheel and p.suffix in (".json", ".tsv", ".trace", ".expected", ".bin"):
             fixtures = {".cargo_vcs_info.json", "tests/faults/matrix.tsv", "tests/reference/contract.json",
+                        "tests/reference/manifest.schema.json",
                         "tests/reference/wire/rpc.json", "tests/fixtures/cpu-v1.trace", "tests/fixtures/cpu-v1.expected",
                         "tests/reference/hp_tcp/ack.bin", "tests/reference/hp_tcp/read.bin",
                         "tests/reference/hp_tcp/write.bin", "tests/reference/mnnvl/describe.bin", "tests/reference/shm/describe.bin"}
