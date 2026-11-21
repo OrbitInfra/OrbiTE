@@ -154,7 +154,7 @@ attribution and must retain both reports. Dispatch the same workflow with
 `repeat_baseline=true` for two complete sweeps using the same frozen OrbiTE
 checkout and binary on each runner. Both sweeps use independent processes and
 also measure frozen TENT. The guard report labels baseline crossings in this
-control `same-revision-variation`. Virtual ext4 measures this warmed
+control `same-revision-variation` and rejects a mismatched OrbiTE binary hash. Virtual ext4 measures this warmed
 guest workload. Physical NVMe tails, mixed load, faults and Python API
 correctness have separate gates.
 

@@ -169,6 +169,9 @@ def evaluate(candidate, baseline=None):
         require(anchor["harness_sha256"]["run.py"] == manifest["harness_sha256"]["run.py"],
                 "different measurement drivers")
         require(anchor["binary_sha256"]["tent"] == manifest["binary_sha256"]["tent"], "different frozen TENT binaries")
+        if manifest["orbite_revision"] == ORBITE_BASELINE:
+            require(anchor["binary_sha256"]["orbite"] == manifest["binary_sha256"]["orbite"],
+                    "same-revision variation requires identical OrbiTE binaries")
     revision_miss = "same-revision-variation" if manifest["orbite_revision"] == ORBITE_BASELINE else "regression"
     verdicts = []
     for key in sorted(CASES):

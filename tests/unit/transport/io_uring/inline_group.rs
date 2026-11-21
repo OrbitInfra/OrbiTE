@@ -29,7 +29,7 @@ fn buffered_write_group_drains_only_the_consumed_prefix_and_preserves_gaps() -> 
     }
     let image = (0..32).collect::<Vec<u8>>();
     for ready in [true, false] {
-        for limit in [None, Some(3)] {
+        for limit in [None, Some(3), Some(1)] {
             let (f, trace) = observed_at(&dir, &image, ready, false, false)?;
             warm(&f, &trace)?;
             trace.lock().unwrap().submit_limit = limit;
@@ -78,8 +78,13 @@ fn buffered_write_group_drains_only_the_consumed_prefix_and_preserves_gaps() -> 
             }
             assert_eq!(fs::read(&f.path)?, expected);
             let t = trace.lock().unwrap();
-            assert_eq!(t.group_checks.len(), 1);
-            assert_eq!(t.group_checks[0].0 as usize, count);
+            let checked: Vec<_> = t.group_checks.iter().map(|(n, _)| *n as usize).collect();
+            if count == 1 {
+                assert!(checked.is_empty());
+                assert_eq!(t.peeks, 1);
+            } else {
+                assert_eq!(checked, [count]);
+            }
             assert_eq!(t.submitter, Some(std::thread::current().id()));
             assert_eq!(t.submits, if limit.is_some() { 2 } else { 1 });
             assert!(t.alive.upgrade().is_none());

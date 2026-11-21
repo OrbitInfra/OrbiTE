@@ -138,7 +138,7 @@ class GuardTests(unittest.TestCase):
             anchor, after = Path(tmp)/"base", Path(tmp)/"after"
             boot = str(uuid.uuid4())
             fixture(anchor, ORBITE_BASELINE, boot)
-            fixture(after, ORBITE_BASELINE, boot)
+            manifest = fixture(after, ORBITE_BASELINE, boot)
             rows = [json.loads(line) for line in (after/"results.jsonl").read_text().splitlines()]
             for row in rows:
                 if (row["profile"], row["op"], row["block"], row["batch"]) == ("shm", "read", 4096, 1):
@@ -148,6 +148,10 @@ class GuardTests(unittest.TestCase):
             result = evaluate(after, anchor)
             self.assertEqual(result["status"], "outside-limits")
             self.assertEqual(result["counts"], {"same-revision-variation": 1, "within-limits": 159})
+            manifest["binary_sha256"]["orbite"] = "e"*64
+            (after/"manifest.json").write_text(json.dumps(manifest))
+            with self.assertRaisesRegex(ValueError, "identical OrbiTE binaries"):
+                evaluate(after, anchor)
 
 
 if __name__ == "__main__":
