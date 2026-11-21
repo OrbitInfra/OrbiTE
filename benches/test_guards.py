@@ -2,6 +2,8 @@
 
 import json
 from pathlib import Path
+import subprocess
+import sys
 from tempfile import TemporaryDirectory
 import unittest
 import uuid
@@ -23,8 +25,18 @@ def fixture(path, revision, boot):
                     tent_tcp_local_retry=TENT_RETRY, poll=POLL, timing=TIMING, checks=CHECKS, file_state=FILE_STATE,
                     verification_io=VERIFICATION_IO, builds={"rust": "release, io-uring", "tent": CONTRACT["cmake_options"]},
                     harness_sha256={key: "a"*64 for key in ("tent.cpp", "transfer.rs", "run.py")},
+                    binary_sha256={"tent": "c"*64, "orbite": "d"*64},
                     parameters=PARAMETERS | dict(profile=False, profile_only=False, tail_profile_only=False, ext4="/ext4", tmpfs="/dev/shm"))
     (path / "manifest.json").write_text(json.dumps(manifest))
+    receipts = {"orbite-revision": revision, "orbite-status": "", "tent-revision": CONTRACT["tent_revision"],
+                "cpu": manifest["cpu"], "rustc": manifest["rustc"], "cxx": manifest["cxx"]}
+    for fs, mount in manifest["mounts"].items():
+        receipts[fs+"-fs"] = fs
+        receipts[fs+"-mount"] = mount
+    for name, value in receipts.items():
+        (path / (name + ".stdout")).write_text(value)
+    (path / "rust-build.stdout").write_text(json.dumps({"target": {"name": "transfer"}, "executable": "/bin/rust-bench"}))
+    invocations = [{"name": "tent-build", "command": ["c++", "-o", "/bin/tent-bench"]}]
     with (path / "results.jsonl").open("w") as out:
         for profile, impl, op, block, batch, layout in sorted(CASES):
             file = profile.startswith("io_uring-")
@@ -36,8 +48,14 @@ def fixture(path, revision, boot):
                            direct_io=(profile == "io_uring-ext4") if file and impl == "orbite" else None)
                 (path / (name + ".stdout")).write_text(json.dumps(raw))
                 (path / (name + ".stderr")).write_text(f"{RSS_PREFIX}1000\n")
+                executable = "/bin/rust-bench" if impl == "orbite" else "/bin/tent-bench"
+                invocations.append({"name": name, "command": ["/usr/bin/time", "-f", "\\n"+RSS_PREFIX+"%M", "--",
+                                    executable, "io_uring" if file else profile, op, str(block), str(batch), layout,
+                                    "3", "100", "2", "/tmp/orbite-bench-"+name],
+                                    "env_overrides": manifest["tent_rpc_pools"] if impl == "tent" else {}})
                 print(json.dumps(dict(profile=profile, implementation=impl, op=op, block=block, batch=batch,
                                       layout=layout, trial=trial, peak_rss_kib=1000, **raw)), file=out)
+    (path / "commands.json").write_text(json.dumps(invocations))
     return manifest
 
 
@@ -63,6 +81,10 @@ class GuardTests(unittest.TestCase):
             fixture(anchor, ORBITE_BASELINE, boot)
             manifest = fixture(after, "b"*40, boot)
             self.assertEqual(evaluate(after, anchor)["counts"], {"within-limits": 160})
+            (anchor/"orbite-revision.stdout").write_text("d"*40)
+            with self.assertRaisesRegex(ValueError, "orbite-revision"):
+                evaluate(after, anchor)
+            (anchor/"orbite-revision.stdout").write_text(ORBITE_BASELINE)
             partial = evaluate(after)
             self.assertEqual(partial["status"], "incomplete")
             self.assertEqual(partial["counts"], {"within-limits": 64, "baseline-missing": 96})
@@ -71,6 +93,11 @@ class GuardTests(unittest.TestCase):
                 (after/"manifest.json").write_text(json.dumps(manifest | change))
                 with self.assertRaises(ValueError):
                     evaluate(after, anchor)
+            (after/"manifest.json").write_text(json.dumps(manifest | {"boot_id": 42}))
+            malformed = subprocess.run([sys.executable, "-B", str(Path(__file__).with_name("guards.py")),
+                                        str(after), "--report-only"], capture_output=True, text=True)
+            self.assertEqual(malformed.returncode, 2)
+            self.assertEqual(json.loads(malformed.stdout)["status"], "invalid-evidence")
             (after/"manifest.json").write_text(json.dumps(manifest))
             rows = (after/"results.jsonl").read_text().splitlines()
             row = json.loads(rows[0])
@@ -83,6 +110,22 @@ class GuardTests(unittest.TestCase):
             (after/"results.jsonl").write_text("\n".join(kept))
             with self.assertRaisesRegex(ValueError, "matrix"):
                 evaluate(after)
+
+    def test_same_revision_variation_keeps_the_miss(self):
+        with TemporaryDirectory() as tmp:
+            anchor, after = Path(tmp)/"base", Path(tmp)/"after"
+            boot = str(uuid.uuid4())
+            fixture(anchor, ORBITE_BASELINE, boot)
+            fixture(after, ORBITE_BASELINE, boot)
+            rows = [json.loads(line) for line in (after/"results.jsonl").read_text().splitlines()]
+            for row in rows:
+                if (row["profile"], row["op"], row["block"], row["batch"]) == ("shm", "read", 4096, 1):
+                    row["peak_rss_kib"] = 1101
+                    (after/f"{row['trial']}-orbite-shm-read-4096-1-contiguous.stderr").write_text(RSS_PREFIX+"1101\n")
+            (after/"results.jsonl").write_text("\n".join(map(json.dumps, rows)))
+            result = evaluate(after, anchor)
+            self.assertEqual(result["status"], "outside-limits")
+            self.assertEqual(result["counts"], {"same-revision-variation": 1, "within-limits": 159})
 
 
 if __name__ == "__main__":

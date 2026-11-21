@@ -81,8 +81,9 @@ def controls():
         raise ValueError("verification comparison accepted a changed Rust workload")
 
 
-def load(path, *, row_metrics=None):
-    manifest = json.loads((path / "manifest.json").read_text())
+def load(path, *, manifest=None, row_metrics=None):
+    if manifest is None:
+        manifest = json.loads((path / "manifest.json").read_text())
     if manifest["status"] != "passed":
         raise ValueError("incomplete benchmark run")
     records, identities = collections.defaultdict(list), set()

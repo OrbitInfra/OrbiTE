@@ -137,8 +137,9 @@ python3 -B benches/guards.py "$AFTER" --baseline "$BEFORE" --output "$OUT/cpu-gu
 ```
 
 The strict command exits **0** only when every comparison passes. **1** means
-a complete pair crossed a threshold. A miss against the OrbiTE baseline is
-a revision regression in this run. A miss against frozen TENT is a reference
+a complete pair crossed a threshold. A miss against an earlier OrbiTE revision
+is a regression signal in this run. If both sweeps used the very same revision,
+the report records same-revision variation and still exits 1. A miss against frozen TENT is a reference
 target gap, which can already exist on the baseline revision. **2** means
 evidence is incomplete or invalid, including missing RSS, mismatched hosts
 or configurations, or a missing trial. A candidate-only report still gives
