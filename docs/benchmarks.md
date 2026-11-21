@@ -104,7 +104,7 @@ comparisons per toolchain**.
 | Verified goodput | ≥ 0.95 | Total verified payload bytes / sum of timed batch wall times, in GiB/s |
 | p99 batch latency | ≤ 1.05 | Nearest-rank p99 of 100 timed batches, in ns |
 | Process CPU per verified byte | ≤ 1.10 | Sum of whole-process CPU ns during the timed batches / total verified payload bytes |
-| Peak resident memory | ≤ 1.10 | GNU `/usr/bin/time -f %M` on one fresh Linux benchmark process, in KiB. Includes both endpoints where present, setup, buffers, verification and teardown |
+| Peak resident memory | ≤ 1.10 | GNU `/usr/bin/time -f %M` on one fresh Linux benchmark process, in KiB. Includes both endpoints where present, setup, buffers, verification and teardown. [GNU Time manual](https://www.gnu.org/software/time/manual/time.pdf) |
 
 Compute each metric inside each of three process trials, then divide the
 candidate median by the baseline median. Compare the unrounded ratio. Each

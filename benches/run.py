@@ -30,6 +30,14 @@ CHECKS = "every warmup and sample; changed pattern, reset destination, full byte
 FILE_STATE = "preallocated once; in-place pwrite + fdatasync before each sample; warmed ext4 O_DIRECT / tmpfs; timed writes are not durability receipts"
 VERIFICATION_IO = "whole-file bulk read in both harnesses"
 TENT_RETRY = {"max_retry_count": 3, "base_delay_ms": 100, "max_delay_ms": 2000}
+RUST_BUILD = ["cargo", "build", "--release", "--locked", "--features", "io-uring", "--bench", "transfer", "--message-format=json"]
+
+
+def tent_build_command(reference, harness, output):
+    include = reference / "reference/mooncake-transfer-engine/tent/include"
+    library = reference / "tent-build/mooncake-transfer-engine/tent/src/libtent_shared.so"
+    return ["c++", "-std=c++20", "-O3", "-DNDEBUG", "-Wall", "-Wextra", "-Werror", "-I", str(include),
+            str(harness / "benches/tent.cpp"), str(library), "-Wl,-rpath,"+str(library.parent), "-o", str(output / "tent-bench")]
 
 
 def workload_shapes(sizes, batches):
@@ -87,8 +95,9 @@ def main():
     p.add_argument("--profile-only", action="store_true", help="collect profiles without reporting traced timings as benchmark rows")
     p.add_argument("--tail-profile-only", action="store_true", help="trace per-sample io_uring and scheduler timelines; never report traced performance")
     a = p.parse_args()
-    out, ref = a.output.resolve(), a.reference.resolve()
-    orbite = a.orbite_source.resolve()
+    a.output, a.reference, a.orbite_source = a.output.resolve(), a.reference.resolve(), a.orbite_source.resolve()
+    out, ref, orbite = a.output, a.reference, a.orbite_source
+    a.ext4, a.tmpfs = a.ext4.resolve(), a.tmpfs.resolve()
     if out.is_relative_to(ROOT) or out.is_relative_to(orbite) or out.is_relative_to(ref) or platform.system() != "Linux":
         p.error("Linux only; output must be outside both source trees")
     if not (1 <= a.samples <= 10000 and 1 <= a.warmup <= 100 and 1 <= a.workers <= 16 and 1 <= a.trials <= 9):
@@ -123,11 +132,10 @@ def main():
     for path, expected in [(a.ext4, "ext4"), (a.tmpfs, "tmpfs")]:
         if run(expected+"-fs", ["findmnt", "-n", "-o", "FSTYPE", "-T", path]).strip() != expected:
             raise ValueError(f"{path} is not {expected}")
-    built = run("rust-build", ["cargo", "build", "--release", "--locked", "--features", "io-uring", "--bench", "transfer", "--message-format=json"], cwd=orbite)
+    built = run("rust-build", RUST_BUILD, cwd=orbite)
     rust = next(Path(r["executable"]) for line in built.splitlines() if (r := json.loads(line)).get("executable") and r.get("target", {}).get("name") == "transfer")
-    library = ref / "tent-build/mooncake-transfer-engine/tent/src/libtent_shared.so"
     tent = out / "tent-bench"
-    run("tent-build", ["c++", "-std=c++20", "-O3", "-DNDEBUG", "-Wall", "-Wextra", "-Werror", "-I", source / "mooncake-transfer-engine/tent/include", ROOT / "benches/tent.cpp", library, "-Wl,-rpath,"+str(library.parent), "-o", tent])
+    run("tent-build", tent_build_command(ref, ROOT, out))
     harness_files = [f for f in (ROOT / "benches").iterdir() if f.is_file() and f.name != "transfer.rs"]
     harness_files.append(orbite / "benches/transfer.rs")
     manifest = {"orbite_revision": run("orbite-revision", ["git", "rev-parse", "HEAD"], cwd=orbite).strip(),

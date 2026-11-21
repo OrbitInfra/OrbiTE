@@ -4,15 +4,15 @@ import argparse
 import collections
 from fractions import Fraction
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 import statistics
 import sys
 import uuid
 
 from compare import load, match_runs
-from run import (BATCHES, CHECKS, CONTRACT, FILE_STATE, POLL, PROFILES, RSS_METHOD, SIZES,
-                 TENT_RETRY, TIMING, VERIFICATION_IO, peak_rss, workload_shapes)
+from run import (BATCHES, CHECKS, CONTRACT, FILE_STATE, POLL, PROFILES, RSS_METHOD, RUST_BUILD, SIZES,
+                 TENT_RETRY, TIMING, VERIFICATION_IO, peak_rss, tent_build_command, workload_shapes)
 
 
 ORBITE_BASELINE = "12d1e83964a596d9b578e9d2879b5cd78e776da6"
@@ -35,7 +35,7 @@ def require(ok, message):
         raise ValueError(message)
 
 
-def trial_resources(directory, row, commands, executables):
+def trial_resources(directory, row, commands, executables, filesystems):
     profile, impl, op, block, batch, layout = key = tuple(row[k] for k in KEY)
     trial = row["trial"]
     require(key in CASES and type(block) is int and type(batch) is int
@@ -46,7 +46,8 @@ def trial_resources(directory, row, commands, executables):
     backend = "io_uring" if profile.startswith("io_uring-") else profile
     expected = ["/usr/bin/time", "-f", "\\nORBITE_PEAK_RSS_KIB=%M", "--", executables[impl],
                 backend, op, str(block), str(batch), layout, "3", "100", "2"]
-    require(argv[:-1] == expected and Path(argv[-1]).name == "orbite-bench-"+name, f"{name}: wrong measurement command")
+    root = filesystems["ext4" if profile == "io_uring-ext4" else "tmpfs"]
+    require(argv == [*expected, str(root / ("orbite-bench-"+name))], f"{name}: wrong measurement command or file path")
     env = {"MC_RPC_CLIENT_IO_THREADS": "2", "MC_TE_RPC_CLIENT_IO_THREADS": "2"} if impl == "tent" else {}
     require(invocation["env_overrides"] == env, f"{name}: unexpected measurement settings")
     raw = json.loads((directory / (name + ".stdout")).read_text())
@@ -102,19 +103,41 @@ def check_settings(path, manifest):
             "nonstandard engine configuration")
 
 
+def build_receipts(path, commands, parameters):
+    source = PurePosixPath(parameters["orbite_source"])
+    require(source.is_absolute(), "missing OrbiTE source checkout")
+    for name, argv in (("rust-build", RUST_BUILD), ("orbite-revision", ["git", "rev-parse", "HEAD"]),
+                       ("orbite-status", ["git", "status", "--porcelain"])):
+        require(commands[name]["cwd"] == str(source) and commands[name]["command"] == argv,
+                f"{name}: different checkout or build settings")
+    reference, output = (PurePosixPath(parameters[k]) for k in ("reference", "output"))
+    harness = PurePosixPath(commands["tent-build"]["cwd"])
+    require(all(p.is_absolute() for p in (reference, output, harness)), "missing native build paths")
+    require(commands["tent-revision"]["command"] == ["git", "-C", str(reference / "reference"), "rev-parse", "HEAD"],
+            "different TENT source checkout")
+    require(commands["tent-build"]["command"] == tent_build_command(reference, harness, output),
+            "different frozen TENT build settings")
+    built = [json.loads(line) for line in (path / "rust-build.stdout").read_text().splitlines()]
+    rust = [r["executable"] for r in built if r.get("executable") and r.get("target", {}).get("name") == "transfer"]
+    require(len(rust) == 1 and PurePosixPath(rust[0]).is_absolute(), "missing Rust benchmark executable")
+    return {"orbite": rust[0], "tent": str(output / "tent-bench")}
+
+
 def formal_sweep(path):
     manifest = json.loads((path / "manifest.json").read_text())
     check_settings(path, manifest)
     invocations = json.loads((path / "commands.json").read_text())
     commands = {record["name"]: record for record in invocations}
     require(len(invocations) == len(commands), "duplicate command receipt")
-    built = [json.loads(line) for line in (path / "rust-build.stdout").read_text().splitlines()]
-    rust = [r["executable"] for r in built if r.get("executable") and r.get("target", {}).get("name") == "transfer"]
-    tent_build = commands["tent-build"]["command"]
-    require(len(rust) == 1 and tent_build[-2] == "-o", "missing benchmark executable identity")
-    executables = {"orbite": rust[0], "tent": tent_build[-1]}
+    filesystems = {fs: PurePosixPath(manifest["parameters"][fs]) for fs in ("ext4", "tmpfs")}
+    for fs, root in filesystems.items():
+        require(root.is_absolute() and ".." not in root.parts, f"{fs}: expected an absolute measured path")
+        for suffix, fields in (("-fs", "FSTYPE"), ("-mount", "SOURCE,FSTYPE,MAJ:MIN,OPTIONS")):
+            require(commands[fs + suffix]["command"] == ["findmnt", "-n", "-o", fields, "-T", str(root)],
+                    f"{fs}: mount probe used a different path")
+    executables = build_receipts(path, commands, manifest["parameters"])
     _, identities, rows = load(path, manifest=manifest,
-                               row_metrics=lambda directory, row: trial_resources(directory, row, commands, executables))
+                               row_metrics=lambda directory, row: trial_resources(directory, row, commands, executables, filesystems))
     require(set(rows) == CASES and len(identities) == len(CASES) * PARAMETERS["trials"], "incomplete CPU matrix")
     return manifest, rows
 

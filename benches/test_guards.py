@@ -10,7 +10,7 @@ import uuid
 
 from guards import (CASES, CHECKS, CONTRACT, FILE_STATE, LIMITS, ORBITE_BASELINE, PARAMETERS,
                     POLL, RSS_METHOD, TENT_RETRY, TIMING, VERIFICATION_IO, compare_trials, evaluate)
-from run import RSS_PREFIX, peak_rss
+from run import RSS_PREFIX, RUST_BUILD, peak_rss, tent_build_command
 
 
 def fixture(path, revision, boot):
@@ -26,7 +26,8 @@ def fixture(path, revision, boot):
                     verification_io=VERIFICATION_IO, builds={"rust": "release, io-uring", "tent": CONTRACT["cmake_options"]},
                     harness_sha256={key: "a"*64 for key in ("tent.cpp", "transfer.rs", "run.py")},
                     binary_sha256={"tent": "c"*64, "orbite": "d"*64},
-                    parameters=PARAMETERS | dict(profile=False, profile_only=False, tail_profile_only=False, ext4="/ext4", tmpfs="/dev/shm"))
+                    parameters=PARAMETERS | dict(profile=False, profile_only=False, tail_profile_only=False, ext4="/ext4",
+                                                 tmpfs="/dev/shm", reference="/ref", output="/bin", orbite_source="/src"))
     (path / "manifest.json").write_text(json.dumps(manifest))
     receipts = {"orbite-revision": revision, "orbite-status": "", "tent-revision": CONTRACT["tent_revision"],
                 "cpu": manifest["cpu"], "rustc": manifest["rustc"], "cxx": manifest["cxx"]}
@@ -36,7 +37,13 @@ def fixture(path, revision, boot):
     for name, value in receipts.items():
         (path / (name + ".stdout")).write_text(value)
     (path / "rust-build.stdout").write_text(json.dumps({"target": {"name": "transfer"}, "executable": "/bin/rust-bench"}))
-    invocations = [{"name": "tent-build", "command": ["c++", "-o", "/bin/tent-bench"]}]
+    invocations = [{"name": name, "command": argv, "cwd": "/src"} for name, argv in (
+        ("rust-build", RUST_BUILD), ("orbite-revision", ["git", "rev-parse", "HEAD"]),
+        ("orbite-status", ["git", "status", "--porcelain"]), ("tent-revision", ["git", "-C", "/ref/reference", "rev-parse", "HEAD"]),
+        ("tent-build", tent_build_command(Path("/ref"), Path("/src"), Path("/bin"))))]
+    for fs in ("ext4", "tmpfs"):
+        for suffix, fields in (("-fs", "FSTYPE"), ("-mount", "SOURCE,FSTYPE,MAJ:MIN,OPTIONS")):
+            invocations.append({"name": fs+suffix, "command": ["findmnt", "-n", "-o", fields, "-T", manifest["parameters"][fs]]})
     with (path / "results.jsonl").open("w") as out:
         for profile, impl, op, block, batch, layout in sorted(CASES):
             file = profile.startswith("io_uring-")
@@ -49,9 +56,10 @@ def fixture(path, revision, boot):
                 (path / (name + ".stdout")).write_text(json.dumps(raw))
                 (path / (name + ".stderr")).write_text(f"{RSS_PREFIX}1000\n")
                 executable = "/bin/rust-bench" if impl == "orbite" else "/bin/tent-bench"
+                root = manifest["parameters"]["ext4" if profile == "io_uring-ext4" else "tmpfs"]
                 invocations.append({"name": name, "command": ["/usr/bin/time", "-f", "\\n"+RSS_PREFIX+"%M", "--",
                                     executable, "io_uring" if file else profile, op, str(block), str(batch), layout,
-                                    "3", "100", "2", "/tmp/orbite-bench-"+name],
+                                    "3", "100", "2", root+"/orbite-bench-"+name],
                                     "env_overrides": manifest["tent_rpc_pools"] if impl == "tent" else {}})
                 print(json.dumps(dict(profile=profile, implementation=impl, op=op, block=block, batch=batch,
                                       layout=layout, trial=trial, peak_rss_kib=1000, **raw)), file=out)
@@ -85,6 +93,20 @@ class GuardTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "orbite-revision"):
                 evaluate(after, anchor)
             (anchor/"orbite-revision.stdout").write_text(ORBITE_BASELINE)
+            original_build = (anchor/"commands.json").read_text()
+            for change in ({"cwd": "/other"}, {"command": [arg for arg in RUST_BUILD if arg != "--release"]}):
+                commands = json.loads(original_build)
+                next(item for item in commands if item["name"] == "rust-build").update(change)
+                (anchor/"commands.json").write_text(json.dumps(commands))
+                with self.assertRaisesRegex(ValueError, "rust-build"):
+                    evaluate(after, anchor)
+            (anchor/"commands.json").write_text(original_build)
+            record = (after/"commands.json").read_text()
+            name = "0-tent-io_uring-ext4-read-4096-1-contiguous"
+            (after/"commands.json").write_text(record.replace("/ext4/orbite-bench-"+name, "/dev/shm/orbite-bench-"+name))
+            with self.assertRaisesRegex(ValueError, "file path"):
+                evaluate(after)
+            (after/"commands.json").write_text(record)
             partial = evaluate(after)
             self.assertEqual(partial["status"], "incomplete")
             self.assertEqual(partial["counts"], {"within-limits": 64, "baseline-missing": 96})
