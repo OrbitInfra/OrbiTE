@@ -62,7 +62,7 @@ completion still excludes a durability barrier. Maximum payload per batch is 64 
 allocation and guard extent is bounded separately.
 
 On a Linux runner with the native dependencies from the
-[CPU oracle](cpu-oracle.md), also install `liburing-dev` **before** building
+[CPU oracle](cpu-oracle.md), install GNU `time` and `liburing-dev` **before** building
 TENT. Enable io_uring in the kernel and choose writable ext4 and tmpfs paths:
 
 ```bash
@@ -77,6 +77,81 @@ Both output directories must be fresh and outside the checkout. The
 uploads `cpu-bench-*` artifacts. GPU, RDMA and GDS are emitted as
 **not run (hardware)**, without estimated numbers. The scoped summary lives in
 [qualification](qualification.md#cpu-benchmark-evidence).
+
+## CPU workload thresholds
+
+Each row is one profile, direction, block size, batch size and layout. Score
+READ and WRITE separately, including every single size and both layouts of
+the 8- and 64-block batches. The stable and Rust 1.85 toolchain runs each
+produce their own verdicts. The existing P11 ratios are fixed for every row.
+
+| CPU workload | In-run reference | Revision regression baseline |
+| --- | --- | --- |
+| CPU memcpy, ordinary TCP | Frozen TENT v0.3.14, same case | Frozen OrbiTE, same case |
+| io_uring on ext4 and on tmpfs | Frozen TENT v0.3.14 on the same mount and route settings | Frozen OrbiTE on the same mount |
+| HP-TCP on two loopback rails, SHM on the same host | OrbiTE is the only measured implementation | Frozen OrbiTE, same case |
+
+Freeze TENT at `e1ea5d31bb5e46ff2df9f90e7c2fbaf52fcdee8c` and the
+OrbiTE source baseline at `12d1e83964a596d9b578e9d2879b5cd78e776da6`,
+the reviewed revision preceding this policy. A new candidate remeasures those
+sources. Historical absolute timings and the latest moving main are unsuitable
+denominators. Changing this baseline or a threshold requires a reviewed policy
+change. The two frozen sources yield **64 TENT comparisons and 96 OrbiTE
+comparisons per toolchain**.
+
+| Metric per workload | Candidate / baseline, inclusive | Measurement per independent trial |
+| --- | --- | --- |
+| Verified goodput | ≥ 0.95 | Total verified payload bytes / sum of timed batch wall times, in GiB/s |
+| p99 batch latency | ≤ 1.05 | Nearest-rank p99 of 100 timed batches, in ns |
+| Process CPU per verified byte | ≤ 1.10 | Sum of whole-process CPU ns during the timed batches / total verified payload bytes |
+| Peak resident memory | ≤ 1.10 | GNU `/usr/bin/time -f %M` on one fresh Linux benchmark process, in KiB. Includes both endpoints where present, setup, buffers, verification and teardown |
+
+Compute each metric inside each of three process trials, then divide the
+candidate median by the baseline median. Compare the unrounded ratio. Each
+row must meet all four limits. p50 and end-of-workload thread count remain
+diagnostics. The Rust engine must also produce the expected owner count and
+file route, and both drivers must verify every byte and guard. Correctness
+failures invalidate the measurement.
+
+Run both revisions sequentially on the same Linux boot, with the same
+compiler, CPU configuration, affinity, mounts, worker settings, workload
+source and measurement driver. Start the frozen OrbiTE sweep first. Each
+sweep alternates OrbiTE/TENT trial order, using one caller, two workers per
+engine and three warmup batches. Both use the warmed file and timing window
+defined above. A timed file WRITE ends at I/O completion, before a durability
+barrier. A traced or paced run cannot supply these samples.
+
+To collect both sides in CI, dispatch `Frozen TENT CPU comparison` with
+`baseline_ref` set to the full frozen OrbiTE revision above. To enforce the
+limits as a job, use `enforce_cpu_guards=true` on a manual dispatch, which
+also selects that baseline. The workflow archives all verdicts in
+`orbite-bench/cpu-guards.json`. For local measurement, create a separate
+clean worktree at that revision and run the command in **CPU sweeps** twice
+from the candidate checkout. Add `--orbite-source "$BASELINE_WORKTREE"` for
+the first run, use distinct output directories, and reuse the reference build
+and mounts. To decide from downloaded bundles, keep their stdout/stderr files
+alongside each manifest and run:
+
+```bash
+python3 -B benches/guards.py "$AFTER" --baseline "$BEFORE" --output "$OUT/cpu-guards.json"
+```
+
+The strict command exits **0** only when every comparison passes. **1** means
+a complete pair crossed a threshold. A miss against the OrbiTE baseline is
+a revision regression in this run. A miss against frozen TENT is a reference
+target gap, which can already exist on the baseline revision. **2** means
+evidence is incomplete or invalid, including missing RSS, mismatched hosts
+or configurations, or a missing trial. A candidate-only report still gives
+64 TENT comparisons and marks all 96 revision comparisons missing.
+`--report-only` archives measured misses or an absent optional baseline;
+malformed evidence still fails the job. Earlier archives lacking peak RSS
+remain usable with the descriptive `compare.py` report.
+
+Keep every crossing visible. Hosted clock, scheduler and virtual-disk
+variation can move a median even with identical source. A rerun may inform
+attribution and must retain both reports. Virtual ext4 measures this warmed
+guest workload. Physical NVMe tails, mixed load, faults and Python API
+correctness have separate gates.
 
 ## TCP profile and connection reuse
 

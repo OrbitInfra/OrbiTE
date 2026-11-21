@@ -389,6 +389,9 @@ and quarantine. See the [file guide](storage.md) for completion and retention.
 The [S26 harness](benchmarks.md) uses public engine calls; it adds no runtime
 fast path or benchmark API. The frozen TENT build remains an isolated oracle
 and performance baseline. Measurements require full-byte and guard checks.
+The [CPU threshold checker](benchmarks.md#cpu-workload-thresholds) consumes
+per-trial process RSS and transfer samples outside the engine. Each workload
+has an independent verdict against its applicable baselines.
 The separate [tebench byte gate](cpu-oracle.md#frozen-tebench-byte-checks)
 uses the unmodified benchmark as a TENT requester and a test-owned target buffer.
 Fault fixtures reuse the executing owners

@@ -20,6 +20,10 @@ on:
         description: Optional base commit for a full before/after sweep on this same runner
         type: string
         default: ''
+      enforce_cpu_guards:
+        description: Use the frozen OrbiTE baseline and fail on any CPU workload outside its limits
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -29,7 +33,7 @@ jobs:
     # Release PRs run this same job through release.yml, once per revision.
     if: ${{ !startsWith(github.head_ref, 'release/') || inputs.release_gate }}
     runs-on: ubuntu-24.04
-    timeout-minutes: ${{ inputs.baseline_ref != '' && 240 || 120 }}
+    timeout-minutes: ${{ (inputs.baseline_ref != '' || inputs.enforce_cpu_guards) && 240 || 120 }}
     strategy:
       fail-fast: false
       matrix:
@@ -44,10 +48,25 @@ jobs:
       - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
+      - name: Select the paired measurement revision
+        if: inputs.baseline_ref != '' || inputs.enforce_cpu_guards
+        env:
+          BASELINE_REF: ${{ inputs.baseline_ref }}
+          ENFORCE: ${{ inputs.enforce_cpu_guards }}
+          DIAGNOSTIC: ${{ inputs.profile_only || inputs.tail_profile_only }}
+        run: |
+          frozen=$(PYTHONPATH=benches python3 -Bc 'from guards import ORBITE_BASELINE; print(ORBITE_BASELINE)')
+          ref=$(git rev-parse --verify --end-of-options "${BASELINE_REF:-$frozen}^{commit}")
+          if [[ "$ENFORCE" == true && ( "$ref" != "$frozen" || "$DIAGNOSTIC" == true ) ]]; then
+            echo "Formal CPU guards require the frozen OrbiTE revision and untraced sweeps" >&2
+            exit 2
+          fi
+          git worktree add --detach "$RUNNER_TEMP/orbite-before" "$ref"
+          if [[ "$ref" == "$frozen" ]]; then echo "ORBITE_GUARD_PAIR=1" >> "$GITHUB_ENV"; fi
       - name: Install reference build dependencies
         timeout-minutes: 10
         run: |
-          .github/scripts/install-native-deps.sh cmake g++ git curl python3-dev libgoogle-glog-dev libgflags-dev libnuma-dev libyaml-cpp-dev libjsoncpp-dev libibverbs-dev libcurl4-openssl-dev libssl-dev libcli11-dev liburing-dev clang-18 libclang-18-dev
+          .github/scripts/install-native-deps.sh cmake g++ git curl time python3-dev libgoogle-glog-dev libgflags-dev libnuma-dev libyaml-cpp-dev libjsoncpp-dev libibverbs-dev libcurl4-openssl-dev libssl-dev libcli11-dev liburing-dev clang-18 libclang-18-dev
           rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
       - name: Install profiling tools
         if: inputs.profile_only || inputs.tail_profile_only || inputs.baseline_ref != ''
@@ -89,11 +108,6 @@ jobs:
           CARGO_PROFILE_RELEASE_DEBUG: 1
           CARGO_TARGET_DIR: ${{ runner.temp }}/profile-target
         run: python3 benches/run.py --reference "$RUNNER_TEMP/orbite-native-cpu" --output "$RUNNER_TEMP/orbite-profiles" --ext4 "$ORBITE_EXT4_DIR" --samples 100 --warmup 3 --workers 2 --trials 3 --profile-only
-      - name: Prepare the matched baseline checkout
-        if: inputs.baseline_ref != ''
-        env:
-          BASELINE_REF: ${{ inputs.baseline_ref }}
-        run: git worktree add --detach "$RUNNER_TEMP/orbite-before" "$BASELINE_REF"
       - name: Trace io_uring sample tails (diagnostic only)
         if: inputs.tail_profile_only
         env:
@@ -107,15 +121,29 @@ jobs:
           fi
           python3 benches/run.py --reference "$RUNNER_TEMP/orbite-native-cpu" --output "$RUNNER_TEMP/orbite-profiles" --ext4 "$ORBITE_EXT4_DIR" --samples 1000 --warmup 3 --workers 2 --trials 3 --tail-profile-only
       - name: Matched baseline sweeps on the same runner
-        if: inputs.baseline_ref != '' && !inputs.profile_only && !inputs.tail_profile_only
+        if: (inputs.baseline_ref != '' || inputs.enforce_cpu_guards) && !inputs.profile_only && !inputs.tail_profile_only
         env:
           CARGO_TARGET_DIR: ${{ runner.temp }}/baseline-target
         run: |
-          cd "$RUNNER_TEMP/orbite-before"
-          python3 benches/run.py --reference "$RUNNER_TEMP/orbite-native-cpu" --output "$RUNNER_TEMP/orbite-bench-before" --ext4 "$ORBITE_EXT4_DIR" --samples 100 --warmup 3 --workers 2 --trials 3
+          args=()
+          if [[ "$ORBITE_GUARD_PAIR" == 1 ]]; then
+            args+=(--orbite-source "$RUNNER_TEMP/orbite-before")
+          else
+            cd "$RUNNER_TEMP/orbite-before"
+          fi
+          python3 benches/run.py "${args[@]}" --reference "$RUNNER_TEMP/orbite-native-cpu" --output "$RUNNER_TEMP/orbite-bench-before" --ext4 "$ORBITE_EXT4_DIR" --samples 100 --warmup 3 --workers 2 --trials 3
       - name: Matched byte-checked CPU sweeps (no hardware)
         if: '!inputs.profile_only && !inputs.tail_profile_only'
         run: python3 benches/run.py --reference "$RUNNER_TEMP/orbite-native-cpu" --output "$RUNNER_TEMP/orbite-bench" --ext4 "$ORBITE_EXT4_DIR" --samples 100 --warmup 3 --workers 2 --trials 3
+      - name: Record CPU workload guard verdicts
+        if: '!inputs.profile_only && !inputs.tail_profile_only'
+        env:
+          ENFORCE: ${{ inputs.enforce_cpu_guards }}
+        run: |
+          args=()
+          if [[ "$ORBITE_GUARD_PAIR" == 1 ]]; then args+=(--baseline "$RUNNER_TEMP/orbite-bench-before"); fi
+          if [[ "$ENFORCE" != true ]]; then args+=(--report-only); fi
+          python3 -B benches/guards.py "$RUNNER_TEMP/orbite-bench" "${args[@]}" --output "$RUNNER_TEMP/orbite-bench/cpu-guards.json"
       - name: Preserve raw measurements outside Git
         if: always()
         uses: actions/upload-artifact@v7.0.2

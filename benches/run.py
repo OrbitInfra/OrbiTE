@@ -9,10 +9,39 @@ import platform
 import statistics
 import subprocess
 import sys
+import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tests/reference"))
 from manifest import CONTRACT, load_manifest, validate as validate_cpu_manifest
+
+SIZES = (4096, 65536, 1048576, 67108864)
+BATCHES = (1, 8, 64)
+PROFILES = {
+    "cpu": ("orbite", "tent"), "tcp": ("orbite", "tent"),
+    "hp_tcp": ("orbite",), "shm": ("orbite",),
+    "io_uring-ext4": ("orbite", "tent"), "io_uring-tmpfs": ("orbite", "tent"),
+}
+RSS_PREFIX = "ORBITE_PEAK_RSS_KIB="
+RSS_METHOD = "GNU time %M, Linux KiB, entire fresh benchmark process"
+POLL = "128 hot then 1,2,4,...,128,200 us capped"
+TIMING = "allocate batch + submit + poll + free; per-batch wall and whole-process CPU"
+CHECKS = "every warmup and sample; changed pattern, reset destination, full bytes and guards; excluded from time"
+FILE_STATE = "preallocated once; in-place pwrite + fdatasync before each sample; warmed ext4 O_DIRECT / tmpfs; timed writes are not durability receipts"
+VERIFICATION_IO = "whole-file bulk read in both harnesses"
+TENT_RETRY = {"max_retry_count": 3, "base_delay_ms": 100, "max_delay_ms": 2000}
+
+
+def workload_shapes(sizes, batches):
+    return ([(size, 1, "contiguous") for size in sizes]
+            + [(4096, batch, layout) for batch in batches if batch != 1 for layout in ("contiguous", "gapped")])
+
+
+def peak_rss(stderr):
+    receipts = [line.removeprefix(RSS_PREFIX) for line in stderr.splitlines() if line.startswith(RSS_PREFIX)]
+    if len(receipts) != 1 or not receipts[0].isascii() or not receipts[0].isdecimal() or int(receipts[0]) <= 0:
+        raise ValueError("missing or invalid per-process peak RSS receipt")
+    return int(receipts[0])
 
 
 def summarize(row, count, payload):
@@ -45,20 +74,22 @@ def main():
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--reference", type=Path, required=True, help="successful tests/reference/run.py output, built with liburing-dev installed")
     p.add_argument("--output", type=Path, required=True)
+    p.add_argument("--orbite-source", type=Path, default=ROOT, help="build the Rust benchmark from this checkout with the current measurement driver")
     p.add_argument("--ext4", type=Path, required=True)
     p.add_argument("--tmpfs", type=Path, default=Path("/dev/shm"))
     p.add_argument("--samples", type=int, default=100)
     p.add_argument("--warmup", type=int, default=3)
     p.add_argument("--workers", type=int, default=2)
-    p.add_argument("--sizes", type=int, nargs="+", default=[4096, 65536, 1048576, 67108864])
-    p.add_argument("--batches", type=int, nargs="+", default=[1, 8, 64])
+    p.add_argument("--sizes", type=int, nargs="+", default=SIZES)
+    p.add_argument("--batches", type=int, nargs="+", default=BATCHES)
     p.add_argument("--trials", type=int, default=3)
     p.add_argument("--profile", action="store_true", help="also collect strace/perf evidence for the slow-path targets")
     p.add_argument("--profile-only", action="store_true", help="collect profiles without reporting traced timings as benchmark rows")
     p.add_argument("--tail-profile-only", action="store_true", help="trace per-sample io_uring and scheduler timelines; never report traced performance")
     a = p.parse_args()
     out, ref = a.output.resolve(), a.reference.resolve()
-    if out.is_relative_to(ROOT) or out.is_relative_to(ref) or platform.system() != "Linux":
+    orbite = a.orbite_source.resolve()
+    if out.is_relative_to(ROOT) or out.is_relative_to(orbite) or out.is_relative_to(ref) or platform.system() != "Linux":
         p.error("Linux only; output must be outside both source trees")
     if not (1 <= a.samples <= 10000 and 1 <= a.warmup <= 100 and 1 <= a.workers <= 16 and 1 <= a.trials <= 9):
         p.error("invalid sample/worker bounds")
@@ -71,12 +102,12 @@ def main():
     commands = []
     tent_env = {"MC_RPC_CLIENT_IO_THREADS": str(a.workers), "MC_TE_RPC_CLIENT_IO_THREADS": str(a.workers)}
 
-    def run(name, cmd, timeout=1200, overrides=None, expect_failure=False):
+    def run(name, cmd, timeout=1200, overrides=None, expect_failure=False, cwd=ROOT):
         cmd = list(map(str, cmd))
-        commands.append({"name": name, "command": cmd, "env_overrides": overrides or {}})
+        commands.append({"name": name, "command": cmd, "cwd": str(cwd), "env_overrides": overrides or {}})
         (out / "commands.json").write_text(json.dumps(commands, indent=2)+"\n")
         with (out / (name+".stderr")).open("w") as err:
-            r = subprocess.run(cmd, cwd=ROOT, env=env | (overrides or {}), text=True,
+            r = subprocess.run(cmd, cwd=cwd, env=env | (overrides or {}), text=True,
                                stdout=subprocess.PIPE, stderr=err, timeout=timeout)
         (out / (name+".stdout")).write_text(r.stdout)
         if (r.returncode == 0) == expect_failure:
@@ -92,27 +123,31 @@ def main():
     for path, expected in [(a.ext4, "ext4"), (a.tmpfs, "tmpfs")]:
         if run(expected+"-fs", ["findmnt", "-n", "-o", "FSTYPE", "-T", path]).strip() != expected:
             raise ValueError(f"{path} is not {expected}")
-    built = run("rust-build", ["cargo", "build", "--release", "--locked", "--features", "io-uring", "--bench", "transfer", "--message-format=json"])
+    built = run("rust-build", ["cargo", "build", "--release", "--locked", "--features", "io-uring", "--bench", "transfer", "--message-format=json"], cwd=orbite)
     rust = next(Path(r["executable"]) for line in built.splitlines() if (r := json.loads(line)).get("executable") and r.get("target", {}).get("name") == "transfer")
     library = ref / "tent-build/mooncake-transfer-engine/tent/src/libtent_shared.so"
     tent = out / "tent-bench"
     run("tent-build", ["c++", "-std=c++20", "-O3", "-DNDEBUG", "-Wall", "-Wextra", "-Werror", "-I", source / "mooncake-transfer-engine/tent/include", ROOT / "benches/tent.cpp", library, "-Wl,-rpath,"+str(library.parent), "-o", tent])
-    manifest = {"orbite_revision": run("orbite-revision", ["git", "rev-parse", "HEAD"]).strip(),
-                "dirty": bool(run("orbite-status", ["git", "status", "--porcelain"]).strip()),
+    harness_files = [f for f in (ROOT / "benches").iterdir() if f.is_file() and f.name != "transfer.rs"]
+    harness_files.append(orbite / "benches/transfer.rs")
+    manifest = {"orbite_revision": run("orbite-revision", ["git", "rev-parse", "HEAD"], cwd=orbite).strip(),
+                "dirty": bool(run("orbite-status", ["git", "status", "--porcelain"], cwd=orbite).strip()),
+                "measurement_dirty": bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT)),
+                "boot_id": Path("/proc/sys/kernel/random/boot_id").read_text().strip(),
+                "sweep_id": str(uuid.uuid4()),
+                "mounts": {name: run(name+"-mount", ["findmnt", "-n", "-o", "SOURCE,FSTYPE,MAJ:MIN,OPTIONS", "-T", path]).strip()
+                           for name, path in (("ext4", a.ext4), ("tmpfs", a.tmpfs))},
+                "peak_rss": RSS_METHOD,
                 "tent_revision": CONTRACT["tent_revision"], "host": platform.node(), "kernel": platform.platform(),
                 "cpu": run("cpu", ["lscpu"]), "affinity": sorted(os.sched_getaffinity(0)),
                 "rustc": run("rustc", ["rustc", "-Vv"]), "cxx": run("cxx", ["c++", "--version"]),
                 "parameters": {k: str(v) if isinstance(v, Path) else v for k, v in vars(a).items()},
                 "caller_threads": 1, "workers_per_engine": a.workers, "tent_rpc_pools": tent_env, "merge": True,
                 "engine_max_failover_attempts": 0,
-                "tent_tcp_local_retry": {"max_retry_count": 3, "base_delay_ms": 100, "max_delay_ms": 2000},
-                "poll": "128 hot then 1,2,4,...,128,200 us capped", "metrics": False,
-                "timing": "allocate batch + submit + poll + free; per-batch wall and whole-process CPU",
-                "checks": "every warmup and sample; changed pattern, reset destination, full bytes and guards; excluded from time",
-                "file_state": "preallocated once; in-place pwrite + fdatasync before each sample; warmed ext4 O_DIRECT / tmpfs; timed writes are not durability receipts",
-                "verification_io": "whole-file bulk read in both harnesses",
+                "tent_tcp_local_retry": TENT_RETRY, "poll": POLL, "metrics": False,
+                "timing": TIMING, "checks": CHECKS, "file_state": FILE_STATE, "verification_io": VERIFICATION_IO,
                 "builds": {"rust": "release, io-uring", "tent": oracle["contract"]["cmake_options"]},
-                "harness_sha256": {f.name: hashlib.sha256(f.read_bytes()).hexdigest() for f in (ROOT / "benches").iterdir() if f.is_file()},
+                "harness_sha256": {f.name: hashlib.sha256(f.read_bytes()).hexdigest() for f in harness_files},
                 "binary_sha256": {k: hashlib.sha256(v.read_bytes()).hexdigest() for k, v in {"orbite": rust, "tent": tent}.items()},
                 "status": "running"}
     (out / "manifest.json").write_text(json.dumps(manifest, indent=2)+"\n")
@@ -133,13 +168,12 @@ def main():
             manifest["status"] = "passed-profiles"
             (out / "manifest.json").write_text(json.dumps(manifest, indent=2)+"\n")
             return
-    shapes = [(size, 1, "contiguous") for size in a.sizes]
-    shapes += [(4096, n, shape) for n in a.batches if n != 1 for shape in ("contiguous", "gapped")]
+    shapes = workload_shapes(a.sizes, a.batches)
     rows = []
     for trial in range(a.trials):
-        for profile in ("cpu", "tcp", "hp_tcp", "shm", "io_uring-ext4", "io_uring-tmpfs"):
+        for profile, names in PROFILES.items():
             backend = "io_uring" if profile.startswith("io_uring") else profile
-            implementations = [("orbite", rust), ("tent", tent)] if backend in ("cpu", "tcp", "io_uring") else [("orbite", rust)]
+            implementations = [(name, rust if name == "orbite" else tent) for name in names]
             if trial % 2: implementations.reverse()
             for op in ("read", "write"):
                 for block, batch, layout in shapes:
@@ -149,8 +183,11 @@ def main():
                         path = directory.resolve() / ("orbite-bench-"+name)
                         if path.exists(): raise FileExistsError(path)
                         try:
-                            text = run(name, [exe, backend, op, block, batch, layout, a.warmup, a.samples, a.workers, path], overrides=tent_env if implementation == "tent" else None)
+                            text = run(name, ["/usr/bin/time", "-f", "\\n"+RSS_PREFIX+"%M", "--",
+                                             exe, backend, op, block, batch, layout, a.warmup, a.samples, a.workers, path],
+                                       overrides=tent_env if implementation == "tent" else None)
                             row = json.loads(text)
+                            row["peak_rss_kib"] = peak_rss((out / (name+".stderr")).read_text())
                             summary = summarize(row, a.samples, block*batch)
                             if implementation == "orbite" and backend == "io_uring" and row["direct_io"] != profile.endswith("ext4"):
                                 raise ValueError("wrong file route")
