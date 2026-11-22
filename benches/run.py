@@ -12,7 +12,11 @@ import uuid
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "tests/reference"))
-from manifest import CONTRACT, load_manifest, validate as validate_cpu_manifest
+try:
+    from manifest import CONTRACT, load_manifest, validate as validate_cpu_manifest
+finally:
+    # The oracle has its own run.py. Subsequent benchmark imports must resolve here.
+    sys.path.pop(0)
 
 SIZES = (4096, 65536, 1048576, 67108864)
 BATCHES = (1, 8, 64)

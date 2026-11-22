@@ -3,6 +3,9 @@ from collections import Counter, defaultdict
 from contextlib import redirect_stderr
 from io import StringIO
 from itertools import permutations
+from pathlib import Path
+import subprocess
+import sys
 import unittest
 from unittest.mock import patch
 
@@ -11,6 +14,14 @@ from tmpfs_tail import schedule, summarize_pairs
 
 
 class TmpfsTailTests(unittest.TestCase):
+    def test_standalone_driver_resolves_benchmark_modules(self):
+        # A unittest import preloads 'run'. The real entry point starts with only '__main__'.
+        benches = Path(__file__).resolve().parent
+        subprocess.run([sys.executable, "-I", "-B", "-c",
+                        "import pathlib, runpy, sys; sys.path.insert(0, sys.argv[1]); "
+                        "runpy.run_path(str(pathlib.Path(sys.argv[1]) / 'run.py')); "
+                        "from tmpfs_tail import measure", str(benches)], check=True)
+
     def test_manifest_parameters_match_the_selected_workload(self):
         args = ["--output", "/tmp/tail-results", "--reference", "/tmp/native", "--ext4", "/tmp/ext4"]
         with patch("platform.system", return_value="Linux"):
