@@ -116,18 +116,21 @@ def parse_args(argv=None):
     p.add_argument("--profile-only", action="store_true", help="collect profiles without reporting traced timings as benchmark rows")
     p.add_argument("--tail-profile-only", action="store_true", help="trace per-sample io_uring and scheduler timelines; never report traced performance")
     p.add_argument("--tmpfs-tail-baseline", type=Path, help="compare singleton tmpfs tails in balanced A/A, A/B and TENT runs using the frozen OrbiTE checkout")
-    p.add_argument("--tcp-read-rss-only", action="store_true", help="measure process RSS and profile heap allocations for a 64 MiB TCP READ")
+    rss = p.add_mutually_exclusive_group()
+    rss.add_argument("--tcp-read-rss-only", action="store_true", help="measure process RSS and heap allocations for a 64 MiB TCP READ")
+    rss.add_argument("--tmpfs-read-rss-only", action="store_true", help="measure process RSS and heap allocations for a 64 MiB buffered tmpfs READ")
     a = p.parse_args(argv)
     focused = a.tmpfs_tail_baseline is not None
+    measure_rss = a.tcp_read_rss_only or a.tmpfs_read_rss_only
     if a.samples is None:
         a.samples = 1000 if focused else 100
     if a.trials is None:
         a.trials = 12 if focused else 3
     if a.sizes is None:
-        single_size = 64 << 20 if a.tcp_read_rss_only else 4096
-        a.sizes = [single_size] if focused or a.tcp_read_rss_only else SIZES
+        single_size = 64 << 20 if measure_rss else 4096
+        a.sizes = [single_size] if focused or measure_rss else SIZES
     if a.batches is None:
-        a.batches = [1] if focused or a.tcp_read_rss_only else BATCHES
+        a.batches = [1] if focused or measure_rss else BATCHES
     a.output, a.reference, a.orbite_source = a.output.resolve(), a.reference.resolve(), a.orbite_source.resolve()
     out, ref, orbite = a.output, a.reference, a.orbite_source
     a.ext4, a.tmpfs = a.ext4.resolve(), a.tmpfs.resolve()
@@ -144,14 +147,15 @@ def parse_args(argv=None):
     ):
         p.error("tmpfs tail diagnostics require the current source, a separate output, 12 triplets per case, "
                 "one 4 KiB block, 3 warmups, 1000 untraced samples and 2 workers")
-    if a.tcp_read_rss_only and (focused or a.profile or a.profile_only or a.tail_profile_only
+    if measure_rss and (focused or a.profile or a.profile_only or a.tail_profile_only
             or (a.warmup, a.samples, a.workers, a.trials, a.sizes, a.batches) != (3, 100, 2, 3, [64 << 20], [1])):
-        p.error("TCP READ memory profiling requires one 64 MiB block, 3 warmups, 100 samples, 2 workers and 3 trials")
+        p.error("READ memory profiling requires one 64 MiB block, 3 warmups, 100 samples, 2 workers and 3 trials")
     return a
 
 
 def main():
     a = parse_args()
+    measure_rss = a.tcp_read_rss_only or a.tmpfs_read_rss_only
     out, ref, orbite = a.output, a.reference, a.orbite_source
     out.mkdir(parents=True, exist_ok=False)
     env = {k: v for k, v in os.environ.items()
@@ -183,7 +187,7 @@ def main():
             raise ValueError(f"{path} is not {expected}")
     def build_rust(name, checkout, overrides=None):
         declared = checkout / "benches/transfer.rs"
-        caller = declared if a.tcp_read_rss_only else ROOT / "benches/transfer.rs"
+        caller = declared if measure_rss else ROOT / "benches/transfer.rs"
         redirected = caller != declared and caller.read_bytes() != declared.read_bytes()
         overrides = dict(overrides or {})
         if redirected:
@@ -207,11 +211,11 @@ def main():
     rust = build_rust("rust-build", orbite)
     tent = out / "tent-bench"
     tent_build = tent_build_command(ref, ROOT, out)
-    if a.tcp_read_rss_only:
+    if measure_rss:
         tent_build.insert(1, "-g1")
     run("tent-build", tent_build)
     harness_files = [f for f in (ROOT / "benches").iterdir() if f.is_file() and f.name != "transfer.rs"]
-    harness_files.append((orbite if a.tcp_read_rss_only else ROOT) / "benches/transfer.rs")
+    harness_files.append((orbite if measure_rss else ROOT) / "benches/transfer.rs")
     manifest = {"orbite_revision": run("orbite-revision", ["git", "rev-parse", "HEAD"], cwd=orbite).strip(),
                 "checkout_caller_sha256": hashlib.sha256((orbite / "benches/transfer.rs").read_bytes()).hexdigest(),
                 "dirty": bool(run("orbite-status", ["git", "status", "--porcelain"], cwd=orbite).strip()),
@@ -238,12 +242,13 @@ def main():
         text = run(name+"-bad-byte", [exe, "tcp", "read", 4096, 1, "contiguous", 1, 1, a.workers, "-"], overrides=({**(tent_env if name == "tent" else {}), "ORBITE_BENCH_CORRUPT_BYTE": "1"}), expect_failure=True)
         if '"verified":true' in text:
             raise ValueError("corrupted guard produced a report")
-    if a.tcp_read_rss_only:
-        from profile_tcp_rss import measure
+    if measure_rss:
+        from profile_read_rss import measure
         if manifest["dirty"] or manifest["measurement_dirty"]:
-            raise ValueError("TCP READ memory comparisons require clean engine and measurement checkouts")
-        measure(out, rust, tent, run, tent_env)
-        manifest["status"] = "completed-tcp-read-memory-profile"
+            raise ValueError("READ memory comparisons require clean engine and measurement checkouts")
+        measure(out, rust, tent, run, tent_env, tmpfs=a.tmpfs if a.tmpfs_read_rss_only else None)
+        profile = "tmpfs" if a.tmpfs_read_rss_only else "tcp"
+        manifest["status"] = f"completed-{profile}-read-memory-profile"
         (out / "manifest.json").write_text(json.dumps(manifest, indent=2)+"\n")
         return
     if a.tmpfs_tail_baseline:

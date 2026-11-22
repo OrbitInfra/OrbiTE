@@ -464,6 +464,10 @@ CPU workload guard verdict.
 The [64 MiB TCP READ profile](benchmarks.md#process-memory-for-a-64-mib-read)
 records GNU time RSS for untraced processes and live heap stacks in separate
 processes. The result includes both loopback peers and their caller.
+The [64 MiB tmpfs READ profile](benchmarks.md#peak-memory-for-a-64-mib-file-read)
+requires one buffered OrbiTE owner, full byte checks and a fresh private file
+on the verified mount for each child process. Its completion receipt is
+`completed-tmpfs-read-memory-profile`.
 
 S26's [method and reproduction commands](benchmarks.md) pin the workload,
 compiler and host in external CI artifacts. [Run 42362843122](https://github.com/OrbitInfra/OrbiTE/actions/runs/42362843122)

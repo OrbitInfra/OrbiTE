@@ -368,6 +368,9 @@ The same preflight, partial-submit drain and prefix aggregation serve both paths
 Aligned gapped and contiguous host batches keep one ring for the whole group,
 without bounce allocation, as checked by
 `aligned_file_batches_use_one_ring_without_bounce_for_gaps_or_contiguous_ranges`.
+For an aligned [64 MiB buffered file READ](benchmarks.md#peak-memory-for-a-64-mib-file-read),
+the observed CQE completed the full payload without a bounce buffer. The
+process reached peak RSS in the benchmark's subsequent byte checks.
 The [block-layer diagnosis](benchmarks.md#direct-io-issue-paths-and-verification-load)
 finds a verification/load-dependent comparison; it changes no ring, submission
 or drain owner. The long tail is reproducible with unchanged TENT by altering

@@ -194,14 +194,20 @@ Done:
   found all eight READ/WRITE p99 paired medians within the self-baseline limit
   across two runs on stable and 1.85.0. The [64 MiB TCP READ memory profile](benchmarks.md#process-memory-for-a-64-mib-read)
   traced the [historical 1.144× TENT peak RSS](https://github.com/OrbitInfra/OrbiTE/actions/runs/44868978517) to a 64 MiB file-verification
-  image kept live during TCP. The benchmark now allocates it only for files.
+  image kept live during TCP.
   The requester and source retain both TCP payload buffers through their
   [existing completion boundaries](cpu-oracle.md#interrupted-read-reply).
-  The next repeatable memory gap is a single 64 MiB file READ. Start with
-  buffered tmpfs and attribute the verification and I/O buffers. Both the
-  [earlier sweep](https://github.com/OrbitInfra/OrbiTE/actions/runs/44868978517)
-  and the [current sweep](https://github.com/OrbitInfra/OrbiTE/actions/runs/44978023506)
-  measured 1.147–1.150× TENT's peak RSS on both toolchains, also on ext4.
+  The [64 MiB file READ profile](benchmarks.md#peak-memory-for-a-64-mib-file-read)
+  located the buffered tmpfs peak in verification after drain. The Rust
+  caller checks every byte of the unused registration against the sentinel
+  without allocating a payload-sized expected image. The paired tmpfs
+  retest measured 0.960× TENT's peak RSS on both toolchains. Earlier file
+  READs measured 1.147–1.150× TENT's peak RSS. Next, profile
+  a contiguous batch of eight 4 KiB tmpfs READs. Its goodput, p99 and CPU
+  per byte missed the TENT targets on both toolchains in both earlier sweeps.
+  Measure completion polling and worker handoff separately.
+  [First sweep](https://github.com/OrbitInfra/OrbiTE/actions/runs/44868978517)
+  · [Second sweep](https://github.com/OrbitInfra/OrbiTE/actions/runs/44978023506)
 
 - **S16 — reference fixtures.** Retain the CPU trace contract and three frozen
   request prefixes used by native-listener rejection. Compatibility inventories
