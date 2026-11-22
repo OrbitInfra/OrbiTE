@@ -59,6 +59,16 @@ def nearest_rank_p99(values):
     return sorted(values)[(99 * len(values) + 99) // 100 - 1]
 
 
+def check_caller_dep_info(text, executable, caller):
+    # rustc emits one Make rule for the linked executable and a phony rule
+    # for each input. This standalone caller has a single source file.
+    source = str(caller).replace(" ", "\\ ")
+    targets = {str(executable), str(executable).replace(" ", "\\ ")}
+    lines = text.splitlines()
+    if not any(f"{target}: {source}" in lines for target in targets) or f"{source}:" not in lines:
+        raise ValueError("compiled benchmark does not depend on the measured caller")
+
+
 def validate_samples(row, count, payload):
     if row.get("verified") is not True or row.get("payload_bytes") != payload:
         raise ValueError("unverified or wrong-payload result")
@@ -171,8 +181,25 @@ def main():
         if run(expected+"-fs", ["findmnt", "-n", "-o", "FSTYPE", "-T", path]).strip() != expected:
             raise ValueError(f"{path} is not {expected}")
     def build_rust(name, checkout, overrides=None):
+        declared = checkout / "benches/transfer.rs"
+        caller = declared if a.tcp_read_rss_only else ROOT / "benches/transfer.rs"
+        redirected = caller != declared and caller.read_bytes() != declared.read_bytes()
+        overrides = dict(overrides or {})
+        if redirected:
+            revision = run(name+"-engine", ["git", "rev-parse", "HEAD"], cwd=checkout).strip()
+            digest = hashlib.sha256(caller.read_bytes()).hexdigest()
+            cache = Path(overrides.get("CARGO_TARGET_DIR") or env.get("CARGO_TARGET_DIR") or (out.parent / "cargo"))
+            overrides.update(RUSTC_WORKSPACE_WRAPPER=str(ROOT / "benches/build_caller.py"),
+                             CARGO_TARGET_DIR=str(cache.resolve() / "bench-callers" / revision / digest))
+            if inner := env.get("RUSTC_WORKSPACE_WRAPPER"):
+                overrides["ORBITE_BENCH_INNER_WRAPPER"] = inner
         built = run(name, RUST_BUILD, cwd=checkout, overrides=overrides)
-        return next(Path(r["executable"]) for line in built.splitlines() if (r := json.loads(line)).get("executable") and r.get("target", {}).get("name") == "transfer")
+        exe, = [Path(r["executable"]) for line in built.splitlines() if (r := json.loads(line)).get("executable") and r.get("target", {}).get("name") == "transfer"]
+        if redirected:
+            deps = run(name+"-deps", ["cat", exe.with_suffix(".d")])
+            check_caller_dep_info(deps, exe, caller)
+            run(name+"-caller", ["sha256sum", caller])
+        return exe
 
     rust = build_rust("rust-build", orbite)
     tent = out / "tent-bench"
@@ -181,8 +208,9 @@ def main():
         tent_build.insert(1, "-g1")
     run("tent-build", tent_build)
     harness_files = [f for f in (ROOT / "benches").iterdir() if f.is_file() and f.name != "transfer.rs"]
-    harness_files.append(orbite / "benches/transfer.rs")
+    harness_files.append((orbite if a.tcp_read_rss_only else ROOT) / "benches/transfer.rs")
     manifest = {"orbite_revision": run("orbite-revision", ["git", "rev-parse", "HEAD"], cwd=orbite).strip(),
+                "checkout_caller_sha256": hashlib.sha256((orbite / "benches/transfer.rs").read_bytes()).hexdigest(),
                 "dirty": bool(run("orbite-status", ["git", "status", "--porcelain"], cwd=orbite).strip()),
                 "measurement_dirty": bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT)),
                 "boot_id": Path("/proc/sys/kernel/random/boot_id").read_text().strip(),
@@ -221,8 +249,6 @@ def main():
         if (revision != ORBITE_BASELINE or run("baseline-status", ["git", "status", "--porcelain"], cwd=base).strip()
                 or manifest["dirty"] or manifest["measurement_dirty"]):
             raise ValueError("tmpfs tail diagnostics require clean candidate and frozen baseline revisions")
-        if (base / "benches/transfer.rs").read_bytes() != (orbite / "benches/transfer.rs").read_bytes():
-            raise ValueError("tmpfs pair uses different Rust benchmark harnesses")
         frozen = build_rust("baseline-build", base, {"CARGO_TARGET_DIR": str(out / "baseline-target")})
         manifest["baseline_revision"] = revision
         manifest["binary_sha256"]["baseline"] = hashlib.sha256(frozen.read_bytes()).hexdigest()
