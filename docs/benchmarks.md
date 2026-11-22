@@ -187,7 +187,7 @@ Both toolchains met all four TENT targets for the gapped WRITE. In the same pair
 other workloads crossed a common self-baseline guard. Ext4 WRITE goodput crossed for a
 single 4 KiB block and eight gapped 4 KiB blocks. The single 4 KiB tmpfs READ and WRITE and
 the SHM contiguous 8 × 4 KiB READ crossed the p99 guard. These signals stay open for
-follow-up.
+follow-up. The [singleton tmpfs retest](#singleton-tmpfs-tail-latency) revisits the two tmpfs rows.
 
 Independent Linux aarch64 tracing counted one batch-worker start per target batch before the
 change and zero after, with one ring setup in both cases. The target kept all eight physical
@@ -195,6 +195,56 @@ owners. The 64-request control still started a worker. The [full crossing
 tables](https://github.com/OrbitInfra/OrbiTE/pull/221) retain results for the other CPU
 cases. See [file submission and drain](storage.md#dram-transfers-with-io_uring) for bounds,
 incomplete CQ sets and worker failure.
+
+### Singleton tmpfs tail latency
+
+The `tmpfs_tail_only` input of the native CPU workflow measures warmed, buffered
+io_uring READ and WRITE of one contiguous 4 KiB block. On each Linux runner,
+A/A launches the frozen OrbiTE binary twice. A/B launches that same binary and
+the candidate. Frozen TENT runs alongside each pair. The driver uses all six
+launch orders twice per operation and comparison, reversing the order of the
+cases on the second pass. Each of the 144 processes has one caller, two configured
+workers, three warmups and 1,000 untraced samples with byte checks. Each toolchain
+has its own runner and boot.
+
+`tmpfs-tail.json` records each process's nearest-rank p99. It also reports p99
+over the first 100 samples for comparison with the formal sweep's sample count.
+Those samples belong to the same process as the longer series. The paired
+ratio is the median of twelve probe/baseline ratios, with six pairs in each
+launch direction. The report also gives the probe/TENT ratio and the count of
+pairs above 1.05. Use the A/A results and both launch directions to interpret
+a crossing. The [formal thresholds](#cpu-workload-thresholds) continue to use
+the complete paired sweeps.
+
+[Run 1](https://github.com/OrbitInfra/OrbiTE/actions/runs/44972155456) and
+[run 2](https://github.com/OrbitInfra/OrbiTE/actions/runs/44972237044) tested
+`9c4ea6a` against frozen OrbiTE `12d1e839` and the pinned TENT build.
+Stable was Rust 1.100.0. Run 1 used Xeon 6975P-C for stable and EPYC 9V74 for
+1.85.0. Run 2 used EPYC 7763 for stable and Xeon 6975P-C for 1.85.0.
+All 576 fresh processes verified their 1,000 measured batches. The table gives
+paired p99 ratios over those samples. The launch-order column splits A/B by
+which OrbiTE process started first.
+
+| Run | Rust | Op | A/A | A/B | Baseline first / candidate first | A/B pairs above 1.05 | Candidate/TENT |
+|---|---|---|---:|---:|---:|---:|---:|
+| 1 | stable | READ | 1.012 | 1.019 | 1.086 / 0.895 | 4/12 | 0.221 |
+| 1 | stable | WRITE | 1.229 | 0.943 | 1.413 / 0.816 | 5/12 | 0.798 |
+| 1 | 1.85.0 | READ | 1.120 | 0.996 | 0.861 / 1.038 | 5/12 | 0.532 |
+| 1 | 1.85.0 | WRITE | 1.055 | 0.889 | 0.840 / 0.927 | 3/12 | 0.821 |
+| 2 | stable | READ | 1.090 | 0.888 | 0.888 / 0.903 | 4/12 | 0.726 |
+| 2 | stable | WRITE | 0.955 | 1.015 | 1.018 / 1.011 | 3/12 | 0.962 |
+| 2 | 1.85.0 | READ | 0.942 | 1.002 | 0.973 / 1.042 | 4/12 | 0.211 |
+| 2 | 1.85.0 | WRITE | 0.996 | 0.945 | 0.945 / 0.947 | 4/12 | 0.667 |
+
+The earlier singleton p99 crossings in the full sweep did not recur in any
+of the eight 1,000-sample A/B medians. Four of the eight same-binary medians
+and some individual A/B pairs still crossed.
+For example, stable WRITE in run 1 gave 1.413 with the baseline first and
+0.816 with the candidate first. The same-binary WRITE control gave 1.229.
+Taking only the first 100 samples changed run 1 stable READ from 1.019 to
+1.274 and run 2 stable WRITE from 1.015 to 1.170. These measurements support
+retaining the current single-request submission path. The ext4 WRITE goodput
+and SHM READ p99 cases from the full sweep remain open.
 
 ## TCP profile and connection reuse
 

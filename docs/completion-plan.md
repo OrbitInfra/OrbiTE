@@ -190,6 +190,14 @@ Done:
   retain every missing comparison and every threshold miss. The same-binary
   repeat measures run-to-run variation. The [buffered WRITE comparison](benchmarks.md#buffered-small-write-groups)
   measures caller completion on warmed tmpfs at eight gapped 4 KiB offsets.
+  The [single-block tmpfs retest](benchmarks.md#singleton-tmpfs-tail-latency)
+  found all eight READ/WRITE p99 paired medians within the self-baseline limit
+  across two runs on stable and 1.85.0. The next matched TENT gap to profile
+  is process peak RSS for a single 64 MiB TCP READ. In the
+  [full comparison](https://github.com/OrbitInfra/OrbiTE/actions/runs/44868978517)
+  both toolchains used 1.144× TENT's peak RSS against a 1.10 limit. Attribute
+  the benchmark and engine buffers while preserving the
+  [interrupted READ guarantee](cpu-oracle.md#interrupted-read-reply).
 
 - **S16 — reference fixtures.** Retain the CPU trace contract and three frozen
   request prefixes used by native-listener rejection. Compatibility inventories
