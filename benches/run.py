@@ -59,6 +59,16 @@ def nearest_rank_p99(values):
     return sorted(values)[(99 * len(values) + 99) // 100 - 1]
 
 
+def check_caller_dep_info(text, executable, caller):
+    # rustc emits one Make rule for the linked executable and a phony rule
+    # for each input. This standalone caller has a single source file.
+    source = str(caller).replace(" ", "\\ ")
+    targets = {str(executable), str(executable).replace(" ", "\\ ")}
+    lines = text.splitlines()
+    if not any(f"{target}: {source}" in lines for target in targets) or f"{source}:" not in lines:
+        raise ValueError("compiled benchmark does not depend on the measured caller")
+
+
 def validate_samples(row, count, payload):
     if row.get("verified") is not True or row.get("payload_bytes") != payload:
         raise ValueError("unverified or wrong-payload result")
@@ -106,6 +116,7 @@ def parse_args(argv=None):
     p.add_argument("--profile-only", action="store_true", help="collect profiles without reporting traced timings as benchmark rows")
     p.add_argument("--tail-profile-only", action="store_true", help="trace per-sample io_uring and scheduler timelines; never report traced performance")
     p.add_argument("--tmpfs-tail-baseline", type=Path, help="compare singleton tmpfs tails in balanced A/A, A/B and TENT runs using the frozen OrbiTE checkout")
+    p.add_argument("--tcp-read-rss-only", action="store_true", help="measure process RSS and profile heap allocations for a 64 MiB TCP READ")
     a = p.parse_args(argv)
     focused = a.tmpfs_tail_baseline is not None
     if a.samples is None:
@@ -113,9 +124,10 @@ def parse_args(argv=None):
     if a.trials is None:
         a.trials = 12 if focused else 3
     if a.sizes is None:
-        a.sizes = [4096] if focused else SIZES
+        single_size = 64 << 20 if a.tcp_read_rss_only else 4096
+        a.sizes = [single_size] if focused or a.tcp_read_rss_only else SIZES
     if a.batches is None:
-        a.batches = [1] if focused else BATCHES
+        a.batches = [1] if focused or a.tcp_read_rss_only else BATCHES
     a.output, a.reference, a.orbite_source = a.output.resolve(), a.reference.resolve(), a.orbite_source.resolve()
     out, ref, orbite = a.output, a.reference, a.orbite_source
     a.ext4, a.tmpfs = a.ext4.resolve(), a.tmpfs.resolve()
@@ -132,6 +144,9 @@ def parse_args(argv=None):
     ):
         p.error("tmpfs tail diagnostics require the current source, a separate output, 12 triplets per case, "
                 "one 4 KiB block, 3 warmups, 1000 untraced samples and 2 workers")
+    if a.tcp_read_rss_only and (focused or a.profile or a.profile_only or a.tail_profile_only
+            or (a.warmup, a.samples, a.workers, a.trials, a.sizes, a.batches) != (3, 100, 2, 3, [64 << 20], [1])):
+        p.error("TCP READ memory profiling requires one 64 MiB block, 3 warmups, 100 samples, 2 workers and 3 trials")
     return a
 
 
@@ -167,15 +182,38 @@ def main():
         if run(expected+"-fs", ["findmnt", "-n", "-o", "FSTYPE", "-T", path]).strip() != expected:
             raise ValueError(f"{path} is not {expected}")
     def build_rust(name, checkout, overrides=None):
+        declared = checkout / "benches/transfer.rs"
+        caller = declared if a.tcp_read_rss_only else ROOT / "benches/transfer.rs"
+        redirected = caller != declared and caller.read_bytes() != declared.read_bytes()
+        overrides = dict(overrides or {})
+        if redirected:
+            revision = run(name+"-engine", ["git", "rev-parse", "HEAD"], cwd=checkout).strip()
+            digest = hashlib.sha256(caller.read_bytes()).hexdigest()
+            builder = ROOT / "benches/build_caller.py"
+            builder_digest = hashlib.sha256(builder.read_bytes()).hexdigest()
+            cache = Path(overrides.get("CARGO_TARGET_DIR") or env.get("CARGO_TARGET_DIR") or (out.parent / "cargo"))
+            overrides.update(RUSTC_WORKSPACE_WRAPPER=str(builder),
+                             CARGO_TARGET_DIR=str(cache.resolve() / builder_digest / "bench-callers" / revision / digest))
+            if inner := env.get("RUSTC_WORKSPACE_WRAPPER"):
+                overrides["ORBITE_BENCH_INNER_WRAPPER"] = inner
         built = run(name, RUST_BUILD, cwd=checkout, overrides=overrides)
-        return next(Path(r["executable"]) for line in built.splitlines() if (r := json.loads(line)).get("executable") and r.get("target", {}).get("name") == "transfer")
+        exe, = [Path(r["executable"]) for line in built.splitlines() if (r := json.loads(line)).get("executable") and r.get("target", {}).get("name") == "transfer"]
+        if redirected:
+            deps = run(name+"-deps", ["cat", exe.with_suffix(".d")])
+            check_caller_dep_info(deps, exe, caller)
+            run(name+"-caller", ["sha256sum", caller])
+        return exe
 
     rust = build_rust("rust-build", orbite)
     tent = out / "tent-bench"
-    run("tent-build", tent_build_command(ref, ROOT, out))
+    tent_build = tent_build_command(ref, ROOT, out)
+    if a.tcp_read_rss_only:
+        tent_build.insert(1, "-g1")
+    run("tent-build", tent_build)
     harness_files = [f for f in (ROOT / "benches").iterdir() if f.is_file() and f.name != "transfer.rs"]
-    harness_files.append(orbite / "benches/transfer.rs")
+    harness_files.append((orbite if a.tcp_read_rss_only else ROOT) / "benches/transfer.rs")
     manifest = {"orbite_revision": run("orbite-revision", ["git", "rev-parse", "HEAD"], cwd=orbite).strip(),
+                "checkout_caller_sha256": hashlib.sha256((orbite / "benches/transfer.rs").read_bytes()).hexdigest(),
                 "dirty": bool(run("orbite-status", ["git", "status", "--porcelain"], cwd=orbite).strip()),
                 "measurement_dirty": bool(subprocess.check_output(["git", "status", "--porcelain"], cwd=ROOT)),
                 "boot_id": Path("/proc/sys/kernel/random/boot_id").read_text().strip(),
@@ -200,6 +238,14 @@ def main():
         text = run(name+"-bad-byte", [exe, "tcp", "read", 4096, 1, "contiguous", 1, 1, a.workers, "-"], overrides=({**(tent_env if name == "tent" else {}), "ORBITE_BENCH_CORRUPT_BYTE": "1"}), expect_failure=True)
         if '"verified":true' in text:
             raise ValueError("corrupted guard produced a report")
+    if a.tcp_read_rss_only:
+        from profile_tcp_rss import measure
+        if manifest["dirty"] or manifest["measurement_dirty"]:
+            raise ValueError("TCP READ memory comparisons require clean engine and measurement checkouts")
+        measure(out, rust, tent, run, tent_env)
+        manifest["status"] = "completed-tcp-read-memory-profile"
+        (out / "manifest.json").write_text(json.dumps(manifest, indent=2)+"\n")
+        return
     if a.tmpfs_tail_baseline:
         from guards import ORBITE_BASELINE
         from tmpfs_tail import measure
@@ -208,8 +254,6 @@ def main():
         if (revision != ORBITE_BASELINE or run("baseline-status", ["git", "status", "--porcelain"], cwd=base).strip()
                 or manifest["dirty"] or manifest["measurement_dirty"]):
             raise ValueError("tmpfs tail diagnostics require clean candidate and frozen baseline revisions")
-        if (base / "benches/transfer.rs").read_bytes() != (orbite / "benches/transfer.rs").read_bytes():
-            raise ValueError("tmpfs pair uses different Rust benchmark harnesses")
         frozen = build_rust("baseline-build", base, {"CARGO_TARGET_DIR": str(out / "baseline-target")})
         manifest["baseline_revision"] = revision
         manifest["binary_sha256"]["baseline"] = hashlib.sha256(frozen.read_bytes()).hexdigest()

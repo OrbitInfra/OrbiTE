@@ -121,6 +121,14 @@ engine and three warmup batches. Both use the warmed file and timing window
 defined above. A timed file WRITE ends at I/O completion, before a durability
 barrier. A traced or paced run cannot supply these samples.
 
+For revision comparisons the measurement checkout supplies the Rust caller.
+When a selected engine checkout has a different `benches/transfer.rs`, the
+driver builds its locked engine with the measurement caller and checks rustc's
+dependency file against the resulting executable. The receipt includes both
+caller hashes. The build cache is keyed by the compiler wrapper's content,
+the engine revision and the caller hash. A reused executable must match all three.
+This keeps changes in benchmark allocations out of the engine-to-engine ratio.
+
 To collect both sides in CI, dispatch `Frozen TENT CPU comparison` with
 `baseline_ref` set to the full frozen OrbiTE revision above. To enforce the
 limits as a job, use `enforce_cpu_guards=true` on a manual dispatch, which
@@ -247,6 +255,71 @@ retaining the current single-request submission path. The ext4 WRITE goodput
 and SHM READ p99 cases from the full sweep remain open.
 
 ## TCP profile and connection reuse
+
+### Process memory for a 64 MiB READ
+
+The native CPU workflow's `tcp_read_rss_only` input measures one contiguous
+64 MiB READ on a warmed loopback connection. Both engines live in one
+process. For each implementation GNU time records peak process RSS in three
+fresh trials with three warmups, 100 samples, one caller and two configured
+workers per engine. Each sample checks the payload and both registration
+guards. A separate short run records the live heap allocation stacks at the
+global allocation peak and their timeline with Heaptrack. Heap bytes and
+process RSS have different accounting.
+
+With `baseline_ref`, this diagnostic uses the caller checked into each
+revision. This lets a change in the caller itself be measured on the same
+runner as the previous caller and frozen TENT. The `cpu-bench-*` artifacts
+contain `tcp-read-rss.json`, the per-process GNU time receipts,
+`peak.stacks` and `timeline.massif` for each implementation.
+
+```bash
+gh workflow run native-cpu.yml --ref main -f tcp_read_rss_only=true \
+  -f baseline_ref=03452a0462dcbc5261a52a73f791d6e57bab283f
+```
+
+The original Rust caller kept six payload-sized allocations live at the
+transfer peak. Two held the registered ranges, one held the expected bytes,
+and one held an all-sentinel image used only to verify file transfers. The
+TCP requester held the complete reply until commit and the source held its
+snapshot while sending. At 64 MiB, each TCP buffer accounted for 64 MiB of
+live heap. Frozen TENT also held two RPC payloads at its peak, at the
+client receive site and in `ControlService::onRecvData`. Its caller verified
+the registered bytes directly. The [original allocation stacks](https://github.com/OrbitInfra/OrbiTE/actions/runs/44977183125)
+showed six large allocations for OrbiTE and five for TENT on both toolchains.
+
+The Rust caller now allocates the all-sentinel image only for file workloads.
+Its full comparison copy still checks every byte after the batch drains.
+The table gives the median peak RSS in KiB over three untraced processes per
+cell. Each toolchain ran both revisions on the same boot with the same TENT
+executable. In the separate heap profiles, OrbiTE's peak live allocations
+fell from 384.1 to 320.1 MiB on both toolchains, a decrease of exactly
+67,108,864 bytes. [Paired RSS and allocation profiles](https://github.com/OrbitInfra/OrbiTE/actions/runs/44977519660)
+
+| Rust toolchain | OrbiTE before | OrbiTE after | TENT before | TENT after | OrbiTE / TENT before → after |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| stable 1.100.0 | 396,668 | 331,112 | 343,848 | 343,680 | 1.154 → 0.963 |
+| 1.85.0 | 396,552 | 331,136 | 346,596 | 346,768 | 1.144 → 0.955 |
+
+The [full revision comparison](https://github.com/OrbitInfra/OrbiTE/actions/runs/44978023506)
+used the corrected caller for both OrbiTE engine revisions. OrbiTE used
+0.9640× TENT's peak RSS on stable and 0.9644× on 1.85.0. Against the frozen
+OrbiTE engine the ratios were 1.0003 and 0.9998. The same TCP READ delivered
+0.886× and 0.877× TENT's goodput, with p99 at 1.133× and 1.094× TENT.
+Both timing metrics missed their targets in this sweep and met them in the
+[earlier sweep](https://github.com/OrbitInfra/OrbiTE/actions/runs/44868978517).
+Against the frozen OrbiTE engine, stable p99 also exceeded the 1.05 limit
+at 1.100×. On 1.85.0 the ratio was 1.035×.
+
+An independent Linux aarch64 control split only the post-transfer byte check
+into 64 KiB chunks and measured 395,968 KiB peak RSS, compared with
+395,960 KiB for its diagnostic control. Splitting only the pre-transfer reset
+gave 395,912 KiB. Changing only the lifetime of the file image gave
+330,360 KiB. Each control used three fresh processes, three warmups and six
+measured READs. The [interrupted READ control](cpu-oracle.md#interrupted-read-reply)
+checks the destination after a partial reply and source loss.
+
+### Connection reuse
 
 The pre-change profile is [run 42439141061](https://github.com/OrbitInfra/OrbiTE/actions/runs/42439141061),
 `cpu-oracle (stable)`, revision `ec103db` (production sources unchanged from

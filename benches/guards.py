@@ -12,7 +12,8 @@ import uuid
 
 from compare import load, match_runs
 from run import (BATCHES, CHECKS, CONTRACT, FILE_STATE, POLL, PROFILES, RSS_METHOD, RUST_BUILD, SIZES,
-                 TENT_RETRY, TIMING, VERIFICATION_IO, nearest_rank_p99, peak_rss, tent_build_command, workload_shapes)
+                 TENT_RETRY, TIMING, VERIFICATION_IO, check_caller_dep_info, nearest_rank_p99, peak_rss,
+                 tent_build_command, workload_shapes)
 
 
 ORBITE_BASELINE = "12d1e83964a596d9b578e9d2879b5cd78e776da6"
@@ -96,14 +97,16 @@ def check_settings(path, manifest):
                             ("tent_rpc_pools", {"MC_RPC_CLIENT_IO_THREADS": "2", "MC_TE_RPC_CLIENT_IO_THREADS": "2"}),
                             ("builds", {"rust": "release, io-uring", "tent": CONTRACT["cmake_options"]})):
         require(manifest[field] == expected, f"nonstandard {field}")
-    require(not any(manifest["parameters"][k] for k in ("profile", "profile_only", "tail_profile_only")),
+    require(not any(manifest["parameters"].get(k) for k in
+                    ("profile", "profile_only", "tail_profile_only", "tmpfs_tail_baseline", "tcp_read_rss_only")),
             "diagnostic run cannot qualify performance")
     require(manifest["workers_per_engine"] == 2 and manifest["caller_threads"] == 1 and manifest["merge"] is True
             and manifest["metrics"] is False and manifest["engine_max_failover_attempts"] == 0,
             "nonstandard engine configuration")
 
 
-def build_receipts(path, commands, parameters):
+def build_receipts(path, commands, manifest):
+    parameters = manifest["parameters"]
     source = PurePosixPath(parameters["orbite_source"])
     require(source.is_absolute(), "missing OrbiTE source checkout")
     for name, argv in (("rust-build", RUST_BUILD), ("orbite-revision", ["git", "rev-parse", "HEAD"]),
@@ -118,9 +121,37 @@ def build_receipts(path, commands, parameters):
     require(commands["tent-build"]["command"] == tent_build_command(reference, harness, output),
             "different frozen TENT build settings")
     built = [json.loads(line) for line in (path / "rust-build.stdout").read_text().splitlines()]
-    rust = [r["executable"] for r in built if r.get("executable") and r.get("target", {}).get("name") == "transfer"]
-    require(len(rust) == 1 and PurePosixPath(rust[0]).is_absolute(), "missing Rust benchmark executable")
-    return {"orbite": rust[0], "tent": str(output / "tent-bench")}
+    targets = [r for r in built if r.get("executable") and r.get("target", {}).get("name") == "transfer"]
+    require(len(targets) == 1 and PurePosixPath(targets[0]["executable"]).is_absolute(), "missing Rust benchmark executable")
+    exe = PurePosixPath(targets[0]["executable"])
+    overrides = commands["rust-build"].get("env_overrides", {})
+    digest = manifest["harness_sha256"]["transfer.rs"]
+    if "checkout_caller_sha256" in manifest or "build_caller.py" in manifest["harness_sha256"]:
+        require(re.fullmatch(r"[0-9a-f]{64}", manifest["harness_sha256"].get("build_caller.py", "")),
+                "missing caller builder digest")
+        checked_in = manifest.get("checkout_caller_sha256", "")
+        require(re.fullmatch(r"[0-9a-f]{64}", checked_in) and re.fullmatch(r"[0-9a-f]{64}", digest),
+                "missing Rust caller digest")
+        require((checked_in != digest) == ("RUSTC_WORKSPACE_WRAPPER" in overrides), "missing or unexpected shared caller")
+    if "RUSTC_WORKSPACE_WRAPPER" in overrides:
+        require("build_caller.py" in manifest["harness_sha256"], "missing caller builder digest")
+        caller = harness / "benches/transfer.rs"
+        cache = PurePosixPath(overrides["CARGO_TARGET_DIR"])
+        require(overrides["RUSTC_WORKSPACE_WRAPPER"] == str(caller.with_name("build_caller.py"))
+                and cache.parts[-3:] == ("bench-callers", manifest["orbite_revision"], digest)
+                and exe.is_relative_to(cache), "different caller build settings")
+        require(targets[0].get("fresh") is False or cache.parts[-4:-3] == (manifest["harness_sha256"]["build_caller.py"],),
+                "cached Rust caller lacks its builder digest")
+        require(commands["rust-build-engine"]["command"] == ["git", "rev-parse", "HEAD"]
+                and commands["rust-build-engine"]["cwd"] == str(source)
+                and (path / "rust-build-engine.stdout").read_text().strip() == manifest["orbite_revision"],
+                "different caller engine revision")
+        require(commands["rust-build-caller"]["command"] == ["sha256sum", str(caller)]
+                and (path / "rust-build-caller.stdout").read_text().rstrip("\n") == f"{digest}  {caller}",
+                "compiled caller digest differs")
+        require(commands["rust-build-deps"]["command"] == ["cat", str(exe.with_suffix(".d"))], "different caller dep-info")
+        check_caller_dep_info((path / "rust-build-deps.stdout").read_text(), exe, caller)
+    return {"orbite": str(exe), "tent": str(output / "tent-bench")}
 
 
 def formal_sweep(path):
@@ -135,7 +166,7 @@ def formal_sweep(path):
         for suffix, fields in (("-fs", "FSTYPE"), ("-mount", "SOURCE,FSTYPE,MAJ:MIN,OPTIONS")):
             require(commands[fs + suffix]["command"] == ["findmnt", "-n", "-o", fields, "-T", str(root)],
                     f"{fs}: mount probe used a different path")
-    executables = build_receipts(path, commands, manifest["parameters"])
+    executables = build_receipts(path, commands, manifest)
     _, identities, rows = load(path, manifest=manifest,
                                row_metrics=lambda directory, row: trial_resources(directory, row, commands, executables, filesystems))
     require(set(rows) == CASES and len(identities) == len(CASES) * PARAMETERS["trials"], "incomplete CPU matrix")
@@ -168,6 +199,8 @@ def evaluate(candidate, baseline=None):
             require(anchor[field] == manifest[field], f"unmatched {field}")
         require(anchor["harness_sha256"]["run.py"] == manifest["harness_sha256"]["run.py"],
                 "different measurement drivers")
+        require(anchor["harness_sha256"].get("build_caller.py") == manifest["harness_sha256"].get("build_caller.py"),
+                "different Rust caller builders")
         require(anchor["binary_sha256"]["tent"] == manifest["binary_sha256"]["tent"], "different frozen TENT binaries")
         if manifest["orbite_revision"] == ORBITE_BASELINE:
             require(anchor["binary_sha256"]["orbite"] == manifest["binary_sha256"]["orbite"],
