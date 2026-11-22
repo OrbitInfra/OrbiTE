@@ -306,7 +306,6 @@ fn run(p: &Parameters) -> Result<()> {
             )
         })
         .collect();
-    let blank_file_registration = is_file.then(|| vec![0xa5; p.extent()]);
     let mut ns = Vec::new();
     let mut cpus = Vec::new();
     let mut owners = 0;
@@ -403,14 +402,16 @@ fn run(p: &Parameters) -> Result<()> {
             local.write(0, &[0])?;
         }
         verify(&local, lo, &image)?;
-        if let Some(blank) = &blank_file_registration {
+        if is_file {
             let mut expected = vec![0xa5; p.extent() + 2 * PAGE];
             expected[PAGE..PAGE + p.extent()].copy_from_slice(&image);
             check(
                 fs::read(&p.path)? == expected,
                 "file bytes or guards differ",
             )?;
-            verify(&remote, ro, blank)?;
+            // File I/O leaves the remote registration untouched. With no payload,
+            // verify checks the sentinel over the entire allocation.
+            verify(&remote, 0, &[])?;
         } else {
             verify(&remote, ro, &image)?;
         }
