@@ -254,6 +254,57 @@ Taking only the first 100 samples changed run 1 stable READ from 1.019 to
 retaining the current single-request submission path. The ext4 WRITE goodput
 and SHM READ p99 cases from the full sweep remain open.
 
+## Peak memory for a 64 MiB file READ
+
+The workload reads one aligned, contiguous 64 MiB block from a preallocated
+tmpfs file into registered DRAM. The driver requires the tmpfs mount and
+OrbiTE's buffered route with one physical owner. Each caller still resets
+and syncs the file before timing and reads the entire file back after drain.
+Both check the payload, guards and unused registration. Rust expects that
+registration to contain the sentinel throughout. TENT seeds its remote
+registration with the input pattern on READ and checks that pattern afterward.
+
+The earlier Rust caller held a separate 64 MiB all-sentinel image for the
+unused registration. A Linux aarch64 phase measurement recorded 264,964 KiB
+RSS at the 67,108,864-byte CQE with no bounce buffer, then 265,148 KiB
+after drain. The whole-file verification read reached 396,244 KiB and the
+subsequent copy used to check the unused registration reached 396,248 KiB.
+In separate processes, changing only the file readback to 64 KiB chunks
+gave 396,124 KiB versus 396,052 KiB for the instrumented control.
+
+The Rust verifier now checks the complete unused registration against the
+sentinel without materializing its expected contents. Four fresh untraced
+processes per revision on the same aarch64 boot, in counterbalanced order,
+measured 396,044 → 330,442 KiB median peak RSS (three warmups and 100 READs
+per process). Both callers retain the full expected file image and one bulk
+readback. File and registration corruption controls check the first and last
+bytes, payload and gaps, plus a truncated or extended file.
+
+The native CPU workflow can repeat the comparison with frozen TENT on
+stable and Rust 1.85.0. The `cpu-bench-*` artifacts contain the independent
+GNU time process peaks in `tmpfs-read-rss.json`. Separate short Heaptrack
+runs supply `peak.stacks` and `timeline.massif`. On each toolchain the two
+revisions used their own callers, the same TENT executable and the same Linux
+boot. The table gives median peak RSS in KiB over three fresh processes per
+cell (three warmups, 100 measured READs). The separate heap profiles show
+six payload-sized allocations at the Rust peak before the change and five
+afterward, a difference of exactly 67,108,864 live bytes. TENT had five
+in both runs. [Paired profiles](https://github.com/OrbitInfra/OrbiTE/actions/runs/45035303646)
+
+| Rust toolchain | OrbiTE before | OrbiTE after | TENT before | TENT after | OrbiTE / TENT before → after |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| stable 1.100.0 | 396,720 | 331,256 | 345,164 | 345,228 | 1.1494 → 0.9595 |
+| 1.85.0 | 396,828 | 331,280 | 345,260 | 345,116 | 1.1494 → 0.9599 |
+
+The full regression comparison builds the same measured caller against both
+OrbiTE engine revisions and records all four metrics per workload.
+[Formal sweeps](https://github.com/OrbitInfra/OrbiTE/actions/runs/45035282699)
+
+```bash
+gh workflow run native-cpu.yml --ref main -f tmpfs_read_rss_only=true \
+  -f baseline_ref=e4c4890f2e921ab61f555a56e58611bf6b237822
+```
+
 ## TCP profile and connection reuse
 
 ### Process memory for a 64 MiB READ
@@ -288,8 +339,9 @@ client receive site and in `ControlService::onRecvData`. Its caller verified
 the registered bytes directly. The [original allocation stacks](https://github.com/OrbitInfra/OrbiTE/actions/runs/44977183125)
 showed six large allocations for OrbiTE and five for TENT on both toolchains.
 
-The Rust caller now allocates the all-sentinel image only for file workloads.
-Its full comparison copy still checks every byte after the batch drains.
+In this TCP comparison the Rust caller allocated the all-sentinel image only
+for file workloads. The [file READ profile](#peak-memory-for-a-64-mib-file-read)
+covers its subsequent removal. The verifier checks every byte after drain.
 The table gives the median peak RSS in KiB over three untraced processes per
 cell. Each toolchain ran both revisions on the same boot with the same TENT
 executable. In the separate heap profiles, OrbiTE's peak live allocations
