@@ -12,7 +12,7 @@ import uuid
 
 from compare import load, match_runs
 from run import (BATCHES, CHECKS, CONTRACT, FILE_STATE, POLL, PROFILES, RSS_METHOD, RUST_BUILD, SIZES,
-                 TENT_RETRY, TIMING, VERIFICATION_IO, peak_rss, tent_build_command, workload_shapes)
+                 TENT_RETRY, TIMING, VERIFICATION_IO, nearest_rank_p99, peak_rss, tent_build_command, workload_shapes)
 
 
 ORBITE_BASELINE = "12d1e83964a596d9b578e9d2879b5cd78e776da6"
@@ -64,7 +64,7 @@ def trial_resources(directory, row, commands, executables, filesystems):
     samples = row["samples_ns"]
     total_bytes = block * batch * len(samples)
     return {"goodput_GiB_s": Fraction(total_bytes * 10**9, sum(samples) * 2**30),
-            "p99_ns": sorted(samples)[(99 * len(samples) + 99) // 100 - 1],
+            "p99_ns": nearest_rank_p99(samples),
             "cpu_ns_per_byte": Fraction(sum(row["cpu_ns"]), total_bytes), "peak_rss_kib": rss}
 
 

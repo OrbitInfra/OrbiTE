@@ -16,6 +16,10 @@ on:
         description: Collect per-sample io_uring and scheduler timelines without timing sweeps
         type: boolean
         default: false
+      tmpfs_tail_only:
+        description: Interleave frozen OrbiTE, the candidate and TENT for singleton tmpfs p99
+        type: boolean
+        default: false
       baseline_ref:
         description: Optional base commit for a full before/after sweep on this same runner
         type: string
@@ -53,12 +57,17 @@ jobs:
         with:
           fetch-depth: 0
       - name: Select the paired measurement revision
-        if: inputs.baseline_ref != '' || inputs.enforce_cpu_guards || inputs.repeat_baseline
+        if: inputs.baseline_ref != '' || inputs.enforce_cpu_guards || inputs.repeat_baseline || inputs.tmpfs_tail_only
         env:
           BASELINE_REF: ${{ inputs.baseline_ref }}
           FROZEN_PAIR: ${{ inputs.enforce_cpu_guards || inputs.repeat_baseline }}
           DIAGNOSTIC: ${{ inputs.profile_only || inputs.tail_profile_only }}
+          TMPFS_TAIL_ONLY: ${{ inputs.tmpfs_tail_only }}
         run: |
+          if [[ "$TMPFS_TAIL_ONLY" == true && ( -n "$BASELINE_REF" || "$FROZEN_PAIR" == true || "$DIAGNOSTIC" == true ) ]]; then
+            echo "Run the balanced tmpfs diagnostic as a separate dispatch" >&2
+            exit 2
+          fi
           frozen=$(PYTHONPATH=benches python3 -Bc 'from guards import ORBITE_BASELINE; print(ORBITE_BASELINE)')
           ref=$(git rev-parse --verify --end-of-options "${BASELINE_REF:-$frozen}^{commit}")
           if [[ "$FROZEN_PAIR" == true && ( "$ref" != "$frozen" || "$DIAGNOSTIC" == true ) ]]; then
@@ -137,7 +146,7 @@ jobs:
           fi
           python3 benches/run.py "${args[@]}" --reference "$RUNNER_TEMP/orbite-native-cpu" --output "$RUNNER_TEMP/orbite-bench-before" --ext4 "$ORBITE_EXT4_DIR" --samples 100 --warmup 3 --workers 2 --trials 3
       - name: Matched byte-checked CPU sweeps (no hardware)
-        if: '!inputs.profile_only && !inputs.tail_profile_only'
+        if: '!inputs.profile_only && !inputs.tail_profile_only && !inputs.tmpfs_tail_only'
         env:
           REPEAT_BASELINE: ${{ inputs.repeat_baseline }}
         run: |
@@ -148,7 +157,7 @@ jobs:
           fi
           python3 benches/run.py "${args[@]}" --reference "$RUNNER_TEMP/orbite-native-cpu" --output "$RUNNER_TEMP/orbite-bench" --ext4 "$ORBITE_EXT4_DIR" --samples 100 --warmup 3 --workers 2 --trials 3
       - name: Record CPU workload guard verdicts
-        if: '!inputs.profile_only && !inputs.tail_profile_only'
+        if: '!inputs.profile_only && !inputs.tail_profile_only && !inputs.tmpfs_tail_only'
         env:
           ENFORCE: ${{ inputs.enforce_cpu_guards }}
         run: |
@@ -156,6 +165,9 @@ jobs:
           if [[ "$ORBITE_GUARD_PAIR" == 1 ]]; then args+=(--baseline "$RUNNER_TEMP/orbite-bench-before"); fi
           if [[ "$ENFORCE" != true ]]; then args+=(--report-only); fi
           python3 -B benches/guards.py "$RUNNER_TEMP/orbite-bench" "${args[@]}" --output "$RUNNER_TEMP/orbite-bench/cpu-guards.json"
+      - name: Repeat single-block tmpfs READ and WRITE in balanced process order
+        if: inputs.tmpfs_tail_only
+        run: python3 -B benches/run.py --reference "$RUNNER_TEMP/orbite-native-cpu" --output "$RUNNER_TEMP/orbite-bench" --ext4 "$ORBITE_EXT4_DIR" --samples 1000 --tmpfs-tail-baseline "$RUNNER_TEMP/orbite-before"
       - name: Preserve raw measurements outside Git
         if: always()
         uses: actions/upload-artifact@v7.0.2

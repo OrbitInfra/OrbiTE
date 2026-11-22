@@ -2,7 +2,6 @@
 import argparse
 import hashlib
 import json
-import math
 import os
 from pathlib import Path
 import platform
@@ -52,6 +51,10 @@ def peak_rss(stderr):
     return int(receipts[0])
 
 
+def nearest_rank_p99(values):
+    return sorted(values)[(99 * len(values) + 99) // 100 - 1]
+
+
 def summarize(row, count, payload):
     if row.get("verified") is not True or row.get("payload_bytes") != payload:
         raise ValueError("unverified or wrong-payload result")
@@ -59,10 +62,10 @@ def summarize(row, count, payload):
         values = row[key]
         if len(values) != count or any(type(n) is not int or n <= 0 for n in values):
             raise ValueError("incomplete or invalid measurements")
-    latency = sorted(row["samples_ns"])
+    latency = row["samples_ns"]
     return {"GiB_s": payload * count / sum(latency) * 1e9 / 2**30,
             "p50_us": statistics.median(latency) / 1000,
-            "p99_us": latency[math.ceil(count * .99) - 1] / 1000,
+            "p99_us": nearest_rank_p99(latency) / 1000,
             "cpu_us_per_batch": statistics.mean(row["cpu_ns"]) / 1000}
 
 
@@ -94,6 +97,7 @@ def main():
     p.add_argument("--profile", action="store_true", help="also collect strace/perf evidence for the slow-path targets")
     p.add_argument("--profile-only", action="store_true", help="collect profiles without reporting traced timings as benchmark rows")
     p.add_argument("--tail-profile-only", action="store_true", help="trace per-sample io_uring and scheduler timelines; never report traced performance")
+    p.add_argument("--tmpfs-tail-baseline", type=Path, help="compare singleton tmpfs tails in balanced A/A, A/B and TENT runs using the frozen OrbiTE checkout")
     a = p.parse_args()
     a.output, a.reference, a.orbite_source = a.output.resolve(), a.reference.resolve(), a.orbite_source.resolve()
     out, ref, orbite = a.output, a.reference, a.orbite_source
@@ -104,6 +108,12 @@ def main():
         p.error("invalid sample/worker bounds")
     if any(n < 4096 or n > 64 << 20 or n % 4096 for n in a.sizes) or any(n < 1 or n > 64 for n in a.batches):
         p.error("invalid sweep bounds")
+    if a.tmpfs_tail_baseline and (
+        a.profile or a.profile_only or a.tail_profile_only or orbite != ROOT
+        or (a.warmup, a.samples, a.workers) != (3, 1000, 2)
+        or out.is_relative_to(a.tmpfs_tail_baseline.resolve())
+    ):
+        p.error("tmpfs tail diagnostics require the current source, a separate output, 3 warmups, 1000 untraced samples and 2 workers")
     out.mkdir(parents=True, exist_ok=False)
     env = {k: v for k, v in os.environ.items()
            if not k.startswith(("MC_", "TENT_", "MOONCAKE_", "ORBITE_BENCH_"))
@@ -132,8 +142,11 @@ def main():
     for path, expected in [(a.ext4, "ext4"), (a.tmpfs, "tmpfs")]:
         if run(expected+"-fs", ["findmnt", "-n", "-o", "FSTYPE", "-T", path]).strip() != expected:
             raise ValueError(f"{path} is not {expected}")
-    built = run("rust-build", RUST_BUILD, cwd=orbite)
-    rust = next(Path(r["executable"]) for line in built.splitlines() if (r := json.loads(line)).get("executable") and r.get("target", {}).get("name") == "transfer")
+    def build_rust(name, checkout, overrides=None):
+        built = run(name, RUST_BUILD, cwd=checkout, overrides=overrides)
+        return next(Path(r["executable"]) for line in built.splitlines() if (r := json.loads(line)).get("executable") and r.get("target", {}).get("name") == "transfer")
+
+    rust = build_rust("rust-build", orbite)
     tent = out / "tent-bench"
     run("tent-build", tent_build_command(ref, ROOT, out))
     harness_files = [f for f in (ROOT / "benches").iterdir() if f.is_file() and f.name != "transfer.rs"]
@@ -163,6 +176,23 @@ def main():
         text = run(name+"-bad-byte", [exe, "tcp", "read", 4096, 1, "contiguous", 1, 1, a.workers, "-"], overrides=({**(tent_env if name == "tent" else {}), "ORBITE_BENCH_CORRUPT_BYTE": "1"}), expect_failure=True)
         if '"verified":true' in text:
             raise ValueError("corrupted guard produced a report")
+    if a.tmpfs_tail_baseline:
+        from guards import ORBITE_BASELINE
+        from tmpfs_tail import measure
+        base = a.tmpfs_tail_baseline.resolve()
+        revision = run("baseline-revision", ["git", "rev-parse", "HEAD"], cwd=base).strip()
+        if (revision != ORBITE_BASELINE or run("baseline-status", ["git", "status", "--porcelain"], cwd=base).strip()
+                or manifest["dirty"] or manifest["measurement_dirty"]):
+            raise ValueError("tmpfs tail diagnostics require clean candidate and frozen baseline revisions")
+        if (base / "benches/transfer.rs").read_bytes() != (orbite / "benches/transfer.rs").read_bytes():
+            raise ValueError("tmpfs pair uses different Rust benchmark harnesses")
+        frozen = build_rust("baseline-build", base, {"CARGO_TARGET_DIR": str(out / "baseline-target")})
+        manifest["baseline_revision"] = revision
+        manifest["binary_sha256"]["baseline"] = hashlib.sha256(frozen.read_bytes()).hexdigest()
+        measure(out, a.tmpfs, run, frozen, rust, tent, tent_env)
+        manifest["status"] = "completed-tmpfs-tail-diagnostic"
+        (out / "manifest.json").write_text(json.dumps(manifest, indent=2)+"\n")
+        return
     if a.tail_profile_only:
         from profile_io_tail import record
         manifest["profile_cases"] = record(out, [("orbite", rust), ("tent", tent)], a, env, tent_env)

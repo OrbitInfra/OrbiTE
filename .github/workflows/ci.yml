@@ -407,7 +407,7 @@ jobs:
           python3 -I -B tests/reference/test_manifest.py "$RUNNER_TEMP/orbite-cpu-trace-${{ matrix.toolchain }}/manifest.json"
           python3 -c 'import sys; sys.path.insert(0, "benches"); from analyze_io_tail import controls; controls()'
           python3 -c 'import sys; sys.path.insert(0, "benches"); from compare import controls; controls()'
-          python3 -B -m unittest discover -s benches -p 'test_guards.py'
+          python3 -B -m unittest discover -s benches -p 'test_*.py'
       - name: Preserve Rust CPU trace receipts
         if: always() && matrix.features == ''
         uses: actions/upload-artifact@v7.0.2
