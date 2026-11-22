@@ -461,6 +461,9 @@ The [single-block tmpfs diagnostic](benchmarks.md#singleton-tmpfs-tail-latency)
 compares the candidate with a same-binary control and frozen TENT within each boot.
 Its receipt is `completed-tmpfs-tail-diagnostic`. Only a full sweep can supply a
 CPU workload guard verdict.
+The [64 MiB TCP READ profile](benchmarks.md#process-memory-for-a-64-mib-read)
+records GNU time RSS for untraced processes and live heap stacks in separate
+processes. The result includes both loopback peers and their caller.
 
 S26's [method and reproduction commands](benchmarks.md) pin the workload,
 compiler and host in external CI artifacts. [Run 42362843122](https://github.com/OrbitInfra/OrbiTE/actions/runs/42362843122)

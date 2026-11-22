@@ -192,12 +192,11 @@ Done:
   measures caller completion on warmed tmpfs at eight gapped 4 KiB offsets.
   The [single-block tmpfs retest](benchmarks.md#singleton-tmpfs-tail-latency)
   found all eight READ/WRITE p99 paired medians within the self-baseline limit
-  across two runs on stable and 1.85.0. The next matched TENT gap to profile
-  is process peak RSS for a single 64 MiB TCP READ. In the
-  [full comparison](https://github.com/OrbitInfra/OrbiTE/actions/runs/44868978517)
-  both toolchains used 1.144× TENT's peak RSS against a 1.10 limit. Attribute
-  the benchmark and engine buffers while preserving the
-  [interrupted READ guarantee](cpu-oracle.md#interrupted-read-reply).
+  across two runs on stable and 1.85.0. The [64 MiB TCP READ memory profile](benchmarks.md#process-memory-for-a-64-mib-read)
+  traced the [historical 1.144× TENT peak RSS](https://github.com/OrbitInfra/OrbiTE/actions/runs/44868978517) to a 64 MiB file-verification
+  image kept live during TCP. The benchmark now allocates it only for files.
+  The requester and source retain both TCP payload buffers through their
+  [existing completion boundaries](cpu-oracle.md#interrupted-read-reply).
 
 - **S16 — reference fixtures.** Retain the CPU trace contract and three frozen
   request prefixes used by native-listener rejection. Compatibility inventories

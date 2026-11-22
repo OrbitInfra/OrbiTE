@@ -125,7 +125,9 @@ def build_receipts(path, commands, manifest):
     require(len(rust) == 1 and PurePosixPath(rust[0]).is_absolute(), "missing Rust benchmark executable")
     overrides = commands["rust-build"].get("env_overrides", {})
     digest = manifest["harness_sha256"]["transfer.rs"]
-    if "build_caller.py" in manifest["harness_sha256"]:
+    if "checkout_caller_sha256" in manifest or "build_caller.py" in manifest["harness_sha256"]:
+        require(re.fullmatch(r"[0-9a-f]{64}", manifest["harness_sha256"].get("build_caller.py", "")),
+                "missing caller builder digest")
         checked_in = manifest.get("checkout_caller_sha256", "")
         require(re.fullmatch(r"[0-9a-f]{64}", checked_in) and re.fullmatch(r"[0-9a-f]{64}", digest),
                 "missing Rust caller digest")
@@ -195,6 +197,8 @@ def evaluate(candidate, baseline=None):
             require(anchor[field] == manifest[field], f"unmatched {field}")
         require(anchor["harness_sha256"]["run.py"] == manifest["harness_sha256"]["run.py"],
                 "different measurement drivers")
+        require(anchor["harness_sha256"].get("build_caller.py") == manifest["harness_sha256"].get("build_caller.py"),
+                "different Rust caller builders")
         require(anchor["binary_sha256"]["tent"] == manifest["binary_sha256"]["tent"], "different frozen TENT binaries")
         if manifest["orbite_revision"] == ORBITE_BASELINE:
             require(anchor["binary_sha256"]["orbite"] == manifest["binary_sha256"]["orbite"],

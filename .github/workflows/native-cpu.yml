@@ -25,7 +25,7 @@ on:
         type: boolean
         default: false
       baseline_ref:
-        description: Optional base commit for a full before/after sweep on this same runner
+        description: Optional base commit for same-runner sweeps or a TCP READ memory comparison
         type: string
         default: ''
       enforce_cpu_guards:

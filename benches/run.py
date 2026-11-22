@@ -124,7 +124,8 @@ def parse_args(argv=None):
     if a.trials is None:
         a.trials = 12 if focused else 3
     if a.sizes is None:
-        a.sizes = [64 << 20] if a.tcp_read_rss_only else [4096] if focused else SIZES
+        single_size = 64 << 20 if a.tcp_read_rss_only else 4096
+        a.sizes = [single_size] if focused or a.tcp_read_rss_only else SIZES
     if a.batches is None:
         a.batches = [1] if focused or a.tcp_read_rss_only else BATCHES
     a.output, a.reference, a.orbite_source = a.output.resolve(), a.reference.resolve(), a.orbite_source.resolve()
@@ -237,6 +238,8 @@ def main():
             raise ValueError("corrupted guard produced a report")
     if a.tcp_read_rss_only:
         from profile_tcp_rss import measure
+        if manifest["dirty"] or manifest["measurement_dirty"]:
+            raise ValueError("TCP READ memory comparisons require clean engine and measurement checkouts")
         measure(out, rust, tent, run, tent_env)
         manifest["status"] = "completed-tcp-read-memory-profile"
         (out / "manifest.json").write_text(json.dumps(manifest, indent=2)+"\n")

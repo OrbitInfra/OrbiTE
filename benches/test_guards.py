@@ -68,6 +68,25 @@ def fixture(path, revision, boot):
 
 
 class GuardTests(unittest.TestCase):
+    def test_paired_caller_builder_receipts(self):
+        with TemporaryDirectory() as tmp:
+            anchor, after = Path(tmp)/"base", Path(tmp)/"after"
+            boot = str(uuid.uuid4())
+            for directory, rev in ((anchor, ORBITE_BASELINE), (after, "b"*40)):
+                m = fixture(directory, rev, boot)
+                m["checkout_caller_sha256"] = m["harness_sha256"]["transfer.rs"]
+                m["harness_sha256"]["build_caller.py"] = "e"*64
+                (directory/"manifest.json").write_text(json.dumps(m))
+            self.assertEqual(evaluate(after, anchor)["status"], "passed")
+            m["harness_sha256"]["build_caller.py"] = "f"*64
+            (after/"manifest.json").write_text(json.dumps(m))
+            with self.assertRaisesRegex(ValueError, "different Rust caller builders"):
+                evaluate(after, anchor)
+            del m["harness_sha256"]["build_caller.py"]
+            (after/"manifest.json").write_text(json.dumps(m))
+            with self.assertRaisesRegex(ValueError, "missing caller builder digest"):
+                evaluate(after, anchor)
+
     def test_inclusive_thresholds_and_direction(self):
         baseline = [dict.fromkeys(LIMITS, 100)] * 3
         boundary = {metric: percent for metric, (_, percent) in LIMITS.items()}

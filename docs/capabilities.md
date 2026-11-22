@@ -83,6 +83,8 @@ The [CPU workload thresholds](benchmarks.md#cpu-workload-thresholds) define
 reference and revision comparisons for all six measured host profiles.
 The [single-block tmpfs retest](benchmarks.md#singleton-tmpfs-tail-latency)
 also reports tails by process launch order for buffered file READ and WRITE.
+The [64 MiB TCP READ profile](benchmarks.md#process-memory-for-a-64-mib-read)
+attributes peak process RSS to the public caller and TCP reply buffers.
 [CPU benchmark and fault fixtures](benchmarks.md) cover verified size/batch
 sweeps and the software backend lifetime matrix. They add no hardware
 qualification; GPU/RDMA/GDS installed fault fixtures remain queued.

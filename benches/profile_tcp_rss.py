@@ -36,3 +36,10 @@ def measure(out, rust, tent, run, tent_env):
         trace, = dest.glob("trace*")
         run(name + "-heaptrack-print", ["heaptrack_print", "-f", trace, "-F", dest / "peak.stacks",
             "--flamegraph-cost-type", "peak", "-M", dest / "timeline.massif", "--massif-detailed-freq", "1"])
+        stacks = (dest / "peak.stacks").read_text().splitlines()
+        if not any(int(line.rsplit(" ", 1)[1]) > 0 for line in stacks):
+            raise ValueError(f"{name}: missing live allocation stacks")
+        with (dest / "timeline.massif").open() as timeline:
+            heap_samples = (line.removeprefix("mem_heap_B=") for line in timeline if line.startswith("mem_heap_B="))
+            if not any(int(sample) > 0 for sample in heap_samples):
+                raise ValueError(f"{name}: missing positive heap sample in timeline")

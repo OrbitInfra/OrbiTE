@@ -116,8 +116,10 @@ the stopped segment owns a separate destination and budget. Both remain
 charged while pending and can be retired in reverse order after resumption.
 
 Standard TCP receives a READ reply into task-owned storage and commits to
-the caller's destination only after the complete payload arrives. The
-[interrupted READ control](cpu-oracle.md#interrupted-read-reply) checks that
+the caller's destination only after the complete payload arrives. The source
+sends a snapshot of the registered range. Both allocations are visible in the
+[64 MiB loopback memory profile](benchmarks.md#process-memory-for-a-64-mib-read).
+The [interrupted READ control](cpu-oracle.md#interrupted-read-reply) checks that
 an observed socket prefix can coexist with zero committed bytes and a busy
 destination. A connection lost at this point fails the task with zero bytes.
 The installed Python wheel observes this boundary through the task receipt.
