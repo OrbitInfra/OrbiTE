@@ -1,13 +1,28 @@
 """Controls for order balance and within-triplet p99 ratios."""
 from collections import Counter, defaultdict
+from contextlib import redirect_stderr
+from io import StringIO
 from itertools import permutations
 import unittest
+from unittest.mock import patch
 
-from run import nearest_rank_p99
+from run import BATCHES, SIZES, nearest_rank_p99, parse_args
 from tmpfs_tail import schedule, summarize_pairs
 
 
 class TmpfsTailTests(unittest.TestCase):
+    def test_manifest_parameters_match_the_selected_workload(self):
+        args = ["--output", "/tmp/tail-results", "--reference", "/tmp/native", "--ext4", "/tmp/ext4"]
+        with patch("platform.system", return_value="Linux"):
+            sweep = parse_args(args)
+            self.assertEqual((sweep.trials, sweep.samples, sweep.sizes, sweep.batches), (3, 100, SIZES, BATCHES))
+            args += ["--tmpfs-tail-baseline", "/tmp/frozen"]
+            tail = parse_args(args)
+            self.assertEqual((tail.trials, tail.samples, tail.sizes, tail.batches), (12, 1000, [4096], [1]))
+            for conflict in (["--trials", "1"], ["--samples", "100"], ["--sizes", "65536"], ["--batches", "8"], ["--profile"]):
+                with self.subTest(conflict=conflict), redirect_stderr(StringIO()), self.assertRaises(SystemExit):
+                    parse_args(args + conflict)
+
     def test_every_case_runs_each_permutation_twice_and_reverses_case_order(self):
         by_case, by_trial = defaultdict(Counter), defaultdict(list)
         for trial, op, pair, order in schedule():

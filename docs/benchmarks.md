@@ -187,7 +187,7 @@ Both toolchains met all four TENT targets for the gapped WRITE. In the same pair
 other workloads crossed a common self-baseline guard. Ext4 WRITE goodput crossed for a
 single 4 KiB block and eight gapped 4 KiB blocks. The single 4 KiB tmpfs READ and WRITE and
 the SHM contiguous 8 × 4 KiB READ crossed the p99 guard. These signals stay open for
-follow-up.
+follow-up. The [singleton tmpfs retest](#singleton-tmpfs-tail-latency) revisits the two tmpfs rows.
 
 Independent Linux aarch64 tracing counted one batch-worker start per target batch before the
 change and zero after, with one ring setup in both cases. The target kept all eight physical
@@ -195,6 +195,26 @@ owners. The 64-request control still started a worker. The [full crossing
 tables](https://github.com/OrbitInfra/OrbiTE/pull/221) retain results for the other CPU
 cases. See [file submission and drain](storage.md#dram-transfers-with-io_uring) for bounds,
 incomplete CQ sets and worker failure.
+
+### Singleton tmpfs tail latency
+
+The `tmpfs_tail_only` input of the native CPU workflow measures warmed, buffered
+io_uring READ and WRITE of one contiguous 4 KiB block. On each Linux runner,
+A/A launches the frozen OrbiTE binary twice. A/B launches that same binary and
+the candidate. Frozen TENT runs alongside each pair. The driver uses all six
+launch orders twice per operation and comparison, reversing the order of the
+cases on the second pass. Each of the 144 processes has one caller, two configured
+workers, three warmups and 1,000 untraced samples with byte checks. Each toolchain
+has its own runner and boot.
+
+`tmpfs-tail.json` records each process's nearest-rank p99. It also reports p99
+over the first 100 samples for comparison with the formal sweep's sample count.
+Those samples belong to the same process as the longer series. The paired
+ratio is the median of twelve probe/baseline ratios, with six pairs in each
+launch direction. The report also gives the probe/TENT ratio and the count of
+pairs above 1.05. Use the A/A results and both launch directions to interpret
+a crossing. The [formal thresholds](#cpu-workload-thresholds) continue to use
+the complete paired sweeps.
 
 ## TCP profile and connection reuse
 

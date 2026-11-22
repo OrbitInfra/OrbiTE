@@ -85,39 +85,55 @@ def controls():
         raise AssertionError("reporter accepted a broken measurement")
 
 
-def main():
+def parse_args(argv=None):
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--reference", type=Path, required=True, help="successful tests/reference/run.py output, built with liburing-dev installed")
     p.add_argument("--output", type=Path, required=True)
     p.add_argument("--orbite-source", type=Path, default=ROOT, help="build the Rust benchmark from this checkout with the current measurement driver")
     p.add_argument("--ext4", type=Path, required=True)
     p.add_argument("--tmpfs", type=Path, default=Path("/dev/shm"))
-    p.add_argument("--samples", type=int, default=100)
+    p.add_argument("--samples", type=int)
     p.add_argument("--warmup", type=int, default=3)
     p.add_argument("--workers", type=int, default=2)
-    p.add_argument("--sizes", type=int, nargs="+", default=SIZES)
-    p.add_argument("--batches", type=int, nargs="+", default=BATCHES)
-    p.add_argument("--trials", type=int, default=3)
+    p.add_argument("--sizes", type=int, nargs="+")
+    p.add_argument("--batches", type=int, nargs="+")
+    p.add_argument("--trials", type=int)
     p.add_argument("--profile", action="store_true", help="also collect strace/perf evidence for the slow-path targets")
     p.add_argument("--profile-only", action="store_true", help="collect profiles without reporting traced timings as benchmark rows")
     p.add_argument("--tail-profile-only", action="store_true", help="trace per-sample io_uring and scheduler timelines; never report traced performance")
     p.add_argument("--tmpfs-tail-baseline", type=Path, help="compare singleton tmpfs tails in balanced A/A, A/B and TENT runs using the frozen OrbiTE checkout")
-    a = p.parse_args()
+    a = p.parse_args(argv)
+    focused = a.tmpfs_tail_baseline is not None
+    if a.samples is None:
+        a.samples = 1000 if focused else 100
+    if a.trials is None:
+        a.trials = 12 if focused else 3
+    if a.sizes is None:
+        a.sizes = [4096] if focused else SIZES
+    if a.batches is None:
+        a.batches = [1] if focused else BATCHES
     a.output, a.reference, a.orbite_source = a.output.resolve(), a.reference.resolve(), a.orbite_source.resolve()
     out, ref, orbite = a.output, a.reference, a.orbite_source
     a.ext4, a.tmpfs = a.ext4.resolve(), a.tmpfs.resolve()
     if out.is_relative_to(ROOT) or out.is_relative_to(orbite) or out.is_relative_to(ref) or platform.system() != "Linux":
         p.error("Linux only; output must be outside both source trees")
-    if not (1 <= a.samples <= 10000 and 1 <= a.warmup <= 100 and 1 <= a.workers <= 16 and 1 <= a.trials <= 9):
+    if not (1 <= a.samples <= 10000 and 1 <= a.warmup <= 100 and 1 <= a.workers <= 16 and 1 <= a.trials <= (12 if focused else 9)):
         p.error("invalid sample/worker bounds")
     if any(n < 4096 or n > 64 << 20 or n % 4096 for n in a.sizes) or any(n < 1 or n > 64 for n in a.batches):
         p.error("invalid sweep bounds")
-    if a.tmpfs_tail_baseline and (
+    if focused and (
         a.profile or a.profile_only or a.tail_profile_only or orbite != ROOT
-        or (a.warmup, a.samples, a.workers) != (3, 1000, 2)
+        or (a.warmup, a.samples, a.workers, a.trials, a.sizes, a.batches) != (3, 1000, 2, 12, [4096], [1])
         or out.is_relative_to(a.tmpfs_tail_baseline.resolve())
     ):
-        p.error("tmpfs tail diagnostics require the current source, a separate output, 3 warmups, 1000 untraced samples and 2 workers")
+        p.error("tmpfs tail diagnostics require the current source, a separate output, 12 triplets per case, "
+                "one 4 KiB block, 3 warmups, 1000 untraced samples and 2 workers")
+    return a
+
+
+def main():
+    a = parse_args()
+    out, ref, orbite = a.output, a.reference, a.orbite_source
     out.mkdir(parents=True, exist_ok=False)
     env = {k: v for k, v in os.environ.items()
            if not k.startswith(("MC_", "TENT_", "MOONCAKE_", "ORBITE_BENCH_"))

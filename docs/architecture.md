@@ -334,6 +334,8 @@ for up to 200 µs, capped by its request deadline. At most three EINTR/EAGAIN
 attempts share the same window. Unlike TENT's nonblocking caller status polling,
 this brief wait can finish a late CQE without a thread handoff. A timeout or
 enter error transfers the unchanged ring to the batch worker.
+The [singleton tmpfs measurements](benchmarks.md#singleton-tmpfs-tail-latency)
+time the public batch lifecycle, including this handoff when it occurs.
 For a known buffered file, a group of at most eight plain host WRITEs totaling
 64 KiB or less may use the caller under the same policy and deadline. One
 deadline-capped timed enter can wait for the consumed SQ prefix. The single

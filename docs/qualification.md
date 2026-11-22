@@ -457,6 +457,10 @@ per Linux toolchain, workload and baseline. An archived sweep marked
 `passed` completed its byte checks. Performance qualification requires a
 separate strict guard report with every comparison within limits. Historical
 ratios below retain their original measurement conditions and RSS coverage.
+The [single-block tmpfs diagnostic](benchmarks.md#singleton-tmpfs-tail-latency)
+compares the candidate with a same-binary control and frozen TENT within each boot.
+Its receipt is `completed-tmpfs-tail-diagnostic`. Only a full sweep can supply a
+CPU workload guard verdict.
 
 S26's [method and reproduction commands](benchmarks.md) pin the workload,
 compiler and host in external CI artifacts. [Run 42362843122](https://github.com/OrbitInfra/OrbiTE/actions/runs/42362843122)
