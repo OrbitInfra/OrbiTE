@@ -98,7 +98,7 @@ def check_settings(path, manifest):
                             ("builds", {"rust": "release, io-uring", "tent": CONTRACT["cmake_options"]})):
         require(manifest[field] == expected, f"nonstandard {field}")
     require(not any(manifest["parameters"].get(k) for k in
-                    ("profile", "profile_only", "tail_profile_only", "tmpfs_tail_baseline", "tcp_read_rss_only")),
+                    ("profile", "profile_only", "tail_profile_only", "tmpfs_tail_baseline", "tcp_read_rss_only", "tmpfs_read_rss_only")),
             "diagnostic run cannot qualify performance")
     require(manifest["workers_per_engine"] == 2 and manifest["caller_threads"] == 1 and manifest["merge"] is True
             and manifest["metrics"] is False and manifest["engine_max_failover_attempts"] == 0,
