@@ -306,7 +306,7 @@ fn run(p: &Parameters) -> Result<()> {
             )
         })
         .collect();
-    let blank = vec![0xa5; p.extent()];
+    let blank_file_registration = is_file.then(|| vec![0xa5; p.extent()]);
     let mut ns = Vec::new();
     let mut cpus = Vec::new();
     let mut owners = 0;
@@ -403,14 +403,14 @@ fn run(p: &Parameters) -> Result<()> {
             local.write(0, &[0])?;
         }
         verify(&local, lo, &image)?;
-        if is_file {
+        if let Some(blank) = &blank_file_registration {
             let mut expected = vec![0xa5; p.extent() + 2 * PAGE];
             expected[PAGE..PAGE + p.extent()].copy_from_slice(&image);
             check(
                 fs::read(&p.path)? == expected,
                 "file bytes or guards differ",
             )?;
-            verify(&remote, ro, &blank)?;
+            verify(&remote, ro, blank)?;
         } else {
             verify(&remote, ro, &image)?;
         }
