@@ -55,13 +55,17 @@ def nearest_rank_p99(values):
     return sorted(values)[(99 * len(values) + 99) // 100 - 1]
 
 
-def summarize(row, count, payload):
+def validate_samples(row, count, payload):
     if row.get("verified") is not True or row.get("payload_bytes") != payload:
         raise ValueError("unverified or wrong-payload result")
     for key in ("samples_ns", "cpu_ns"):
         values = row[key]
         if len(values) != count or any(type(n) is not int or n <= 0 for n in values):
             raise ValueError("incomplete or invalid measurements")
+
+
+def summarize(row, count, payload):
+    validate_samples(row, count, payload)
     latency = row["samples_ns"]
     return {"GiB_s": payload * count / sum(latency) * 1e9 / 2**30,
             "p50_us": statistics.median(latency) / 1000,
