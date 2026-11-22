@@ -125,7 +125,8 @@ For revision comparisons the measurement checkout supplies the Rust caller.
 When a selected engine checkout has a different `benches/transfer.rs`, the
 driver builds its locked engine with the measurement caller and checks rustc's
 dependency file against the resulting executable. The receipt includes both
-caller hashes. The build cache is keyed by engine revision and caller hash.
+caller hashes. The build cache is keyed by the compiler wrapper's content,
+the engine revision and the caller hash. A reused executable must match all three.
 This keeps changes in benchmark allocations out of the engine-to-engine ratio.
 
 To collect both sides in CI, dispatch `Frozen TENT CPU comparison` with

@@ -121,8 +121,9 @@ def build_receipts(path, commands, manifest):
     require(commands["tent-build"]["command"] == tent_build_command(reference, harness, output),
             "different frozen TENT build settings")
     built = [json.loads(line) for line in (path / "rust-build.stdout").read_text().splitlines()]
-    rust = [r["executable"] for r in built if r.get("executable") and r.get("target", {}).get("name") == "transfer"]
-    require(len(rust) == 1 and PurePosixPath(rust[0]).is_absolute(), "missing Rust benchmark executable")
+    targets = [r for r in built if r.get("executable") and r.get("target", {}).get("name") == "transfer"]
+    require(len(targets) == 1 and PurePosixPath(targets[0]["executable"]).is_absolute(), "missing Rust benchmark executable")
+    exe = PurePosixPath(targets[0]["executable"])
     overrides = commands["rust-build"].get("env_overrides", {})
     digest = manifest["harness_sha256"]["transfer.rs"]
     if "checkout_caller_sha256" in manifest or "build_caller.py" in manifest["harness_sha256"]:
@@ -135,11 +136,12 @@ def build_receipts(path, commands, manifest):
     if "RUSTC_WORKSPACE_WRAPPER" in overrides:
         require("build_caller.py" in manifest["harness_sha256"], "missing caller builder digest")
         caller = harness / "benches/transfer.rs"
-        exe = PurePosixPath(rust[0])
         cache = PurePosixPath(overrides["CARGO_TARGET_DIR"])
         require(overrides["RUSTC_WORKSPACE_WRAPPER"] == str(caller.with_name("build_caller.py"))
                 and cache.parts[-3:] == ("bench-callers", manifest["orbite_revision"], digest)
                 and exe.is_relative_to(cache), "different caller build settings")
+        require(targets[0].get("fresh") is False or cache.parts[-4:-3] == (manifest["harness_sha256"]["build_caller.py"],),
+                "cached Rust caller lacks its builder digest")
         require(commands["rust-build-engine"]["command"] == ["git", "rev-parse", "HEAD"]
                 and commands["rust-build-engine"]["cwd"] == str(source)
                 and (path / "rust-build-engine.stdout").read_text().strip() == manifest["orbite_revision"],
@@ -149,7 +151,7 @@ def build_receipts(path, commands, manifest):
                 "compiled caller digest differs")
         require(commands["rust-build-deps"]["command"] == ["cat", str(exe.with_suffix(".d"))], "different caller dep-info")
         check_caller_dep_info((path / "rust-build-deps.stdout").read_text(), exe, caller)
-    return {"orbite": rust[0], "tent": str(output / "tent-bench")}
+    return {"orbite": str(exe), "tent": str(output / "tent-bench")}
 
 
 def formal_sweep(path):

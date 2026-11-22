@@ -9,7 +9,7 @@ import unittest
 import uuid
 
 from guards import (CASES, CHECKS, CONTRACT, FILE_STATE, LIMITS, ORBITE_BASELINE, PARAMETERS,
-                    POLL, RSS_METHOD, TENT_RETRY, TIMING, VERIFICATION_IO, compare_trials, evaluate)
+                    POLL, RSS_METHOD, TENT_RETRY, TIMING, VERIFICATION_IO, build_receipts, compare_trials, evaluate)
 from run import RSS_PREFIX, RUST_BUILD, peak_rss, tent_build_command
 
 
@@ -68,6 +68,35 @@ def fixture(path, revision, boot):
 
 
 class GuardTests(unittest.TestCase):
+    def test_reused_caller_requires_the_compiler_wrapper_digest(self):
+        with TemporaryDirectory() as tmp:
+            path = Path(tmp) / "sweep"
+            revision = ORBITE_BASELINE
+            m = fixture(path, revision, str(uuid.uuid4()))
+            caller_hash = m["harness_sha256"]["transfer.rs"]
+            builder_hash = m["harness_sha256"]["build_caller.py"] = "e"*64
+            m["checkout_caller_sha256"] = "f"*64
+            commands = {c["name"]: c for c in json.loads((path / "commands.json").read_text())}
+            caller = Path("/src/benches/transfer.rs")
+            commands["rust-build-engine"] = {"command": ["git", "rev-parse", "HEAD"], "cwd": "/src"}
+            commands["rust-build-caller"] = {"command": ["sha256sum", str(caller)]}
+            (path/"rust-build-engine.stdout").write_text(revision)
+            (path/"rust-build-caller.stdout").write_text(f"{caller_hash}  {caller}\n")
+            for prefix, fresh, valid in ((builder_hash, True, True), ("old", False, True), ("old", True, False)):
+                cache = Path("/cache") / prefix / "bench-callers" / revision / caller_hash
+                exe = cache / "release/deps/transfer-abc"
+                commands["rust-build"]["env_overrides"] = {"CARGO_TARGET_DIR": str(cache),
+                    "RUSTC_WORKSPACE_WRAPPER": str(caller.with_name("build_caller.py"))}
+                commands["rust-build-deps"] = {"command": ["cat", str(exe.with_suffix(".d"))]}
+                (path/"rust-build-deps.stdout").write_text(f"{exe}: {caller}\n\n{caller}:\n")
+                (path/"rust-build.stdout").write_text(json.dumps({"target": {"name": "transfer"},
+                                                                 "executable": str(exe), "fresh": fresh}))
+                if valid:
+                    self.assertEqual(build_receipts(path, commands, m)["orbite"], str(exe))
+                else:
+                    with self.assertRaisesRegex(ValueError, "cached Rust caller"):
+                        build_receipts(path, commands, m)
+
     def test_paired_caller_builder_receipts(self):
         with TemporaryDirectory() as tmp:
             anchor, after = Path(tmp)/"base", Path(tmp)/"after"

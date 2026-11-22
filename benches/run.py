@@ -189,9 +189,11 @@ def main():
         if redirected:
             revision = run(name+"-engine", ["git", "rev-parse", "HEAD"], cwd=checkout).strip()
             digest = hashlib.sha256(caller.read_bytes()).hexdigest()
+            builder = ROOT / "benches/build_caller.py"
+            builder_digest = hashlib.sha256(builder.read_bytes()).hexdigest()
             cache = Path(overrides.get("CARGO_TARGET_DIR") or env.get("CARGO_TARGET_DIR") or (out.parent / "cargo"))
-            overrides.update(RUSTC_WORKSPACE_WRAPPER=str(ROOT / "benches/build_caller.py"),
-                             CARGO_TARGET_DIR=str(cache.resolve() / "bench-callers" / revision / digest))
+            overrides.update(RUSTC_WORKSPACE_WRAPPER=str(builder),
+                             CARGO_TARGET_DIR=str(cache.resolve() / builder_digest / "bench-callers" / revision / digest))
             if inner := env.get("RUSTC_WORKSPACE_WRAPPER"):
                 overrides["ORBITE_BENCH_INNER_WRAPPER"] = inner
         built = run(name, RUST_BUILD, cwd=checkout, overrides=overrides)
