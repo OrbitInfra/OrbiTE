@@ -302,7 +302,15 @@ fell from 384.1 to 320.1 MiB on both toolchains, a decrease of exactly
 | 1.85.0 | 396,552 | 331,136 | 346,596 | 346,768 | 1.144 → 0.955 |
 
 The [full revision comparison](https://github.com/OrbitInfra/OrbiTE/actions/runs/44978023506)
-uses the corrected caller for both OrbiTE engine revisions.
+used the corrected caller for both OrbiTE engine revisions. OrbiTE used
+0.9640× TENT's peak RSS on stable and 0.9644× on 1.85.0. Against the frozen
+OrbiTE engine the ratios were 1.0003 and 0.9998. The same TCP READ delivered
+0.886× and 0.877× TENT's goodput, with p99 at 1.133× and 1.094× TENT.
+Both timing metrics missed their targets in this sweep and met them in the
+[earlier sweep](https://github.com/OrbitInfra/OrbiTE/actions/runs/44868978517).
+Against the frozen OrbiTE engine, stable p99 also exceeded the 1.05 limit
+at 1.100×. On 1.85.0 the ratio was 1.035×.
+
 An independent Linux aarch64 control split only the post-transfer byte check
 into 64 KiB chunks and measured 395,968 KiB peak RSS, compared with
 395,960 KiB for its diagnostic control. Splitting only the pre-transfer reset

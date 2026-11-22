@@ -197,6 +197,11 @@ Done:
   image kept live during TCP. The benchmark now allocates it only for files.
   The requester and source retain both TCP payload buffers through their
   [existing completion boundaries](cpu-oracle.md#interrupted-read-reply).
+  The next repeatable memory gap is a single 64 MiB file READ. Start with
+  buffered tmpfs and attribute the verification and I/O buffers. Both the
+  [earlier sweep](https://github.com/OrbitInfra/OrbiTE/actions/runs/44868978517)
+  and the [current sweep](https://github.com/OrbitInfra/OrbiTE/actions/runs/44978023506)
+  measured 1.147–1.150× TENT's peak RSS on both toolchains, also on ext4.
 
 - **S16 — reference fixtures.** Retain the CPU trace contract and three frozen
   request prefixes used by native-listener rejection. Compatibility inventories
