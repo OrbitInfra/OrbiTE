@@ -10,6 +10,13 @@ pub(super) struct DirectFile {
 }
 
 impl DirectFile {
+    #[cfg(feature = "io-uring")]
+    fn host_range(&self, offset: u64, length: usize) -> Option<(&Arc<File>, usize)> {
+        let file = self.file.as_ref()?;
+        (offset % self.offset_alignment == 0 && length as u64 % self.offset_alignment == 0)
+            .then_some((file, self.memory_alignment.max(4096)))
+    }
+
     #[allow(unsafe_code)]
     fn open(buffered: &File, permission: Permission) -> Self {
         let mut mode = Self {
@@ -64,13 +71,32 @@ impl DirectFile {
 
 impl FileLease {
     #[cfg(feature = "io-uring")]
-    pub(crate) fn known_buffered(&self) -> bool {
-        self.permit.0.lock().is_ok_and(|state| {
-            state
-                .direct
-                .as_ref()
-                .is_some_and(|direct| direct.file.is_none())
-        })
+    pub(crate) fn allows_inline_group(&self, op: TransferOp, requests: &[FileRequest]) -> bool {
+        let Ok(state) = self.permit.0.lock() else {
+            return false;
+        };
+        let Some(direct) = &state.direct else {
+            return false;
+        };
+        if direct.file.is_none() {
+            return true;
+        }
+        // Only consecutive direct READs that need no bounce enter on the caller.
+        // Consult the retained inode's cached alignment without probing or taking a loan.
+        op == TransferOp::Read
+            && requests.windows(2).all(|pair| {
+                pair[0].offset.checked_add(pair[0].length as u64) == Some(pair[1].offset)
+            })
+            && requests.iter().all(|r| {
+                let (FileParts::One(part), Some((_, align))) =
+                    (&r.parts, direct.host_range(r.offset, r.length))
+                else {
+                    return false;
+                };
+                part.local.as_ref().is_some_and(|m| {
+                    (m.base_address() + part.local_offset as u64) % align as u64 == 0
+                })
+            })
     }
 
     /// Linux validates DIO alignment for each vector element independently.
@@ -118,11 +144,8 @@ impl FileLease {
         let direct = state
             .direct
             .get_or_insert_with(|| DirectFile::open(self.file(), entry.permission));
-        if let Some(file) = &direct.file {
-            if offset % direct.offset_alignment == 0 && length as u64 % direct.offset_alignment == 0
-            {
-                return Ok((Arc::clone(file), direct.memory_alignment.max(4096)));
-            }
+        if let Some((file, alignment)) = direct.host_range(offset, length) {
+            return Ok((Arc::clone(file), alignment));
         }
         Ok((Arc::clone(&self.file), 4096))
     }
