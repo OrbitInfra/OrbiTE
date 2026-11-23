@@ -26,7 +26,10 @@ for size in (1<<20, 64<<20):
                                text=True, capture_output=True)
             if p.returncode:
                 print("unavailable",mode,chunk,slots,p.stderr,flush=True)
-                if mode.startswith("fixed") and "Operation not permitted" in p.stderr:
+                if mode.startswith("fixed") and any(e in p.stderr for e in
+                        ("Operation not permitted","Cannot allocate memory","Permission denied")):
+                    print(json.dumps({"mode":mode,"chunk":chunk,"size":size,"slots":slots,
+                                      "process_trial":trial,"unavailable":p.stderr.strip()}),file=raw,flush=True)
                     continue
                 raise RuntimeError((p.args,p.stderr[-1000:]))
             row=json.loads(p.stdout); assert row["verified"] and len(row["trials"])==15

@@ -35,6 +35,8 @@ jobs:
           uname -a
           cat /proc/sys/kernel/random/boot_id
           ulimit -l
+          sudo prlimit --pid "$$" --memlock=134217728:134217728
+          ulimit -l
           rustc -Vv
           python3 -B benches/direct_read_cost.py target/release/examples/direct_read_cost "$dir" "$RUNNER_TEMP/read-costs"
       - uses: actions/upload-artifact@v7.0.2
