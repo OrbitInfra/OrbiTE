@@ -338,13 +338,22 @@ on stable and from 0.374 to 0.468 on Rust 1.85. P99 moved from 150.68 to
 byte rose 45% and 41%, exceeding the 10% allowance on both hosts, so the
 caller keeps the sleeping wait. The [full CPU sweeps](https://github.com/OrbitInfra/OrbiTE/actions/runs/45118496460)
 compare all shapes, including single 64 MiB direct READs, with the fixed
-OrbiTE baseline and frozen TENT using three 100-batch trials per shape. A
-single 64 MiB direct READ also needs 64 MiB of private storage through its
-CQE. Its memory and copy costs scale differently from the eight-block case.
+OrbiTE baseline and frozen TENT using three 100-batch trials per shape.
 Guest storage varied between hosts. In the [original Azure capture](https://github.com/OrbitInfra/OrbiTE/actions/runs/45116563186)
 the ten slowest Rust 1.85 parent batches spent a median 13.07 ms of their
 13.42 ms at the block device. Physical NVMe latency remains a separate
 qualification.
+
+A single 64 MiB direct READ needs 64 MiB of private storage through its
+CQE. A separate Linux aarch64 guest with 3 vCPUs measured the parent, the
+protected default and the protected engine with one reusable 64 MiB slot.
+Each of the six possible launch orders ran once, with a fresh process,
+three warmups and ten byte-checked reads per condition. Median process CPU
+per READ was 0.431, 3.320 and 2.428 ms, respectively. Reuse lowered CPU
+in all six pairs and raised the process peak from 323 to 387 MiB. It
+retains the slot between operations. This experiment measures the combined
+cost of allocation, copying and completion on that guest. The staging pool
+remains opt-in. [Review and measurement conditions](https://github.com/OrbitInfra/OrbiTE/pull/226)
 
 ### Singleton tmpfs tail latency
 
