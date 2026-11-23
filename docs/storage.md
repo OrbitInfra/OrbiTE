@@ -147,7 +147,11 @@ eight plain host READs or WRITEs with a common route and deadline, totaling at m
 wait for the entire consumed SQ prefix. Only a full set is reaped on the
 caller. Each offset, native loan, and completion stays independent. If the
 timed group wait is unavailable, incomplete or interrupted, the worker drains
-the submitted prefix. Both paths publish the usual per-task receipts. On
+the submitted prefix. A confirmed SQ head releases the unsubmitted tasks'
+native loans and scratch buffers. If a drain worker is lost, a skipped,
+locally drained tail can be read or written immediately and its admission
+bytes return to the budget. An invalid SQ head keeps all ranges fenced.
+Both paths publish the usual per-task receipts. On
 expiry or an enter error, the existing batch worker takes the same ring and
 drains it; it never resubmits the request. This bounded caller wait deliberately
 differs from frozen TENT’s nonblocking caller status polling, so an abandoned

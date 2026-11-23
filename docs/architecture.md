@@ -342,8 +342,12 @@ For a known buffered file, a group of at most eight plain host READs or WRITEs t
 64 KiB or less may use the caller under the same policy and deadline. One
 deadline-capped timed enter can wait for the consumed SQ prefix. The single
 CQ owner leaves all completions visible for the worker if the set is incomplete.
-Each READ has its own destination loan. A failed handoff retains the
-outstanding loans and admission charges. The [buffered READ measurements](benchmarks.md#eight-contiguous-buffered-reads)
+Each READ has its own destination loan. After a short submission the SQ head
+identifies the unconsumed suffix. The ring can release those ranges because
+every later enter submits zero entries. If a caller or drain worker loses
+the remaining receipts, the consumed prefix stays charged and its outstanding
+loans remain fenced. An invalid SQ head retains all tasks published to the ring.
+The [buffered READ measurements](benchmarks.md#eight-contiguous-buffered-reads)
 compare caller polling time with the cost of handing the group to a new thread.
 `late_small_cqe_waits_on_caller_without_a_worker_on_tmpfs_and_direct_ext4` holds
 a real CQE past the initial peek and counts zero worker starts.

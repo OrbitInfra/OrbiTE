@@ -209,8 +209,8 @@ incomplete CQ sets and worker failure.
 This case reads eight adjacent 4 KiB ranges on a warmed tmpfs file. Each
 request has its own destination, SQE and CQE. The caller resets and syncs
 the file before timing and verifies every byte and guard after the batch.
-The [paired diagnostic](https://github.com/OrbitInfra/OrbiTE/actions/runs/45086639095)
-compares the parent and candidate engines with the same Rust caller and frozen
+The [paired diagnostic](https://github.com/OrbitInfra/OrbiTE/actions/runs/45089346998)
+compares parent `1381294` and candidate `1915229` with the same Rust caller and frozen
 TENT binary on the same boot. Each toolchain runs six fresh processes per
 implementation and revision, alternating launch order, with three warmups,
 1,000 measured batches, one caller and two configured workers per engine.
@@ -235,15 +235,15 @@ last column uses the ten slowest end-to-end windows on each host.
 
 | Original OrbiTE | Worker fork to first run | Caller status loop | In nanosleep during loop | Last CQE to terminal observation | After last CQE inside nanosleep, slowest 1% |
 |---|---:|---:|---:|---:|---:|
-| Stable | 9.32 | 74.16 | 66.49 | 25.45 | 73.23 |
-| Rust 1.85 | 9.37 | 74.10 | 66.35 | 26.24 | 93.13 |
+| Stable | 9.28 | 131.91 | 122.67 | 74.44 | 100.68 |
+| Rust 1.85 | 9.25 | 74.41 | 66.90 | 26.04 | 112.48 |
 
 In the same before captures TENT issued all eight reads on the caller. Its
-median status loop was 19.45 / 19.48 µs and terminal observation followed
-the last CQE by 2.07 / 2.05 µs on stable / Rust 1.85. OrbiTE's original path
-also took 49.07 / 47.68 µs from batch start to the first SQE, including file
+median status loop was 1.03 / 20.35 µs and terminal observation followed
+the last CQE by 5.26 / 1.51 µs on stable / Rust 1.85. OrbiTE's original path
+also took 72.05 / 48.79 µs from batch start to the first SQE, including file
 preparation and the worker's first schedule. With caller submission this
-interval fell to 14.31 / 14.39 µs. All 2,000 candidate groups kept one ring
+interval fell to 32.12 / 15.11 µs. All 2,000 candidate groups kept one ring
 and eight separate 4 KiB completions. They started zero workers, entered no
 polling sleeps and observed completion with one status call. This is the
 ready-CQE case. The real-ring controls separately force the bounded wait to
@@ -255,10 +255,16 @@ varied between phases, including on this control.
 
 | Rust | OrbiTE GiB/s, before → after | TENT GiB/s, before → after | OrbiTE p99 µs, before → after | TENT p99 µs, before → after | OrbiTE CPU ns/byte, before → after |
 |---|---:|---:|---:|---:|---:|
-| Stable | 0.320 → 1.310 | 0.694 → 0.669 | 167.19 → 47.47 | 89.63 → 136.50 | 3.117 → 0.716 |
-| Rust 1.85 | 0.327 → 1.304 | 0.704 → 0.684 | 161.74 → 58.97 | 86.39 → 118.55 | 3.047 → 0.719 |
+| Stable | 0.261 → 0.552 | 0.364 → 0.373 | 211.85 → 174.75 | 168.01 → 176.44 | 4.135 → 1.715 |
+| Rust 1.85 | 0.311 → 1.291 | 0.681 → 0.671 | 171.10 → 49.60 | 188.98 → 133.75 | 3.204 → 0.730 |
 
-The [full CPU sweeps](https://github.com/OrbitInfra/OrbiTE/actions/runs/45086624401)
+The [first pair](https://github.com/OrbitInfra/OrbiTE/actions/runs/45086639095)
+and an [independent runner pair](https://github.com/OrbitInfra/OrbiTE/actions/runs/45087715092)
+also observed zero worker starts and zero caller sleeps on the candidate
+before the short-submit ownership fix. Across those runs, untraced candidate
+p99 ranged from 47 to 252 µs. The final stable runner reached roughly the
+same p99 as TENT while delivering 1.48 times its goodput.
+The [full CPU sweeps](https://github.com/OrbitInfra/OrbiTE/actions/runs/45089330744)
 use the standard 100-sample trials, compare with the fixed OrbiTE regression
 baseline and retain all TENT workload verdicts. The results above apply to
 one caller reading a warmed tmpfs file.

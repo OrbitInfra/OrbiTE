@@ -726,11 +726,13 @@ of the underlying native transports remains with their installed profiles.
 
 ## Local file segments
 
-For warmed buffered READs, the [group controls](https://github.com/OrbitInfra/OrbiTE/actions/runs/45086907626)
+For warmed buffered READs, the [group controls](https://github.com/OrbitInfra/OrbiTE/actions/runs/45089516482)
 deliver real CQEs in reverse order. They check every destination and guard
 after a short submission, a short READ, EOF and a later successful READ in
-the same batch. If the drain worker cannot start, the consumed destinations
-remain inaccessible. Cold file routes, direct-capable files and oversized
+the same batch. After a two-of-three submission, worker loss or an invalid CQE
+retains the two consumed ranges and their bytes. The third range accepts a
+new write and returns its new value. An invalid SQ head keeps all three
+inaccessible and charged. Cold file routes, direct-capable files and oversized
 groups exercise worker submission. The [eight-block profile](benchmarks.md#eight-contiguous-buffered-reads)
 measures both completion paths on tmpfs.
 

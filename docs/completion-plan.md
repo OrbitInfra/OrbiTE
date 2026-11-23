@@ -204,10 +204,10 @@ Done:
   retest measured 0.960× TENT's peak RSS on both toolchains. Earlier file
   READs measured 1.147–1.150× TENT's peak RSS. For
   [eight contiguous 4 KiB tmpfs READs](benchmarks.md#eight-contiguous-buffered-reads),
-  the caller's status loop previously spent about 66 µs in backoff sleep
+  the caller's status loop previously spent 67–123 µs in backoff sleep
   while each batch started a worker. Known buffered host READs now use the
   same bounded caller path as WRITEs. Same-boot untraced p99 fell from
-  167 to 47 µs on stable and from 162 to 59 µs on Rust 1.85.
+  212 to 175 µs on stable and from 171 to 50 µs on Rust 1.85.
   Next, measure the corresponding direct ext4 READ. Separate block completion
   from worker scheduling and caller polling before changing direct-file
   admission. The buffered tmpfs measurements cover a different route.
