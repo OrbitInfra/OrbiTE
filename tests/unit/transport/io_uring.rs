@@ -247,7 +247,7 @@ fn real_files_move_full_bytes_on_ext4_and_tmpfs() -> Result<()> {
 }
 
 #[test]
-fn aligned_file_batches_use_one_ring_without_bounce_for_gaps_or_contiguous_ranges() -> Result<()> {
+fn aligned_file_batches_use_one_ring_and_only_direct_reads_require_scratch() -> Result<()> {
     if !kernel() {
         return Ok(());
     }
@@ -302,6 +302,26 @@ fn aligned_file_batches_use_one_ring_without_bounce_for_gaps_or_contiguous_range
                         fs::write(&f.path, &file)?;
                     } else {
                         f.memory.write(0, &memory)?;
+                    }
+                    let (lease, _) = f.engine.files.admit(&f.segment, op, 4096, 4096)?;
+                    let (fd, _) = lease.io_file(4096, 4096)?;
+                    let direct_read = lease.is_direct_read(op, &fd);
+                    drop(lease);
+                    if direct_read {
+                        let denied = f.run(op, &requests)?;
+                        assert!(denied.locally_drained);
+                        assert!(matches!(
+                            denied.failure.unwrap().error,
+                            Error::ResourceExhausted
+                        ));
+                        assert!(widths.lock().unwrap().is_empty());
+                        assert_eq!(f.engine.stats()?.io_uring.unwrap().pageable_bytes, 0);
+                        Arc::get_mut(&mut f.engine)
+                            .unwrap()
+                            .io_uring
+                            .as_mut()
+                            .unwrap()
+                            .allocate = task::Bounce::new;
                     }
                     let mut batch = f.engine.submit_async(
                         op,

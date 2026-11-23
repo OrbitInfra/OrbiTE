@@ -12,6 +12,7 @@ struct Trace {
     submit_limit: Option<u32>,
     invalid_sq_head: bool,
     invalid_cqe: bool,
+    truncate_to: Option<u64>,
     errors: std::collections::VecDeque<i32>,
     alive: std::sync::Weak<()>,
 }
@@ -119,8 +120,17 @@ fn observed_at(
         .unwrap();
     io.available = Arc::new(true.into());
     io.create = Arc::new(move |count| {
-        if truncate {
-            fs::OpenOptions::new().write(true).open(&path)?.set_len(3)?;
+        let length = copy
+            .lock()
+            .unwrap()
+            .truncate_to
+            .take()
+            .or(truncate.then_some(3));
+        if let Some(length) = length {
+            fs::OpenOptions::new()
+                .write(true)
+                .open(&path)?
+                .set_len(length)?;
         }
         let alive = Arc::new(());
         copy.lock().unwrap().alive = Arc::downgrade(&alive);
@@ -497,11 +507,14 @@ fn caller_preflight_rejects_full_sq_before_any_file_io() -> Result<()> {
 }
 
 #[test]
-fn aligned_small_file_requests_need_no_bounce_allocation() -> Result<()> {
+fn aligned_small_buffered_read_needs_no_bounce_allocation() -> Result<()> {
     if !kernel() {
         return Ok(());
     }
-    let (mut f, trace) = observed(true, false, false)?;
+    let Some(dir) = group::directory("ORBITE_TMPFS_DIR") else {
+        return Ok(());
+    };
+    let (mut f, trace) = observed_at(&dir, b"abcdefgh", true, false, false)?;
     let image: Vec<_> = (0..8192).map(|i| (i % 251) as u8).collect();
     fs::write(&f.path, &image)?;
     let io = Arc::get_mut(&mut f.engine)

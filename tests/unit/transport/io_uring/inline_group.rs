@@ -1,6 +1,6 @@
 use super::*;
 
-fn directory(variable: &str) -> Option<PathBuf> {
+pub(super) fn directory(variable: &str) -> Option<PathBuf> {
     let path = std::env::var_os(variable).map(PathBuf::from);
     if path.is_none() {
         assert!(!required(), "{variable} must select the real filesystem");
@@ -16,6 +16,235 @@ fn warm(f: &Fixture, trace: &Mutex<Trace>) -> Result<()> {
             .is_complete()
     );
     *trace.lock().unwrap() = Trace::default();
+    Ok(())
+}
+
+const PAGE: usize = 4096;
+
+fn direct_fixture(
+    dir: &Path,
+    image: &[u8],
+    ready: bool,
+) -> Result<(Fixture, Arc<Mutex<Trace>>, usize)> {
+    let (mut f, trace) = observed_at(dir, image, ready, false, false)?;
+    f.memory = f.engine.register_memory(
+        vec![0x9a; image.len() + 2 * PAGE].into_boxed_slice(),
+        Permission::LocalOnly,
+    )?;
+    let base = f.memory.base_address();
+    let start = (base.next_multiple_of(PAGE as u64) - base) as usize + PAGE;
+    Ok((f, trace, start))
+}
+
+#[test]
+fn direct_read_group_keeps_eight_receipts_across_partial_submit_and_handoff() -> Result<()> {
+    let Some(dir) = directory("ORBITE_EXT4_DIR") else {
+        return Ok(());
+    };
+    if !kernel() {
+        return Ok(());
+    }
+    let image: Vec<u8> = (0..8 * PAGE).map(|i| (i % 251) as u8).collect();
+    for (ready, limit) in [
+        (true, None),
+        (false, None),
+        (true, Some(3)),
+        (false, Some(3)),
+    ] {
+        let (f, trace, start) = direct_fixture(&dir, &image, ready)?;
+        warm(&f, &trace)?;
+        assert_eq!(
+            f.engine.file_segment_info(&f.segment)?.direct_io,
+            Some(true)
+        );
+        let mut expected = vec![0; f.memory.len()];
+        f.memory.read(0, &mut expected)?;
+        trace.lock().unwrap().submit_limit = limit;
+        let requests = (0..8)
+            .map(|i| f.request(start + i * PAGE, (i * PAGE) as u64, PAGE))
+            .collect::<Vec<_>>();
+        let workers = WORKER_STARTS.with(|n| n.get());
+        let mut batch =
+            f.engine
+                .submit_async(TransferOp::Read, &f.segment, &requests, None, TIMEOUT)?;
+        let status = batch.wait(TIMEOUT)?;
+        let count = limit.unwrap_or(8) as usize;
+        assert!(status.locally_drained);
+        assert_eq!(
+            (status.completed_tasks, status.transferred_bytes),
+            (count, count * PAGE)
+        );
+        for (i, task) in batch.task_statuses()?.iter().enumerate() {
+            assert!(task.locally_drained);
+            assert_eq!(task.physical_owner, i);
+            if i < count {
+                assert_eq!(
+                    (task.state, task.transferred_bytes),
+                    (TaskState::Completed, PAGE)
+                );
+            } else {
+                assert_eq!(task.transferred_bytes, 0);
+                assert_eq!(
+                    task.failure.as_ref().unwrap().remote_effect,
+                    RemoteEffect::None
+                );
+            }
+        }
+        expected[start..start + count * PAGE].copy_from_slice(&image[..count * PAGE]);
+        let mut bytes = vec![0; expected.len()];
+        f.memory.read(0, &mut bytes)?;
+        assert_eq!(bytes, expected);
+        assert_eq!(fs::read(&f.path)?, image);
+        assert_eq!(
+            WORKER_STARTS.with(|n| n.get()) - workers,
+            usize::from(!ready)
+        );
+        let t = trace.lock().unwrap();
+        assert_eq!(t.submitter, Some(std::thread::current().id()));
+        assert_eq!(t.submits, if limit.is_some() { 2 } else { 1 });
+        assert_eq!(t.group_checks.len(), 1);
+        assert_eq!(t.group_checks[0].0, count as u32);
+        assert!(t.alive.upgrade().is_none());
+        drop(t);
+        batch.free()?;
+        assert_eq!(f.engine.stats()?.inflight_bytes, 0);
+    }
+    Ok(())
+}
+
+#[test]
+fn direct_groups_that_need_a_worker_keep_worker_submission() -> Result<()> {
+    let Some(dir) = directory("ORBITE_EXT4_DIR") else {
+        return Ok(());
+    };
+    if !kernel() {
+        return Ok(());
+    }
+    let image = vec![0x41; 4 * PAGE];
+    let read = TransferOp::Read;
+    // Vary just one eligibility condition from a warmed, aligned, adjacent READ.
+    for (op, cold, local_offset, file_offset, length, gap) in [
+        (TransferOp::Write, false, 0, 0, PAGE, 0),
+        (read, true, 0, 0, PAGE, 0),
+        (read, false, 0, 0, PAGE, PAGE),
+        (read, false, 1, 0, PAGE, 0),
+        (read, false, 0, 1, PAGE, 0),
+        (read, false, 0, 0, PAGE - 1, 0),
+    ] {
+        let (f, trace, start) = direct_fixture(&dir, &image, true)?;
+        if !cold {
+            warm(&f, &trace)?;
+        }
+        let requests = [
+            f.request(start, file_offset, length),
+            f.request(
+                start + PAGE + local_offset,
+                file_offset + (length + gap) as u64,
+                length,
+            ),
+        ];
+        let workers = WORKER_STARTS.with(|n| n.get());
+        let mut batch = f
+            .engine
+            .submit_async(op, &f.segment, &requests, None, TIMEOUT)?;
+        assert_eq!(batch.wait(TIMEOUT)?.completed_tasks, 2);
+        assert_eq!(WORKER_STARTS.with(|n| n.get()) - workers, 1);
+        let t = trace.lock().unwrap();
+        assert_ne!(t.submitter, Some(std::thread::current().id()));
+        assert!(t.group_checks.is_empty());
+        drop(t);
+        batch.free()?;
+    }
+    Ok(())
+}
+
+#[test]
+fn direct_read_copies_only_each_cqes_prefix_after_truncate() -> Result<()> {
+    let Some(dir) = directory("ORBITE_EXT4_DIR") else {
+        return Ok(());
+    };
+    if !kernel() {
+        return Ok(());
+    }
+    let image: Vec<_> = (0..4 * PAGE).map(|i| (i % 251) as u8).collect();
+    for ready in [true, false] {
+        for tail in [0, 1, 512, PAGE - 1] {
+            let (f, trace, start) = direct_fixture(&dir, &image, ready)?;
+            warm(&f, &trace)?;
+            let mut expected = vec![0; f.memory.len()];
+            f.memory.read(0, &mut expected)?;
+            // Truncate after validation and before the kernel consumes any SQE.
+            trace.lock().unwrap().truncate_to = Some((2 * PAGE + tail) as u64);
+            let requests = (0..3)
+                .map(|i| f.request(start + i * PAGE, ((i + 1) * PAGE) as u64, PAGE))
+                .collect::<Vec<_>>();
+            let mut batch =
+                f.engine
+                    .submit_async(TransferOp::Read, &f.segment, &requests, None, TIMEOUT)?;
+            let status = batch.wait(TIMEOUT)?;
+            assert!(status.locally_drained);
+            assert_eq!(
+                (status.completed_tasks, status.transferred_bytes),
+                (1, PAGE + tail)
+            );
+            for (task, (state, n)) in batch.task_statuses()?.iter().zip([
+                (TaskState::Completed, PAGE),
+                (TaskState::Failed, tail),
+                (TaskState::Failed, 0),
+            ]) {
+                assert_eq!(
+                    (task.state, task.transferred_bytes, task.locally_drained),
+                    (state, n, true)
+                );
+            }
+            expected[start..start + PAGE + tail].copy_from_slice(&image[PAGE..2 * PAGE + tail]);
+            let mut actual = vec![0; expected.len()];
+            f.memory.read(0, &mut actual)?;
+            assert_eq!(actual, expected);
+            batch.free()?;
+            assert_eq!(f.engine.stats()?.io_uring.unwrap().pageable_bytes, 0);
+        }
+    }
+    Ok(())
+}
+
+#[test]
+fn direct_vector_read_preserves_ranges_beyond_eof_and_skips_padding() -> Result<()> {
+    let Some(dir) = directory("ORBITE_EXT4_DIR") else {
+        return Ok(());
+    };
+    if !kernel() {
+        return Ok(());
+    }
+    let image: Vec<_> = (0..6 * PAGE).map(|i| (i % 251) as u8).collect();
+    for padding in [false, true] {
+        let (f, trace, start) = direct_fixture(&dir, &image, true)?;
+        let address = f.memory.base_address() + start as u64;
+        let mut parts = vec![(address + (2 * PAGE) as u64, PAGE).into()];
+        if padding {
+            parts.push(crate::FileIoElement::Padding(PAGE));
+        }
+        parts.push((address, PAGE).into());
+        parts.push((address + PAGE as u64, PAGE).into());
+        let req = TransferRequest::file_vectored(Transport::IoUring, PAGE as u64, &parts)?;
+        let second_offset = (2 + usize::from(padding)) * PAGE;
+        trace.lock().unwrap().truncate_to = Some((second_offset + 512) as u64);
+        let mut batch =
+            f.engine
+                .submit_async(TransferOp::Read, &f.segment, &[req], None, TIMEOUT)?;
+        let status = batch.wait(TIMEOUT)?;
+        assert!(status.locally_drained);
+        assert_eq!(status.transferred_bytes, second_offset + 512 - PAGE);
+        assert_eq!(batch.task_status(0)?.state, TaskState::Failed);
+        let mut expected = vec![0x9a; f.memory.len()];
+        expected[start + 2 * PAGE..start + 3 * PAGE].copy_from_slice(&image[PAGE..2 * PAGE]);
+        expected[start..start + 512].copy_from_slice(&image[second_offset..second_offset + 512]);
+        let mut actual = vec![0; expected.len()];
+        f.memory.read(0, &mut actual)?;
+        assert_eq!(actual, expected);
+        batch.free()?;
+        assert_eq!(f.engine.stats()?.io_uring.unwrap().pageable_bytes, 0);
+    }
     Ok(())
 }
 

@@ -190,7 +190,11 @@ if [[ ${2:-} == rdma-priority || ${2:-} == dmabuf || ${2:-} == hp-close || ${2:-
 fi
 if [[ ${2:-} == io-small ]]; then
   controls=(
-    transport::io_uring::tests::aligned_file_batches_use_one_ring_without_bounce_for_gaps_or_contiguous_ranges
+    transport::io_uring::tests::aligned_file_batches_use_one_ring_and_only_direct_reads_require_scratch
+    transport::io_uring::tests::inline::group::direct_read_group_keeps_eight_receipts_across_partial_submit_and_handoff
+    transport::io_uring::tests::inline::group::direct_groups_that_need_a_worker_keep_worker_submission
+    transport::io_uring::tests::inline::group::direct_read_copies_only_each_cqes_prefix_after_truncate
+    transport::io_uring::tests::inline::group::direct_vector_read_preserves_ranges_beyond_eof_and_skips_padding
     transport::io_uring::tests::inline::group::buffered_group_drains_only_the_consumed_prefix_and_preserves_gaps
     transport::io_uring::tests::inline::group::short_buffered_read_group_preserves_each_cqe_and_destination_guard
     transport::io_uring::tests::inline::group::lost_group_worker_retains_only_native_effects_for_the_consumed_prefix
@@ -201,7 +205,7 @@ if [[ ${2:-} == io-small ]]; then
     transport::io_uring::tests::inline::failed_worker_handoff_quarantines_the_accepted_sqe_without_replay
     transport::io_uring::tests::inline::worker_exit_retains_a_ready_file_handoff_and_publishes_unquiesced
     transport::io_uring::tests::inline::caller_preflight_rejects_full_sq_before_any_file_io
-    transport::io_uring::tests::inline::aligned_small_file_requests_need_no_bounce_allocation
+    transport::io_uring::tests::inline::aligned_small_buffered_read_needs_no_bounce_allocation
     transport::io_uring::tests::inline::pending_native_io_completes_on_worker_while_caller_only_computes
     transport::io_uring::tests::inline::wait::late_small_cqe_waits_on_caller_without_a_worker_on_tmpfs_and_direct_ext4
     transport::io_uring::tests::inline::wait::caller_wait_is_bounded_by_one_window_the_request_deadline_and_three_enters
