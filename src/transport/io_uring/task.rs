@@ -80,6 +80,7 @@ enum HostMemory {
     Vector {
         _loans: Vec<DmaLease>,
         iovecs: Box<[libc::iovec]>,
+        _padding: Option<Scratch>,
     },
 }
 
@@ -142,10 +143,26 @@ impl Task {
                     iov_len: part.length,
                 });
             }
-            let file = request.lease.file_for_iovecs(request.offset, &iovecs)?;
-            // Round planning needs one length per SQE. entry() supplies the actual iovec array.
+            let (file, alignment) = request.lease.file_for_iovecs(request.offset, &iovecs)?;
+            let (bounce, padding) = if request.lease.is_direct_read(operation, &file) {
+                // Padding only advances the position in the private READ buffer.
+                for (iov, part) in iovecs.iter_mut().zip(request.parts.iter()) {
+                    if part.local.is_none() {
+                        iov.iov_base = std::ptr::null_mut();
+                    }
+                }
+                drop(padding);
+                (
+                    Some(Scratch::acquire(transport, request.length, alignment)?),
+                    None,
+                )
+            } else {
+                (None, padding)
+            };
             let span = libc::iovec {
-                iov_base: std::ptr::null_mut(),
+                iov_base: bounce
+                    .as_ref()
+                    .map_or(std::ptr::null_mut(), |b| b.address().as_ptr().cast()),
                 iov_len: request.length,
             };
             return Ok((
@@ -154,9 +171,10 @@ impl Task {
                     memory: Some(HostMemory::Vector {
                         _loans: loans,
                         iovecs: iovecs.into_boxed_slice(),
+                        _padding: padding,
                     }),
                     length: request.length,
-                    bounce: padding,
+                    bounce,
                     offset: request.offset,
                     result: None,
                     late: false,
@@ -171,14 +189,11 @@ impl Task {
         // its producer event. Use buffered I/O for an unaligned view, without a copy.
         #[cfg(feature = "cuda")]
         let direct_host = if local.is_cuda_pinned_host() {
-            Some((
-                request.lease.file_for_buffer(
-                    request.offset,
-                    request.length,
-                    memory.address().as_ptr() as usize,
-                )?,
-                1,
-            ))
+            Some(request.lease.file_for_buffer(
+                request.offset,
+                request.length,
+                memory.address().as_ptr() as usize,
+            )?)
         } else {
             None
         };
@@ -194,7 +209,10 @@ impl Task {
         } else {
             alignment
         };
-        let bounce = if memory.address().as_ptr() as usize % staging_alignment != 0 {
+        // A direct READ racing truncate can zero the rest of the last block
+        // even when its CQE reports a shorter prefix. Keep that write private.
+        let protect = request.lease.is_direct_read(operation, &file);
+        let bounce = if protect || memory.address().as_ptr() as usize % staging_alignment != 0 {
             let bounce = Scratch::acquire(transport, request.length, staging_alignment)?;
             if operation == TransferOp::Write {
                 // SAFETY: the exclusive loan covers all initialized WRITE bytes.
@@ -247,8 +265,8 @@ impl Task {
         iov: &libc::iovec,
         index: usize,
     ) -> squeue::Entry {
-        let iovecs = match &self.memory {
-            Some(HostMemory::Vector { iovecs, .. }) => &**iovecs,
+        let iovecs = match (&self.memory, &self.bounce) {
+            (Some(HostMemory::Vector { iovecs, .. }), None) => &**iovecs,
             _ => std::slice::from_ref(iov),
         };
         entry(&self.file, self.offset, operation, iovecs, index)
@@ -264,15 +282,38 @@ impl Task {
         self.result = Some(result);
         self.late = late;
         if operation == TransferOp::Read && result > 0 {
-            if let (Some(bounce), HostMemory::One(memory)) = (&self.bounce, memory) {
-                // SAFETY: this CQE proves the kernel wrote this prefix and stopped using
-                // the iovec. The bound above and the exclusive loan protect both ranges.
-                unsafe {
-                    std::ptr::copy_nonoverlapping(
-                        bounce.address().as_ptr(),
-                        memory.address().as_ptr(),
-                        result as usize,
-                    );
+            if let Some(bounce) = &self.bounce {
+                let source = bounce.address().as_ptr();
+                let length = result as usize;
+                match memory {
+                    HostMemory::One(memory) => {
+                        // SAFETY: this CQE initialized length disjoint scratch bytes.
+                        // The exclusive destination loan covers the checked prefix.
+                        unsafe {
+                            std::ptr::copy_nonoverlapping(source, memory.address().as_ptr(), length)
+                        };
+                    }
+                    HostMemory::Vector { iovecs, .. } => {
+                        let mut copied = 0;
+                        for iov in iovecs {
+                            let n = iov.iov_len.min(length - copied);
+                            if n == 0 {
+                                break;
+                            }
+                            if !iov.iov_base.is_null() {
+                                // SAFETY: the CQE covers this scratch prefix and the retained
+                                // loan covers this destination. Padding has a null address.
+                                unsafe {
+                                    std::ptr::copy_nonoverlapping(
+                                        source.add(copied),
+                                        iov.iov_base.cast(),
+                                        n,
+                                    )
+                                };
+                            }
+                            copied += n;
+                        }
+                    }
                 }
             }
         }

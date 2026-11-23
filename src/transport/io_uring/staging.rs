@@ -268,7 +268,7 @@ impl Submission<'_> {
                             ));
                         }
                         let length = capacity.min(run_length);
-                        let file =
+                        let (file, _) =
                             request
                                 .lease
                                 .file_for_buffer(file_offset, length, address as usize)?;

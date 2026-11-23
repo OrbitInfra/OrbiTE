@@ -71,6 +71,12 @@ impl DirectFile {
 
 impl FileLease {
     #[cfg(feature = "io-uring")]
+    pub(crate) fn is_direct_read(&self, op: TransferOp, selected: &File) -> bool {
+        // Selection returns either the retained buffered file or its O_DIRECT reopen.
+        op == TransferOp::Read && selected.as_raw_fd() != self.file().as_raw_fd()
+    }
+
+    #[cfg(feature = "io-uring")]
     pub(crate) fn allows_inline_group(&self, op: TransferOp, requests: &[FileRequest]) -> bool {
         let Ok(state) = self.permit.0.lock() else {
             return false;
@@ -81,7 +87,7 @@ impl FileLease {
         if direct.file.is_none() {
             return true;
         }
-        // Only consecutive direct READs that need no bounce enter on the caller.
+        // Only consecutive direct READs with aligned host ranges enter on the caller.
         // Consult the retained inode's cached alignment without probing or taking a loan.
         op == TransferOp::Read
             && requests.windows(2).all(|pair| {
@@ -101,7 +107,11 @@ impl FileLease {
 
     /// Linux validates DIO alignment for each vector element independently.
     #[cfg(feature = "io-uring")]
-    pub(crate) fn file_for_iovecs(&self, offset: u64, iovecs: &[libc::iovec]) -> Result<Arc<File>> {
+    pub(crate) fn file_for_iovecs(
+        &self,
+        offset: u64,
+        iovecs: &[libc::iovec],
+    ) -> Result<(Arc<File>, usize)> {
         let entry = &self.permit.0;
         let mut state = entry.lock()?;
         let direct = state
@@ -114,10 +124,10 @@ impl FileLease {
                         && iov.iov_len as u64 % direct.offset_alignment == 0
                 })
             {
-                return Ok(Arc::clone(file));
+                return Ok((Arc::clone(file), direct.memory_alignment.max(4096)));
             }
         }
-        Ok(Arc::clone(&self.file))
+        Ok((Arc::clone(&self.file), 1))
     }
 
     #[cfg(all(feature = "cuda", feature = "io-uring"))]
@@ -126,12 +136,12 @@ impl FileLease {
         offset: u64,
         length: usize,
         address: usize,
-    ) -> Result<Arc<File>> {
+    ) -> Result<(Arc<File>, usize)> {
         let (file, alignment) = self.io_file(offset, length)?;
         if address % alignment == 0 {
-            Ok(file)
+            Ok((file, alignment))
         } else {
-            Ok(Arc::clone(&self.file))
+            Ok((Arc::clone(&self.file), 1))
         }
     }
 
