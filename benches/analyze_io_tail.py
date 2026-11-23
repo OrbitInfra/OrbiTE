@@ -11,6 +11,7 @@ LINE = re.compile(r'^\s*(.*?)\s+(-?\d+)/(-?\d+)\s+\[\d+\]\s+(\d+)\.(\d+):\s+(\S+
 SWITCH = re.compile(r'.+:(\d+) \[\d+\] (\S+) ==> .+:(\d+) \[\d+\]')
 WAKE = re.compile(r'.+:(\d+) \[\d+\] CPU:\d+')
 BLOCK = re.compile(r'(\d+,\d+) (\S+) .*?\(\) (\d+) \+ (\d+) .*')
+READ_BIO = re.compile(r'(\d+,\d+) (?:R|RS) (\d+) \+ (\d+)\b')
 REQUEST_ID = r'\breq (0x[0-9a-fA-F]+), user_data (0x[0-9a-fA-F]+), '
 READ_SUBMIT = re.compile(REQUEST_ID + r'opcode READV,')
 FULL_PAGE_CQE = re.compile(REQUEST_ID + r'result 4096,')
@@ -42,12 +43,12 @@ def block_requests(events):
     return requests
 
 
-def window_io(requests, begin, end, submit, pid, op, payload):
+def window_io(requests, begin, end, submit, pid, op, payload, *, direct_read_group=False):
     # Direct candidates are synchronous data issued by this process after its
     # first SQE. Validate their total; never classify an extra write as payload.
     def direct(r):
         return (r['pid'] == pid and submit <= r['issue_ns'] <= end
-                and r['flags'] == op + 'S')
+                and r['flags'] in (('R', 'RS') if direct_read_group else (op + 'S',)))
     candidates = [r for r in requests if direct(r)]
     # Depth of this sample's data at the driver issue boundary, separately for
     # each device. This is not device-wide depth or the number of queued SQEs.
@@ -156,13 +157,35 @@ def check_read_completions(submits, completions):
             raise ValueError('unmatched or short 4 KiB READ completion')
 
 
-def direct_read_phases(requests, first_sqe, last_cqe):
+def direct_read_phases(requests, first_sqe, last_cqe, events, pid):
     # Merging or splitting at the block layer is independent of the eight
     # io_uring request identities. Use elapsed intervals, not summed waits.
     if not requests or any(r['complete_ns'] is None or
                            not first_sqe <= r['issue_ns'] <= r['complete_ns'] <= last_cqe
                            for r in requests):
         raise ValueError('missing or out-of-window direct READ completion')
+    # REQ_SYNC is independent of O_DIRECT. Both R and RS must map to the
+    # queued READ bios, even when the driver merges them into one request.
+    bios = []
+    for at, process, _, event, body in events:
+        if process == pid and first_sqe <= at <= last_cqe and event == 'block:block_bio_queue':
+            match = READ_BIO.match(body)
+            if match:
+                bios.append((match[1], int(match[2]), int(match[3])))
+    issued = [(r['device'], r['sector'], r['bytes'] // 512) for r in requests]
+    def sectors(ranges, device):
+        covered = []
+        for dev, start, count in ranges:
+            if dev == device:
+                if not 1 <= count <= 64:
+                    raise ValueError('invalid block extent for eight 4 KiB READs')
+                covered.extend(range(start, start + count))
+        if len(covered) != 64 or len(set(covered)) != 64:
+            raise ValueError('incomplete or overlapping ext4 READ sectors')
+        return set(covered)
+    for device in {r['device'] for r in requests}:
+        if sectors(bios, device) != sectors(issued, device):
+            raise ValueError('direct READ block requests differ from queued bio sectors')
     first = min(r['issue_ns'] for r in requests)
     last = max(r['complete_ns'] for r in requests)
     return dict(sqe_to_first_block_us=(first - first_sqe) / 1000,
@@ -281,12 +304,14 @@ def analyze(root):
                 row.update(batch_read_phases(w, es, issuer, cq[-1][0]))
             row.update(blocks(es, pid))
             _, filesystem, direction, count, _ = name.removesuffix('-settled').removesuffix('-bulk').removesuffix('-legacy').split('-')
+            direct_group = filesystem == 'ext4' and 'poll_begin_ns' in w
             row.update(window_io(active, begin, end, sq[0][0], pid,
-                                 'R' if direction == 'read' else 'W', 4096 * int(count)))
+                                 'R' if direction == 'read' else 'W', 4096 * int(count),
+                                 direct_read_group=direct_group))
             if filesystem == 'ext4' and not row['window_direct_blocks']:
                 raise ValueError('missing ext4 direct block evidence')
-            if filesystem == 'ext4' and 'poll_begin_ns' in w:
-                row.update(direct_read_phases(row['direct_io_timeline'], sq[0][0], cq[-1][0]))
+            if direct_group:
+                row.update(direct_read_phases(row['direct_io_timeline'], sq[0][0], cq[-1][0], es, pid))
             row['last_block_to_cqe_us'] = ((cq[-1][0] - row['last_block_complete_ns']) / 1000
                                          if row['last_block_complete_ns'] else 0)
             # Preserve the exact kernel fields alongside per-sample correlation.
@@ -426,13 +451,22 @@ def controls():
     if [(r['sector'], r['bytes'], r['tid'], r['batch_depth_at_issue'])
         for r in depth['direct_io_timeline']] != [(8, 4096, 2, 1), (24, 4096, 3, 2), (40, 4096, 4, 2)]:
         raise ValueError('block geometry or per-batch issue depth was misattributed')
-    bios = [dict(issue_ns=2000, complete_ns=6000), dict(issue_ns=3000, complete_ns=5000)]
-    if direct_read_phases(bios, 1000, 8000) != dict(sqe_to_first_block_us=1, direct_block_span_us=4,
-                                                     max_direct_block_us=4, direct_block_to_last_cqe_us=2):
-        raise ValueError('overlapping block intervals were double counted')
-    for bad in ([], [dict(issue_ns=2000, complete_ns=None)], [dict(issue_ns=2000, complete_ns=8100)]):
+    bios = [(1500, 1, 1, 'block:block_bio_queue', f'8,0 R {128+i*8} + 8 [caller]') for i in range(8)]
+    issued = block_requests([
+        (2000, 1, 1, 'block:block_rq_issue', '8,0 R 16384 () 128 + 32 be,0,4 [caller]'),
+        (3000, 1, 1, 'block:block_rq_issue', '8,0 RS 16384 () 160 + 32 0x0 [caller]'),
+        (5000, 0, 0, 'block:block_rq_complete', '8,0 RS () 160 + 32 0x0 [0]'),
+        (6000, 0, 0, 'block:block_rq_complete', '8,0 R () 128 + 32 be,0,4 [0]')])
+    timeline = window_io(issued, 0, 9000, 1000, 1, 'R', 32768, direct_read_group=True)['direct_io_timeline']
+    if direct_read_phases(timeline, 1000, 8000, bios, 1) != dict(sqe_to_first_block_us=1, direct_block_span_us=4,
+                                                                max_direct_block_us=4, direct_block_to_last_cqe_us=2):
+        raise ValueError('merged or overlapping direct READs were misattributed')
+    for bad, queues in (([], bios), ([issued[0] | dict(complete_ns=None)], bios),
+                        ([issued[0] | dict(complete_ns=8100)], bios), (issued, bios[:-1]),
+                        (issued, bios[:-1] + [bios[0]]), (issued, [(t, 2, i, e, b) for t, _, i, e, b in bios]),
+                        ([issued[0], issued[1] | dict(sector=192)], bios)):
         try:
-            direct_read_phases(bad, 1000, 8000)
+            direct_read_phases(bad, 1000, 8000, queues, 1)
         except ValueError:
             continue
         raise ValueError('invalid direct READ completion accepted')
