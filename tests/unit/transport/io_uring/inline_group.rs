@@ -20,7 +20,7 @@ fn warm(f: &Fixture, trace: &Mutex<Trace>) -> Result<()> {
 }
 
 #[test]
-fn buffered_write_group_drains_only_the_consumed_prefix_and_preserves_gaps() -> Result<()> {
+fn buffered_group_drains_only_the_consumed_prefix_and_preserves_gaps() -> Result<()> {
     let Some(dir) = directory("ORBITE_TMPFS_DIR") else {
         return Ok(());
     };
@@ -28,18 +28,25 @@ fn buffered_write_group_drains_only_the_consumed_prefix_and_preserves_gaps() -> 
         return Ok(());
     }
     let image = (0..32).collect::<Vec<u8>>();
-    for ready in [true, false] {
+    for (op, ready) in [
+        (TransferOp::Write, true),
+        (TransferOp::Write, false),
+        (TransferOp::Read, true),
+        (TransferOp::Read, false),
+    ] {
         for limit in [None, Some(3), Some(1)] {
             let (f, trace) = observed_at(&dir, &image, ready, false, false)?;
             warm(&f, &trace)?;
+            let mut expected_memory = vec![0; f.memory.len()];
+            f.memory.read(0, &mut expected_memory)?;
             trace.lock().unwrap().submit_limit = limit;
             let requests = (0..8)
                 .map(|i| f.request(i * 2, (i * 3) as u64, 1))
                 .collect::<Vec<_>>();
             let workers = WORKER_STARTS.with(|n| n.get());
-            let mut batch =
-                f.engine
-                    .submit_async(TransferOp::Write, &f.segment, &requests, None, TIMEOUT)?;
+            let mut batch = f
+                .engine
+                .submit_async(op, &f.segment, &requests, None, TIMEOUT)?;
             let status = batch.wait(TIMEOUT)?;
             let count = limit.unwrap_or(8) as usize;
             assert_eq!(
@@ -54,7 +61,7 @@ fn buffered_write_group_drains_only_the_consumed_prefix_and_preserves_gaps() -> 
                 ),
                 (count, count, true)
             );
-            let mut expected = image.clone();
+            let mut expected_file = image.clone();
             for i in 0..8 {
                 let task = batch.task_status(i)?;
                 assert!(task.locally_drained);
@@ -63,7 +70,10 @@ fn buffered_write_group_drains_only_the_consumed_prefix_and_preserves_gaps() -> 
                         (task.state, task.transferred_bytes),
                         (TaskState::Completed, 1)
                     );
-                    expected[i * 3] = 0x9a;
+                    match op {
+                        TransferOp::Read => expected_memory[i * 2] = image[i * 3],
+                        TransferOp::Write => expected_file[i * 3] = expected_memory[i * 2],
+                    }
                 } else {
                     let failure = task.failure.unwrap();
                     assert_eq!(failure.remote_effect, RemoteEffect::None);
@@ -76,7 +86,10 @@ fn buffered_write_group_drains_only_the_consumed_prefix_and_preserves_gaps() -> 
                     ));
                 }
             }
-            assert_eq!(fs::read(&f.path)?, expected);
+            assert_eq!(fs::read(&f.path)?, expected_file);
+            let mut bytes = vec![0; f.memory.len()];
+            f.memory.read(0, &mut bytes)?;
+            assert_eq!(bytes, expected_memory);
             let t = trace.lock().unwrap();
             let checked: Vec<_> = t.group_checks.iter().map(|(n, _)| *n as usize).collect();
             if count == 1 {
@@ -104,14 +117,21 @@ fn lost_group_worker_retains_only_native_effects_for_the_consumed_prefix() -> Re
     if !kernel() {
         return Ok(());
     }
-    let (f, trace) = observed_at(&dir, b"ABCDEFGH", false, false, false)?;
+    for op in [TransferOp::Read, TransferOp::Write] {
+        check_lost_group_worker(&dir, op)?;
+    }
+    Ok(())
+}
+
+fn check_lost_group_worker(dir: &Path, op: TransferOp) -> Result<()> {
+    let (f, trace) = observed_at(dir, b"ABCDEFGH", false, false, false)?;
     warm(&f, &trace)?;
     trace.lock().unwrap().submit_limit = Some(2);
     FAIL_WORKER_START.with(|f| f.set(true));
     let requests = [f.request(0, 0, 1), f.request(2, 2, 1), f.request(4, 4, 1)];
     let batch = f
         .engine
-        .submit_async(TransferOp::Write, &f.segment, &requests, None, TIMEOUT)?;
+        .submit_async(op, &f.segment, &requests, None, TIMEOUT)?;
     assert!(!batch.wait(TIMEOUT)?.locally_drained);
     for i in 0..2 {
         let task = batch.task_status(i)?;
@@ -124,15 +144,25 @@ fn lost_group_worker_retains_only_native_effects_for_the_consumed_prefix() -> Re
                 ..
             }
         ));
-        assert_eq!(failure.remote_effect, RemoteEffect::Unknown);
+        assert_eq!(
+            failure.remote_effect,
+            match op {
+                TransferOp::Read => RemoteEffect::None,
+                TransferOp::Write => RemoteEffect::Unknown,
+            }
+        );
+        if op == TransferOp::Read {
+            assert!(f.memory.read(i * 2, &mut [0]).is_err());
+        }
     }
     let tail = batch.task_status(2)?;
     assert!(tail.locally_drained);
     assert_eq!(tail.state, TaskState::Skipped);
-    assert_eq!(
-        fs::read(&f.path)?,
-        [0x9a, b'B', 0x9a, b'D', b'E', b'F', b'G', b'H']
-    );
+    let expected = match op {
+        TransferOp::Read => *b"ABCDEFGH",
+        TransferOp::Write => [0x9a, b'B', 0x9a, b'D', b'E', b'F', b'G', b'H'],
+    };
+    assert_eq!(fs::read(&f.path)?, expected);
     assert!(matches!(
         f.engine.close_file_segment(&f.segment, Duration::ZERO),
         Err(Error::Timeout)
@@ -144,16 +174,19 @@ fn lost_group_worker_retains_only_native_effects_for_the_consumed_prefix() -> Re
 }
 
 #[test]
-fn group_caller_excludes_cold_direct_read_and_oversized_work() -> Result<()> {
+fn group_caller_excludes_cold_direct_and_oversized_work() -> Result<()> {
     if !kernel() {
         return Ok(());
     }
     for (var, op, count, size, cold) in [
         ("ORBITE_EXT4_DIR", TransferOp::Write, 2, 1, false),
+        ("ORBITE_EXT4_DIR", TransferOp::Read, 2, 1, false),
         ("ORBITE_TMPFS_DIR", TransferOp::Write, 2, 1, true),
-        ("ORBITE_TMPFS_DIR", TransferOp::Read, 2, 1, false),
+        ("ORBITE_TMPFS_DIR", TransferOp::Read, 2, 1, true),
         ("ORBITE_TMPFS_DIR", TransferOp::Write, 9, 1, false),
         ("ORBITE_TMPFS_DIR", TransferOp::Write, 8, 8193, false),
+        ("ORBITE_TMPFS_DIR", TransferOp::Read, 9, 1, false),
+        ("ORBITE_TMPFS_DIR", TransferOp::Read, 8, 8193, false),
     ] {
         let Some(dir) = directory(var) else { continue };
         let span = count * (size + 1);

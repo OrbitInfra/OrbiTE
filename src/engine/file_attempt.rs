@@ -392,7 +392,7 @@ impl TransferEngine {
             return false;
         };
         // Bound caller-side preparation as well as the CQ wait. Multi-request
-        // writes use this path only after the retained file proved buffered.
+        // groups use this path only after the retained file proved buffered.
         const MAX_REQUESTS: usize = 8;
         const MAX_BYTES: usize = 64 << 10;
         self.runtime_queue.is_none()
@@ -403,8 +403,7 @@ impl TransferEngine {
                 .map(|r| r.length)
                 .try_fold(0usize, usize::checked_add)
                 .is_some_and(|n| n <= MAX_BYTES)
-            && (requests.len() == 1
-                || (submission.operation == TransferOp::Write && first.lease.known_buffered()))
+            && (requests.len() == 1 || first.lease.known_buffered())
             && first.selection.transport == Transport::IoUring
             && (self.config.max_failover_attempts == 0 || !first.selection.has_fallback())
             && requests.iter().zip(&submission.owners).all(|(r, owner)| {
