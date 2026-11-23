@@ -16,6 +16,11 @@ on:
         description: Collect per-sample io_uring and scheduler timelines without timing sweeps
         type: boolean
         default: false
+      tail_workload:
+        description: Workload when collecting per-sample timelines
+        type: choice
+        options: [all, tmpfs-read-batch]
+        default: all
       tmpfs_tail_only:
         description: Interleave frozen OrbiTE, the candidate and TENT for singleton tmpfs p99
         type: boolean
@@ -142,12 +147,21 @@ jobs:
           CARGO_PROFILE_RELEASE_DEBUG: 1
           CARGO_TARGET_DIR: ${{ runner.temp }}/profile-target
           BASELINE_REF: ${{ inputs.baseline_ref }}
+          TAIL_WORKLOAD: ${{ inputs.tail_workload || 'all' }}
         run: |
           if test -n "$BASELINE_REF"; then
-            (cd "$RUNNER_TEMP/orbite-before" && CARGO_TARGET_DIR="$RUNNER_TEMP/baseline-profile-target" python3 benches/run.py --reference "$RUNNER_TEMP/orbite-native-cpu" --output "$RUNNER_TEMP/orbite-profiles-before" --ext4 "$ORBITE_EXT4_DIR" --samples 1000 --warmup 3 --workers 2 --trials 3 --tail-profile-only)
+            (
+              args=(--tail-profile-only)
+              if [[ "$TAIL_WORKLOAD" == all ]]; then
+                cd "$RUNNER_TEMP/orbite-before"
+              else
+                args+=("$TAIL_WORKLOAD" --orbite-source "$RUNNER_TEMP/orbite-before")
+              fi
+              CARGO_TARGET_DIR="$RUNNER_TEMP/baseline-profile-target" python3 benches/run.py --reference "$RUNNER_TEMP/orbite-native-cpu" --output "$RUNNER_TEMP/orbite-profiles-before" --ext4 "$ORBITE_EXT4_DIR" --samples 1000 --warmup 3 --workers 2 --trials 3 "${args[@]}"
+            )
             python3 benches/analyze_io_tail.py "$RUNNER_TEMP/orbite-profiles-before/tail"
           fi
-          python3 benches/run.py --reference "$RUNNER_TEMP/orbite-native-cpu" --output "$RUNNER_TEMP/orbite-profiles" --ext4 "$ORBITE_EXT4_DIR" --samples 1000 --warmup 3 --workers 2 --trials 3 --tail-profile-only
+          python3 benches/run.py --reference "$RUNNER_TEMP/orbite-native-cpu" --output "$RUNNER_TEMP/orbite-profiles" --ext4 "$ORBITE_EXT4_DIR" --samples 1000 --warmup 3 --workers 2 --trials 3 --tail-profile-only "$TAIL_WORKLOAD"
       - name: Matched baseline sweeps on the same runner
         if: (inputs.baseline_ref != '' || inputs.enforce_cpu_guards || inputs.repeat_baseline) && !inputs.profile_only && !inputs.tail_profile_only && env.READ_RSS_FLAG == ''
         env:

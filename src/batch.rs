@@ -1260,15 +1260,17 @@ impl BatchProgress {
     ) {
         // Submitted retains its native owners without a CQE; keep the prepared
         // admission and publish the same sticky outcome if its worker is lost.
+        let consumed = job.pending_file.as_ref().map(|p| p.consumed());
         let report = engine.finish_inline_file(
             &job.prepared,
             (self, job.first_task),
+            consumed,
             BatchReport {
                 completed_requests: 0,
                 transferred_bytes: 0,
                 failure: Some(TransferFailure {
                     request_index: 0,
-                    affected_requests: job.pending_file.as_ref().map_or(1, |p| p.consumed()),
+                    affected_requests: consumed.unwrap_or(1),
                     error: Error::Unquiesced { operation, code },
                     remote_effect: if job.prepared.operation == TransferOp::Write {
                         RemoteEffect::Unknown

@@ -51,6 +51,7 @@ fn gds_non_file_group_keeps_common_retirement_and_metrics() -> Result<()> {
             first,
             1,
             None,
+            None,
             BatchReport {
                 completed_requests: 0,
                 transferred_bytes: 0,

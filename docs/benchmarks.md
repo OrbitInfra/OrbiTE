@@ -204,6 +204,72 @@ tables](https://github.com/OrbitInfra/OrbiTE/pull/221) retain results for the ot
 cases. See [file submission and drain](storage.md#dram-transfers-with-io_uring) for bounds,
 incomplete CQ sets and worker failure.
 
+### Eight contiguous buffered READs
+
+This case reads eight adjacent 4 KiB ranges on a warmed tmpfs file. Each
+request has its own destination, SQE and CQE. The caller resets and syncs
+the file before timing and verifies every byte and guard after the batch.
+The [paired diagnostic](https://github.com/OrbitInfra/OrbiTE/actions/runs/45089346998)
+compares parent `1381294` and candidate `1915229` with the same Rust caller and frozen
+TENT binary on the same boot. Each toolchain runs six fresh processes per
+implementation and revision, alternating launch order, with three warmups,
+1,000 measured batches, one caller and two configured workers per engine.
+
+Run `benches/run.py --tail-profile-only tmpfs-read-batch` with the reference,
+output and mount arguments from the [CPU sweeps](#cpu-sweeps). Separate
+`perf` captures record the fork of the batch worker, the first context switch
+onto that worker, all eight kernel CQEs and the caller's status loop.
+The fork-to-first-schedule interval measures scheduler handoff. Polling runs
+from the first status call through observation of terminal status and can
+overlap worker execution. The analyzer intersects the caller's nanosleep
+syscall intervals with the time after the final CQE. The six timing trials
+per implementation run with tracing disabled.
+Recompute the phase table from either extracted `tail/` directory with
+`python3 benches/analyze_io_tail.py /path/to/tail`. It matches each READV to
+its 4 KiB CQE by request pointer and user data before attributing a time.
+
+Before the change, each of the 1,000 measured batches on each toolchain
+started a worker and the caller entered nanosleep. The following values
+are medians in microseconds from the scheduler and io_uring traces. The
+last column uses the ten slowest end-to-end windows on each host.
+
+| Original OrbiTE | Worker fork to first run | Caller status loop | In nanosleep during loop | Last CQE to terminal observation | After last CQE inside nanosleep, slowest 1% |
+|---|---:|---:|---:|---:|---:|
+| Stable | 9.28 | 131.91 | 122.67 | 74.44 | 100.68 |
+| Rust 1.85 | 9.25 | 74.41 | 66.90 | 26.04 | 112.48 |
+
+In the same before captures TENT issued all eight reads on the caller. Its
+median status loop was 1.03 / 20.35 µs and terminal observation followed
+the last CQE by 5.26 / 1.51 µs on stable / Rust 1.85. OrbiTE's original path
+also took 72.05 / 48.79 µs from batch start to the first SQE, including file
+preparation and the worker's first schedule. With caller submission this
+interval fell to 32.12 / 15.11 µs. All 2,000 candidate groups kept one ring
+and eight separate 4 KiB completions. They started zero workers, entered no
+polling sleeps and observed completion with one status call. This is the
+ready-CQE case. The real-ring controls separately force the bounded wait to
+hand an incomplete group to a worker.
+
+Untraced values below are medians across six processes per cell. Both TENT
+columns show the same executable measured in each phase. Cloud tail latency
+varied between phases, including on this control.
+
+| Rust | OrbiTE GiB/s, before → after | TENT GiB/s, before → after | OrbiTE p99 µs, before → after | TENT p99 µs, before → after | OrbiTE CPU ns/byte, before → after |
+|---|---:|---:|---:|---:|---:|
+| Stable | 0.261 → 0.552 | 0.364 → 0.373 | 211.85 → 174.75 | 168.01 → 176.44 | 4.135 → 1.715 |
+| Rust 1.85 | 0.311 → 1.291 | 0.681 → 0.671 | 171.10 → 49.60 | 188.98 → 133.75 | 3.204 → 0.730 |
+
+The [first pair](https://github.com/OrbitInfra/OrbiTE/actions/runs/45086639095)
+and an [independent runner pair](https://github.com/OrbitInfra/OrbiTE/actions/runs/45087715092)
+also observed zero worker starts and zero caller sleeps on the candidate
+before the short-submit ownership fix. Across those runs, untraced candidate
+p99 ranged from 47 to 252 µs. The final stable runner reached roughly the
+same median p99 as TENT while delivering 1.48 times its goodput. In two
+of its six candidate-phase trials, OrbiTE p99 exceeded TENT p99 by over 5%.
+The [full CPU sweeps](https://github.com/OrbitInfra/OrbiTE/actions/runs/45089330744)
+use the standard 100-sample trials, compare with the fixed OrbiTE regression
+baseline and retain all TENT workload verdicts. The results above apply to
+one caller reading a warmed tmpfs file.
+
 ### Singleton tmpfs tail latency
 
 The `tmpfs_tail_only` input of the native CPU workflow measures warmed, buffered

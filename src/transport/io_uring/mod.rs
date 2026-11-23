@@ -145,7 +145,7 @@ impl IoUringTransport {
         let batch = LiveBatch {
             ring,
             tasks,
-            _iovecs: iovecs,
+            iovecs,
         };
         batch.start(&entries, deadline)
     }
@@ -163,7 +163,7 @@ fn failure(index: usize, error: Error, effect: RemoteEffect) -> TransferFailure 
 struct LiveBatch {
     ring: Box<dyn Ring>,
     tasks: Vec<Task>,
-    _iovecs: Vec<libc::iovec>,
+    iovecs: Vec<libc::iovec>,
 }
 
 struct Drain {
@@ -227,6 +227,10 @@ impl LiveBatch {
         }
         let count = live.tasks.len();
         let drain = submit_ring(&mut *live.ring, count, deadline);
+        // A plain ring has one issuer. All later enters submit zero SQEs,
+        // so the SQ head proves this suffix can never use its fds or buffers.
+        // Invalid SQ accounting makes consumed equal to the whole batch.
+        live.tasks.truncate(drain.consumed);
         Ok(Submitted {
             live,
             drain,
@@ -364,13 +368,15 @@ impl Submitted {
         report.locally_drained = drain.status.is_ok();
         // CQEs already published independent task outcomes. Finish any tasks
         // without a receipt, including the tail a failed enter never consumed.
+        let unsent = drain.consumed..live.iovecs.len();
         if let Some((p, first)) = progress {
-            for (index, _) in live
+            let missing = live
                 .tasks
                 .iter()
                 .enumerate()
-                .filter(|(_, t)| t.result.is_none())
-            {
+                .filter_map(|(i, t)| t.result.is_none().then_some(i))
+                .chain(unsent.clone());
+            for index in missing {
                 if index < drain.consumed {
                     p.posted(first + index);
                 }
@@ -400,6 +406,13 @@ impl Submitted {
             }
             report.completed_requests += 1;
             report.transferred_bytes += task.bytes();
+        }
+        if report.failure.is_none() && !unsent.is_empty() {
+            report.failure = Some(failure(
+                unsent.start,
+                drain.missing_error(unsent.start),
+                RemoteEffect::None,
+            ));
         }
         if report.locally_drained {
             drop(ManuallyDrop::into_inner(live));

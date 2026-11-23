@@ -10,6 +10,8 @@ struct Trace {
     wait_ready: bool,
     group_checks: Vec<(u32, Instant)>,
     submit_limit: Option<u32>,
+    invalid_sq_head: bool,
+    invalid_cqe: bool,
     errors: std::collections::VecDeque<i32>,
     alive: std::sync::Weak<()>,
 }
@@ -26,7 +28,11 @@ impl Ring for Observed {
         if self.no_space { 0 } else { self.ring.space() }
     }
     fn queued(&mut self) -> usize {
-        self.ring.queued()
+        if self.trace.lock().unwrap().invalid_sq_head {
+            usize::MAX
+        } else {
+            self.ring.queued()
+        }
     }
     fn push(&mut self, entries: &[squeue::Entry]) -> io::Result<()> {
         self.ring.push(entries)
@@ -43,13 +49,15 @@ impl Ring for Observed {
         } else {
             count
         };
+        let invalid_cqe = trace.invalid_cqe;
         drop(trace);
         let n = self.ring.submit(count)?;
         for _ in 0..n {
             // Hold real CQEs and expose them in reverse order, so independent
             // task publication and handoff do not depend on kernel timing.
+            let (id, result) = self.ring.reap(Instant::now() + EVENTUAL_PROGRESS)?;
             self.receipts
-                .push_front(self.ring.reap(Instant::now() + EVENTUAL_PROGRESS)?);
+                .push_front((if invalid_cqe { u64::MAX } else { id }, result));
         }
         Ok(n)
     }

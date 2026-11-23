@@ -2281,7 +2281,8 @@ impl TransferEngine {
                         #[cfg(feature = "metrics")]
                         &submission.owners[first..first + count],
                     );
-                    let result = self.finish_file_group(submission, first, count, progress, result);
+                    let result =
+                        self.finish_file_group(submission, first, count, None, progress, result);
                     report.completed_requests += result.completed_requests;
                     report.transferred_bytes += result.transferred_bytes;
                     report.locally_drained = result.locally_drained;

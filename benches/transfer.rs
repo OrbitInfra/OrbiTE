@@ -355,6 +355,11 @@ fn run(p: &Parameters) -> Result<()> {
         let mut batch = requester.allocate_batch(p.batch)?;
         batch.submit(p.op, target, &requests, None, TIMEOUT)?;
         batch.seal()?;
+        let poll_start = if trace {
+            clock_ns(libc::CLOCK_MONOTONIC)?
+        } else {
+            0
+        };
         let mut polls = 0usize;
         loop {
             let s = batch.status()?;
@@ -375,6 +380,11 @@ fn run(p: &Parameters) -> Result<()> {
             }
             polls = polls.saturating_add(1);
         }
+        let poll_end = if trace {
+            clock_ns(libc::CLOCK_MONOTONIC)?
+        } else {
+            0
+        };
         // Inspect aliases only in the discarded warmup. Samples time allocate/submit/poll/free.
         if i == 0 {
             owners = batch
@@ -396,6 +406,7 @@ fn run(p: &Parameters) -> Result<()> {
                 clock_ns(libc::CLOCK_MONOTONIC)?,
                 std::process::id()
             );
+            eprintln!("ORBITE_POLL {i} {poll_start} {poll_end} {}", polls + 1);
         }
 
         if std::env::var_os("ORBITE_BENCH_CORRUPT_BYTE").is_some() {

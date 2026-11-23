@@ -356,6 +356,7 @@ impl TransferEngine {
         submission: &PreparedSubmission,
         first: usize,
         count: usize,
+        consumed: Option<usize>,
         _progress: Option<(&BatchProgress, usize)>,
         result: BatchReport,
     ) -> BatchReport {
@@ -378,7 +379,9 @@ impl TransferEngine {
         if result.locally_drained {
             submission.retire_owners(first, count, result.completed_requests);
         } else {
-            submission.retain_window(first..first + count);
+            // A plain host ring can prove its unsubmitted suffix from the SQ
+            // head. Other native cohorts retain their complete owner window.
+            submission.retain_window(first..first + consumed.unwrap_or(count));
         }
         result
     }
@@ -392,7 +395,7 @@ impl TransferEngine {
             return false;
         };
         // Bound caller-side preparation as well as the CQ wait. Multi-request
-        // writes use this path only after the retained file proved buffered.
+        // groups use this path only after the retained file proved buffered.
         const MAX_REQUESTS: usize = 8;
         const MAX_BYTES: usize = 64 << 10;
         self.runtime_queue.is_none()
@@ -403,8 +406,7 @@ impl TransferEngine {
                 .map(|r| r.length)
                 .try_fold(0usize, usize::checked_add)
                 .is_some_and(|n| n <= MAX_BYTES)
-            && (requests.len() == 1
-                || (submission.operation == TransferOp::Write && first.lease.known_buffered()))
+            && (requests.len() == 1 || first.lease.known_buffered())
             && first.selection.transport == Transport::IoUring
             && (self.config.max_failover_attempts == 0 || !first.selection.has_fallback())
             && requests.iter().zip(&submission.owners).all(|(r, owner)| {
@@ -467,17 +469,20 @@ impl TransferEngine {
                     owner.deadline,
                 )
         };
+        let mut consumed = None;
         match run() {
-            Ok(started) => match started.complete_small(submission.operation, Some((&attempts, 0)))
-            {
-                Ok(done) => report = done,
-                Err(pending) => {
-                    for i in 0..pending.consumed() {
-                        attempts.posted(i);
+            Ok(started) => {
+                consumed = Some(started.consumed());
+                match started.complete_small(submission.operation, Some((&attempts, 0))) {
+                    Ok(done) => report = done,
+                    Err(pending) => {
+                        for i in 0..pending.consumed() {
+                            attempts.posted(i);
+                        }
+                        return Err(pending);
                     }
-                    return Err(pending);
                 }
-            },
+            }
             Err(error) => {
                 report.locally_drained = !matches!(error, Error::Unquiesced { .. });
                 report.failure = Some(TransferFailure {
@@ -488,7 +493,7 @@ impl TransferEngine {
                 });
             }
         }
-        Ok(self.finish_inline_file(submission, progress, report))
+        Ok(self.finish_inline_file(submission, progress, consumed, report))
     }
 
     #[cfg(feature = "io-uring")]
@@ -504,8 +509,9 @@ impl TransferEngine {
             progress: Some(progress),
             outcomes: None,
         };
+        let consumed = pending.consumed();
         let report = pending.finish(submission.operation, Some((&attempts, 0)));
-        self.finish_inline_file(submission, progress, report)
+        self.finish_inline_file(submission, progress, Some(consumed), report)
     }
 
     #[cfg(feature = "io-uring")]
@@ -513,6 +519,7 @@ impl TransferEngine {
         &self,
         submission: &PreparedSubmission,
         progress: (&BatchProgress, usize),
+        consumed: Option<usize>,
         mut report: BatchReport,
     ) -> BatchReport {
         let count = submission.owners.len();
@@ -539,7 +546,7 @@ impl TransferEngine {
                 );
             }
         }
-        let report = self.finish_file_group(submission, 0, count, Some(progress), report);
+        let report = self.finish_file_group(submission, 0, count, consumed, Some(progress), report);
         #[cfg(feature = "metrics")]
         for (i, o) in submission.owners.iter().enumerate() {
             if let Some(m) = &o.metrics {
