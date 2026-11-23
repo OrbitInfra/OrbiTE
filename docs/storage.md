@@ -142,7 +142,7 @@ check, it may block for a CQE for at most 200 µs or the remaining request deadl
 whichever is shorter. The wait uses the ring’s timed `GETEVENTS` enter (or
 ring-fd readiness on older kernels), with zero submissions. At most three
 interrupted/unready waits share that one window; there is no spin. For a previously probed buffered file, an idle batch can also submit up to
-eight plain host WRITEs with a common route and deadline, totaling at most
+eight plain host READs or WRITEs with a common route and deadline, totaling at most
 64 KiB. The caller checks the number of visible CQEs and can make one timed
 wait for the entire consumed SQ prefix. Only a full set is reaped on the
 caller. Each offset, native loan, and completion stays independent. If the

@@ -11,6 +11,9 @@ LINE = re.compile(r'^\s*(.*?)\s+(-?\d+)/(-?\d+)\s+\[\d+\]\s+(\d+)\.(\d+):\s+(\S+
 SWITCH = re.compile(r'.+:(\d+) \[\d+\] (\S+) ==> .+:(\d+) \[\d+\]')
 WAKE = re.compile(r'.+:(\d+) \[\d+\] CPU:\d+')
 BLOCK = re.compile(r'(\d+,\d+) (\S+) .*?\(\) (\d+) \+ (\d+) .*')
+REQUEST_ID = r'\breq (0x[0-9a-fA-F]+), user_data (0x[0-9a-fA-F]+), '
+READ_SUBMIT = re.compile(REQUEST_ID + r'opcode READV,')
+FULL_PAGE_CQE = re.compile(REQUEST_ID + r'result 4096,')
 
 
 def block_requests(events):
@@ -136,6 +139,23 @@ def scheduling(events, tid):
                 max_wake_to_run_us=max(delays, default=0) / 1000)
 
 
+def check_read_completions(submits, completions):
+    if len(submits) != 8 or len(completions) != 8 or len({e[2] for e in submits}) != 1:
+        raise ValueError('expected one submitter and eight READ SQEs and CQEs')
+    pending = {}
+    cookies = set()
+    for at, _, _, _, body in submits:
+        request = READ_SUBMIT.search(body)
+        if not request or request[2] in cookies:
+            raise ValueError('missing or duplicate READV submission')
+        cookies.add(request[2])
+        pending[request.groups()] = at
+    for at, _, _, _, body in completions:
+        receipt = FULL_PAGE_CQE.search(body)
+        if not receipt or receipt.groups() not in pending or at < pending.pop(receipt.groups()):
+            raise ValueError('unmatched or short 4 KiB READ completion')
+
+
 def batch_read_phases(window, events, issuer, last_cqe):
     caller = window['pid']
     begin, end = window['poll_begin_ns'], window['poll_end_ns']
@@ -161,7 +181,27 @@ def batch_read_phases(window, events, issuer, last_cqe):
             raise ValueError('missing first schedule of the batch worker')
     elif issuer != caller:
         raise ValueError('missing caller-to-worker fork')
+    # Attribute actual blocking syscall intervals on the polling thread.
+    # They can overlap worker execution before the last CQE.
+    sleep = None
+    sleep_ns = after_cqe_ns = 0
+    for at, pid, tid, event, _ in events:
+        if pid != caller or tid != caller or not begin <= at <= end:
+            continue
+        if event == 'syscalls:sys_enter_clock_nanosleep':
+            if sleep is not None:
+                raise ValueError('missing poll sleep exit')
+            sleep = at
+        elif event == 'syscalls:sys_exit_clock_nanosleep':
+            if sleep is None:
+                raise ValueError('missing poll sleep entry')
+            sleep_ns += at - sleep
+            after_cqe_ns += max(0, at - max(last_cqe, sleep))
+            sleep = None
+    if sleep is not None:
+        raise ValueError('incomplete poll sleep')
     return dict(status_calls=window['status_calls'], caller_poll_us=(end - begin) / 1000,
+                poll_sleep_us=sleep_ns / 1000, last_cqe_poll_sleep_us=after_cqe_ns / 1000,
                 last_cqe_to_terminal_us=(end - last_cqe) / 1000, worker_fork_to_run_us=handoff_ns / 1000)
 
 
@@ -222,8 +262,7 @@ def analyze(root):
                        issuer_sleeps=sum(e[2] == issuer and e[3] == 'syscalls:sys_enter_clock_nanosleep' for e in own),
                        async_work=sum(e[3] == 'io_uring:io_uring_queue_async_work' for e in io))
             if 'poll_begin_ns' in w:
-                if len(sq) != 8 or any(e[2] != issuer for e in sq):
-                    raise ValueError('expected one submitter and eight READ SQEs')
+                check_read_completions(sq, cq)
                 row.update(batch_read_phases(w, es, issuer, cq[-1][0]))
             row.update(blocks(es, pid))
             _, filesystem, direction, count, _ = name.removesuffix('-settled').removesuffix('-bulk').removesuffix('-legacy').split('-')
@@ -292,16 +331,32 @@ def main():
 
 
 def controls():
+    ids = [f'req 0x{i:x}, user_data 0x{i:x}, ' for i in range(8)]
+    sq = [(i, 10, 10, '', ident + 'opcode READV,') for i, ident in enumerate(ids)]
+    cq = [(20, 10, 10, '', ident + 'result 4096,') for ident in reversed(ids)]
+    check_read_completions(sq, cq)
+    for submits, completions in [(sq[:-1] + [(*sq[-1][:4], ids[7] + 'opcode WRITEV,')], cq),
+                                 (sq, cq[:-1] + [(*cq[-1][:4], ids[0] + 'result 23,')]),
+                                 (sq, cq[:-1] + [cq[0]]), (sq[:-1] + [sq[0]], cq)]:
+        try:
+            check_read_completions(submits, completions)
+        except ValueError:
+            continue
+        raise ValueError('invalid READV identity, opcode or byte count was accepted')
     window = dict(pid=10, begin_ns=0, end_ns=20000, poll_begin_ns=2000, poll_end_ns=18000, status_calls=7)
     fork = (1000, 10, 10, 'sched:sched_process_fork', 'comm=caller pid=10 child_comm=caller child_pid=20')
     run = (4000, 0, 0, 'sched:sched_switch', 'idle:0 [120] R ==> caller:20 [120]')
-    phases = batch_read_phases(window, [fork, run], 20, 15000)
-    if phases != dict(status_calls=7, caller_poll_us=16, last_cqe_to_terminal_us=3, worker_fork_to_run_us=3):
+    sleep = (12000, 10, 10, 'syscalls:sys_enter_clock_nanosleep', '')
+    wake = (17000, 10, 10, 'syscalls:sys_exit_clock_nanosleep', '')
+    phases = batch_read_phases(window, [fork, run, sleep, wake], 20, 15000)
+    if phases != dict(status_calls=7, caller_poll_us=16, poll_sleep_us=5, last_cqe_poll_sleep_us=2,
+                      last_cqe_to_terminal_us=3, worker_fork_to_run_us=3):
         raise ValueError('overlapping worker and caller intervals were misattributed')
     if batch_read_phases(window, [], 10, 1000)['worker_fork_to_run_us'] != 0:
         raise ValueError('caller submission invented a worker')
     for events, issuer, cqe in [([], 20, 1000), ([fork], 20, 1000),
-                               ([fork, run], 21, 1000), ([], 10, 19000)]:
+                               ([fork, run], 21, 1000), ([], 10, 19000), ([wake], 10, 1000),
+                               ([sleep], 10, 1000)]:
         try:
             batch_read_phases(window, events, issuer, cqe)
         except ValueError:

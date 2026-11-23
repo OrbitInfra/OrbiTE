@@ -338,10 +338,13 @@ this brief wait can finish a late CQE without a thread handoff. A timeout or
 enter error transfers the unchanged ring to the batch worker.
 The [singleton tmpfs measurements](benchmarks.md#singleton-tmpfs-tail-latency)
 time the public batch lifecycle, including this handoff when it occurs.
-For a known buffered file, a group of at most eight plain host WRITEs totaling
+For a known buffered file, a group of at most eight plain host READs or WRITEs totaling
 64 KiB or less may use the caller under the same policy and deadline. One
 deadline-capped timed enter can wait for the consumed SQ prefix. The single
 CQ owner leaves all completions visible for the worker if the set is incomplete.
+Each READ has its own destination loan. A failed handoff retains the
+outstanding loans and admission charges. The [buffered READ measurements](benchmarks.md#eight-contiguous-buffered-reads)
+compare caller polling time with the cost of handing the group to a new thread.
 `late_small_cqe_waits_on_caller_without_a_worker_on_tmpfs_and_direct_ext4` holds
 a real CQE past the initial peek and counts zero worker starts.
 `caller_wait_interruptions_errors_and_short_cqe_never_resubmit` checks the shared

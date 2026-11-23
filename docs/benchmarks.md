@@ -204,6 +204,65 @@ tables](https://github.com/OrbitInfra/OrbiTE/pull/221) retain results for the ot
 cases. See [file submission and drain](storage.md#dram-transfers-with-io_uring) for bounds,
 incomplete CQ sets and worker failure.
 
+### Eight contiguous buffered READs
+
+This case reads eight adjacent 4 KiB ranges on a warmed tmpfs file. Each
+request has its own destination, SQE and CQE. The caller resets and syncs
+the file before timing and verifies every byte and guard after the batch.
+The [paired diagnostic](https://github.com/OrbitInfra/OrbiTE/actions/runs/45086639095)
+compares the parent and candidate engines with the same Rust caller and frozen
+TENT binary on the same boot. Each toolchain runs six fresh processes per
+implementation and revision, alternating launch order, with three warmups,
+1,000 measured batches, one caller and two configured workers per engine.
+
+Run `benches/run.py --tail-profile-only tmpfs-read-batch` with the reference,
+output and mount arguments from the [CPU sweeps](#cpu-sweeps). Separate
+`perf` captures record the fork of the batch worker, the first context switch
+onto that worker, all eight kernel CQEs and the caller's status loop.
+The fork-to-first-schedule interval measures scheduler handoff. Polling runs
+from the first status call through observation of terminal status and can
+overlap worker execution. The analyzer intersects the caller's nanosleep
+syscall intervals with the time after the final CQE. The six timing trials
+per implementation run with tracing disabled.
+Recompute the phase table from either extracted `tail/` directory with
+`python3 benches/analyze_io_tail.py /path/to/tail`. It matches each READV to
+its 4 KiB CQE by request pointer and user data before attributing a time.
+
+Before the change, each of the 1,000 measured batches on each toolchain
+started a worker and the caller entered nanosleep. The following values
+are medians in microseconds from the scheduler and io_uring traces. The
+last column uses the ten slowest end-to-end windows on each host.
+
+| Original OrbiTE | Worker fork to first run | Caller status loop | In nanosleep during loop | Last CQE to terminal observation | After last CQE inside nanosleep, slowest 1% |
+|---|---:|---:|---:|---:|---:|
+| Stable | 9.32 | 74.16 | 66.49 | 25.45 | 73.23 |
+| Rust 1.85 | 9.37 | 74.10 | 66.35 | 26.24 | 93.13 |
+
+In the same before captures TENT issued all eight reads on the caller. Its
+median status loop was 19.45 / 19.48 µs and terminal observation followed
+the last CQE by 2.07 / 2.05 µs on stable / Rust 1.85. OrbiTE's original path
+also took 49.07 / 47.68 µs from batch start to the first SQE, including file
+preparation and the worker's first schedule. With caller submission this
+interval fell to 14.31 / 14.39 µs. All 2,000 candidate groups kept one ring
+and eight separate 4 KiB completions. They started zero workers, entered no
+polling sleeps and observed completion with one status call. This is the
+ready-CQE case. The real-ring controls separately force the bounded wait to
+hand an incomplete group to a worker.
+
+Untraced values below are medians across six processes per cell. Both TENT
+columns show the same executable measured in each phase. Cloud tail latency
+varied between phases, including on this control.
+
+| Rust | OrbiTE GiB/s, before → after | TENT GiB/s, before → after | OrbiTE p99 µs, before → after | TENT p99 µs, before → after | OrbiTE CPU ns/byte, before → after |
+|---|---:|---:|---:|---:|---:|
+| Stable | 0.320 → 1.310 | 0.694 → 0.669 | 167.19 → 47.47 | 89.63 → 136.50 | 3.117 → 0.716 |
+| Rust 1.85 | 0.327 → 1.304 | 0.704 → 0.684 | 161.74 → 58.97 | 86.39 → 118.55 | 3.047 → 0.719 |
+
+The [full CPU sweeps](https://github.com/OrbitInfra/OrbiTE/actions/runs/45086624401)
+use the standard 100-sample trials, compare with the fixed OrbiTE regression
+baseline and retain all TENT workload verdicts. The results above apply to
+one caller reading a warmed tmpfs file.
+
 ### Singleton tmpfs tail latency
 
 The `tmpfs_tail_only` input of the native CPU workflow measures warmed, buffered

@@ -202,12 +202,15 @@ Done:
   caller checks every byte of the unused registration against the sentinel
   without allocating a payload-sized expected image. The paired tmpfs
   retest measured 0.960× TENT's peak RSS on both toolchains. Earlier file
-  READs measured 1.147–1.150× TENT's peak RSS. Next, profile
-  a contiguous batch of eight 4 KiB tmpfs READs. Its goodput, p99 and CPU
-  per byte missed the TENT targets on both toolchains in both earlier sweeps.
-  Measure completion polling and worker handoff separately.
-  [First sweep](https://github.com/OrbitInfra/OrbiTE/actions/runs/44868978517)
-  · [Second sweep](https://github.com/OrbitInfra/OrbiTE/actions/runs/44978023506)
+  READs measured 1.147–1.150× TENT's peak RSS. For
+  [eight contiguous 4 KiB tmpfs READs](benchmarks.md#eight-contiguous-buffered-reads),
+  the caller's status loop previously spent about 66 µs in backoff sleep
+  while each batch started a worker. Known buffered host READs now use the
+  same bounded caller path as WRITEs. Same-boot untraced p99 fell from
+  167 to 47 µs on stable and from 162 to 59 µs on Rust 1.85.
+  Next, measure the corresponding direct ext4 READ. Separate block completion
+  from worker scheduling and caller polling before changing direct-file
+  admission. The buffered tmpfs measurements cover a different route.
 
 - **S16 — reference fixtures.** Retain the CPU trace contract and three frozen
   request prefixes used by native-listener rejection. Compatibility inventories
