@@ -66,6 +66,62 @@ fn add(to: &mut [u64; 3], v: [u64; 3]) {
     }
 }
 
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "avx2")]
+unsafe fn stream_copy(src: *const u8, dst: *mut u8, len: usize) {
+    use std::arch::x86_64::*;
+    assert_eq!(src as usize % 32, 0);
+    assert_eq!(dst as usize % 32, 0);
+    assert_eq!(len % 256, 0);
+    // SAFETY: the mode selects AVX2 at runtime. Both disjoint allocations cover len aligned bytes.
+    unsafe {
+        for offset in (0..len).step_by(256) {
+            for i in 0..8 {
+                let at = offset + i * 32;
+                let v = _mm256_load_si256(src.add(at).cast());
+                _mm256_stream_si256(dst.add(at).cast(), v);
+            }
+        }
+        _mm_sfence();
+    }
+}
+
+fn move_pages(dst: *mut u8, src: *mut u8, len: usize) -> io::Result<()> {
+    // This private diagnostic owns anonymous pages on both sides. Only whole,
+    // fully completed pages enter this code. Check forward progress explicitly.
+    // SAFETY: USER_MODE_ONLY restricts faults to user mode. Each ioctl's local
+    // array matches the documented Linux u64 ABI. Closing unregisters the range.
+    unsafe {
+        let fd = libc::syscall(
+            libc::SYS_userfaultfd,
+            libc::O_CLOEXEC | libc::O_NONBLOCK | 1,
+        ) as i32;
+        if fd < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let fd = OwnedFd::from_raw_fd(fd);
+        let mut api = [0xaau64, 1 << 16, 0];
+        if libc::ioctl(fd.as_raw_fd(), 0xc018aa3fu64, api.as_mut_ptr()) < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let mut reg = [dst as u64, len as u64, 1, 0];
+        if libc::ioctl(fd.as_raw_fd(), 0xc020aa00u64, reg.as_mut_ptr()) < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        assert_ne!(reg[3] & (1 << 5), 0);
+        if libc::madvise(dst.cast(), len, libc::MADV_DONTNEED) < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let mut cmd = [dst as u64, src as u64, len as u64, 1, 0];
+        let rc = libc::ioctl(fd.as_raw_fd(), 0xc028aa05u64, cmd.as_mut_ptr());
+        if rc < 0 {
+            return Err(io::Error::last_os_error());
+        }
+        assert_eq!(cmd[4], len as u64);
+    }
+    Ok(())
+}
+
 struct Window {
     // Close the ring (including fixed registrations) before dropping the allocations.
     ring: IoUring,
@@ -77,7 +133,7 @@ impl Window {
     fn new(mode: &str, slots: usize, chunk: usize, dst: *mut u8) -> io::Result<Self> {
         let ring = IoUring::new(slots as u32)?;
         let raw = mode == "raw" || mode == "pipe";
-        let huge = mode == "huge";
+        let huge = mode.starts_with("huge") || mode.starts_with("move");
         let scratch = (!raw).then(|| Bytes::new(chunk * slots, if huge { 2 << 20 } else { 4096 }));
         if huge {
             let b = scratch.as_ref().unwrap();
@@ -223,8 +279,17 @@ impl Window {
             let at = Time::now();
             add(&mut io_cost, at.since(&prep));
             if let Some(b) = &self.scratch {
-                // SAFETY: full CQEs initialized the contiguous slots. The guarded destination is disjoint.
-                unsafe { std::ptr::copy_nonoverlapping(b.ptr(0), dst.add(base), n * chunk) };
+                let target = dst.wrapping_add(base);
+                if mode.starts_with("move") {
+                    move_pages(target, b.ptr(0), n * chunk)?;
+                } else if mode.ends_with("-nt") {
+                    assert!(std::is_x86_feature_detected!("avx2"));
+                    // SAFETY: these complete, aligned, disjoint ranges passed the full CQE check.
+                    unsafe { stream_copy(b.ptr(0), target, n * chunk) };
+                } else {
+                    // SAFETY: full CQEs initialized the contiguous slots. The guarded destination is disjoint.
+                    unsafe { std::ptr::copy_nonoverlapping(b.ptr(0), target, n * chunk) };
+                }
                 add(&mut copy_cost, Time::now().since(&at));
             }
         }
@@ -257,8 +322,13 @@ fn main() -> io::Result<()> {
     // SAFETY: F_GETFL reads status for the live descriptor and takes no variadic data.
     let flags = unsafe { libc::fcntl(direct.as_raw_fd(), libc::F_GETFL) };
     assert!(flags >= 0 && flags & libc::O_DIRECT != 0);
-    let dest = Bytes::new(total + 8192, 4096);
-    let target = dest.ptr(4096);
+    let guard = if mode == "move-aligned" {
+        2 << 20
+    } else {
+        4096
+    };
+    let dest = Bytes::new(total + guard + 4096, guard);
+    let target = dest.ptr(guard);
     let mut image = vec![0xa5u8; total];
     let mut rows: Vec<Value> = Vec::new();
     let mut reusable = None;
@@ -277,12 +347,15 @@ fn main() -> io::Result<()> {
     }
     for i in 0..3 + count {
         let v = (i % 251 + 1) as u8;
-        image.fill(v);
+        for (tile, region) in image.chunks_exact_mut(4096).enumerate() {
+            region.fill(v.wrapping_add((tile % 251) as u8));
+            region[..8].copy_from_slice(&(tile as u64).to_ne_bytes());
+        }
         // Exercise the same warmed reset and fdatasync boundary as the public benchmark.
         file.write_all_at(&image, 4096)?;
         file.sync_data()?;
         // SAFETY: the full allocation is exclusively available before submission.
-        unsafe { dest.data.as_ptr().write_bytes(0xa5, total + 8192) };
+        unsafe { dest.data.as_ptr().write_bytes(0xa5, total + guard + 4096) };
         let before = Time::now();
         let mut window = match reusable.take() {
             Some(x) => x,
@@ -298,10 +371,10 @@ fn main() -> io::Result<()> {
         }
         let finished = Time::now();
         // SAFETY: every byte in dest was initialized and all direct I/O has completed.
-        let bytes = unsafe { std::slice::from_raw_parts(dest.ptr(0), total + 8192) };
-        assert!(bytes[..4096].iter().all(|&x| x == 0xa5));
-        assert_eq!(&bytes[4096..4096 + total], image.as_slice());
-        assert!(bytes[4096 + total..].iter().all(|&x| x == 0xa5));
+        let bytes = unsafe { std::slice::from_raw_parts(dest.ptr(0), total + guard + 4096) };
+        assert!(bytes[..guard].iter().all(|&x| x == 0xa5));
+        assert_eq!(&bytes[guard..guard + total], image.as_slice());
+        assert!(bytes[guard + total..].iter().all(|&x| x == 0xa5));
         if i >= 3 {
             rows.push(json!({"setup":prepared.since(&before),"read":io_cost,"copy":copy_cost,"retire":finished.since(&copied),"total":finished.since(&before)}));
         }
