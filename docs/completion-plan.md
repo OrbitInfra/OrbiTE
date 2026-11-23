@@ -214,7 +214,10 @@ Done:
   prefix, even across a concurrent truncate. On the matched guests goodput
   rose from 0.19 to 0.39 GiB/s and CPU time fell from 3.25 to 1.35–1.38 ns
   per byte. TENT reached 0.51 GiB/s. The guest block span and the final
-  CQE-to-receipt interval account for the remaining measured gaps.
+  CQE-to-receipt interval were both longer. A 16 µs active poll increased
+  CPU per byte by 41–45% in a separate paired test. Further CPU work should
+  measure the allocation and copy cost of larger direct READs while
+  preserving the verified EOF prefix.
 
 - **S16 — reference fixtures.** Retain the CPU trace contract and three frozen
   request prefixes used by native-listener rejection. Compatibility inventories

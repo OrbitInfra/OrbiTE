@@ -281,8 +281,9 @@ Run `benches/run.py --tail-profile-only ext4-read-batch` with the reference,
 output and mount arguments from the [CPU sweeps](#cpu-sweeps). Each of six
 fresh processes per implementation and phase ran three warmups and 1,000
 measured batches, alternating implementation order. File reset and
-`fdatasync` preceded timing. Each batch was checked for bytes, guards and
-eight independent receipts.
+`fdatasync` preceded timing. Both callers checked each batch's byte count,
+payload and guards. The separate traces matched eight READVs to eight
+independent completions in every measured batch.
 
 The table gives the median of the **untraced** process trials. Goodput counts
 32 KiB per batch. CPU time includes all threads in the process and p99 covers
@@ -323,11 +324,23 @@ truncate by copying only its CQE prefix from private storage.
 On these hosts OrbiTE reached 77% of TENT goodput, used 25–26% less CPU
 per byte and took 9–18% longer at p99. Both the guest block span and the
 time between the final CQE and the public receipt still exceeded TENT.
+Part of the receipt gap reflects when each implementation closes the ring.
+OrbiTE's caller performed two unmaps and one close before reporting terminal
+status. TENT performed them during batch free. From the last CQE to the
+end marker recorded after free, the medians were 17.32 / 17.91 µs for
+OrbiTE and 11.31 / 11.24 µs for TENT. This includes the intervening harness
+work. The untraced latency and goodput above include free for both.
 The [CQ polling experiment](https://github.com/OrbitInfra/OrbiTE/actions/runs/45119467264)
-compares a 16 µs active wait against the bounded sleeping wait on the
-same protected READ implementation. The [full CPU sweeps](https://github.com/OrbitInfra/OrbiTE/actions/runs/45118496460)
+added up to 16 µs of active polling before the bounded sleeping wait on the
+same protected implementation. Goodput moved from 0.378 to 0.351 GiB/s
+on stable and from 0.374 to 0.468 on Rust 1.85. P99 moved from 150.68 to
+152.52 µs and from 138.50 to 136.03 µs, respectively. Process CPU per
+byte rose 45% and 41%, exceeding the 10% allowance on both hosts, so the
+caller keeps the sleeping wait. The [full CPU sweeps](https://github.com/OrbitInfra/OrbiTE/actions/runs/45118496460)
 compare all shapes, including single 64 MiB direct READs, with the fixed
-OrbiTE baseline and frozen TENT using three 100-batch trials per shape.
+OrbiTE baseline and frozen TENT using three 100-batch trials per shape. A
+single 64 MiB direct READ also needs 64 MiB of private storage through its
+CQE. Its memory and copy costs scale differently from the eight-block case.
 Guest storage varied between hosts. In the [original Azure capture](https://github.com/OrbitInfra/OrbiTE/actions/runs/45116563186)
 the ten slowest Rust 1.85 parent batches spent a median 13.07 ms of their
 13.42 ms at the block device. Physical NVMe latency remains a separate
