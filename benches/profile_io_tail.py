@@ -53,9 +53,12 @@ def record(out, executables, args, env, tent_env):
                                          for layout in ("gapped", "contiguous")]
     shapes = [(*s, False) for s in shapes] + [("ext4", 64, layout, 0, True)
                                              for layout in ("gapped", "contiguous")]
+    focused = args.tail_profile_only == "tmpfs-read-batch"
+    if focused:
+        shapes = [("tmpfs", 8, "contiguous", 0, False)]
     samples = max(args.samples, 1000)
     for filesystem, batch, layout, settle_us, legacy_verify in shapes:
-        for op in ("read", "write"):
+        for op in (("read",) if focused else ("read", "write")):
             for implementation, exe in executables:
                 if legacy_verify and implementation != "tent":
                     continue  # Diagnostic reconstruction of the earlier C++ harness.
@@ -93,7 +96,11 @@ def record(out, executables, args, env, tent_env):
                     result = json.loads((root / (name + ".stdout")).read_text())
                     if result.get("verified") is not True or len(result["samples_ns"]) != samples:
                         raise ValueError("tail profile did not complete all byte checks")
+                    if focused and (result["payload_bytes"] != 8 * 4096 or (implementation == "orbite" and
+                            (result["direct_io"] is not False or result["physical_owners"] != 8))):
+                        raise ValueError("expected eight buffered host READs")
                     windows = []
+                    polls = {}
                     for line in (root / (name + ".stderr")).read_text().splitlines():
                         if line.startswith("ORBITE_SAMPLE "):
                             i, begin, end, pid = map(int, line.split()[1:])
@@ -101,8 +108,21 @@ def record(out, executables, args, env, tent_env):
                                 raise ValueError("invalid sample timeline")
                             windows.append(dict(sample=i, begin_ns=begin, end_ns=end, pid=pid,
                                                 measured=i >= args.warmup))
+                        elif focused and line.startswith("ORBITE_POLL "):
+                            i, begin, end, calls = map(int, line.split()[1:])
+                            if i in polls:
+                                raise ValueError("duplicate status-poll interval")
+                            polls[i] = (begin, end, calls)
                     if len(windows) != samples + args.warmup:
                         raise ValueError("missing sample timelines")
+                    if focused:
+                        if set(polls) != set(range(len(windows))):
+                            raise ValueError("incomplete status-poll intervals")
+                        for w in windows:
+                            begin, end, calls = polls[w["sample"]]
+                            if not (w["begin_ns"] <= begin <= end <= w["end_ns"] and calls >= 1):
+                                raise ValueError("invalid status-poll interval")
+                            w.update(poll_begin_ns=begin, poll_end_ns=end, status_calls=calls)
                     (root / (name + ".windows.json")).write_text(json.dumps(windows) + "\n")
                     if data.stat().st_size > 512 << 20:
                         raise ValueError("unexpectedly large diagnostic recording")
@@ -128,6 +148,22 @@ def record(out, executables, args, env, tent_env):
                 path.unlink()
                 if json.loads((root / (name + "-fds.stdout")).read_text()).get("verified") is not True:
                     raise ValueError("descriptor trace failed byte checks")
+    if focused:
+        from run import summarize
+        trials = []
+        for trial in range(6):
+            for implementation, exe in (executables if trial % 2 == 0 else reversed(executables)):
+                name = f"untraced-{implementation}-{trial}"
+                overrides = tent_env if implementation == "tent" else {}
+                with tempfile.TemporaryDirectory(prefix="orbite-read-", dir=args.tmpfs) as directory:
+                    run(name, ["env", *[f"{k}={v}" for k, v in overrides.items()], exe,
+                               "io_uring", "read", 4096, 8, "contiguous", args.warmup, samples,
+                               args.workers, Path(directory) / "payload"])
+                row = json.loads((root / (name + ".stdout")).read_text())
+                if implementation == "orbite" and (row["direct_io"] is not False or row["physical_owners"] != 8):
+                    raise ValueError("untraced READs used a different route or owner count")
+                trials.append(dict(implementation=implementation, trial=trial, **summarize(row, samples, 8 * 4096)))
+        (root / "untraced.json").write_text(json.dumps(trials, indent=2) + "\n")
     from analyze_io_tail import analyze, controls
     controls()
     analyze(root)

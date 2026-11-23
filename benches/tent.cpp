@@ -125,11 +125,13 @@ int main(int argc, char** argv) {
         if(settle_us) std::this_thread::sleep_for(std::chrono::microseconds(settle_us));
         const auto window_start=trace ? monotonic_ns() : 0;
         const auto c=cpu_ns(); const auto start=Clock::now();
+        uint64_t poll_start=0, poll_end=0;
+        size_t polls=0;
         if(cpu) { for(size_t b=0;b<batch;++b) std::memcpy(remote+page+b*stride, local+page+b*stride, block); }
         else {
             const auto id=tent_allocate_batch(requester, batch); check(id!=0, "batch allocation");
             checked(tent_submit(requester, id, requests.data(), batch));
-            size_t polls=0;
+            if(trace) poll_start=monotonic_ns();
             for (;;) {
                 tent_status_t s{}; checked(tent_overall_status(requester, id, &s));
                 if(s.status==STATUS_COMPLETED) { check(s.transferred_bytes==block*batch, "short batch"); break; }
@@ -138,11 +140,13 @@ int main(int argc, char** argv) {
                 if(polls>=128) std::this_thread::sleep_for(std::chrono::microseconds(std::min<uint64_t>(200, uint64_t{1}<<std::min<size_t>(8, polls-128))));
                 ++polls;
             }
+            if(trace) poll_end=monotonic_ns();
             checked(tent_free_batch(requester, id));
         }
         const auto elapsed=std::chrono::duration_cast<std::chrono::nanoseconds>(Clock::now()-start).count();
         const auto cost=cpu_ns()-c;
         if(trace) std::cerr << "ORBITE_SAMPLE " << i << ' ' << window_start << ' ' << monotonic_ns() << ' ' << getpid() << '\n';
+        if(trace && !cpu) std::cerr << "ORBITE_POLL " << i << ' ' << poll_start << ' ' << poll_end << ' ' << polls+1 << '\n';
         auto verify=[&](const unsigned char* bytes, bool populated) {
             for(size_t j=0;j<capacity;++j) check(bytes[j]==(populated && j>=page && j<page+extent ? image[j-page] : 0xa5), "bytes or guards differ");
         };

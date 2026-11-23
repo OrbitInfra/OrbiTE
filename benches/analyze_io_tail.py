@@ -136,6 +136,34 @@ def scheduling(events, tid):
                 max_wake_to_run_us=max(delays, default=0) / 1000)
 
 
+def batch_read_phases(window, events, issuer, last_cqe):
+    caller = window['pid']
+    begin, end = window['poll_begin_ns'], window['poll_end_ns']
+    if last_cqe > end:
+        raise ValueError('terminal status preceded the last CQE')
+    forks = [e for e in events if e[1:4] == (caller, caller, 'sched:sched_process_fork')]
+    handoff_ns = 0
+    if forks:
+        if len(forks) != 1:
+            raise ValueError('expected one batch worker')
+        fork, = forks
+        child = re.search(r'\bchild_pid=(\d+)\b', fork[4])
+        if not child or (issuer != caller and int(child[1]) != issuer):
+            raise ValueError('fork did not identify the batch worker')
+        for at, _, _, event, body in events:
+            if at >= fork[0] and event == 'sched:sched_switch':
+                switch = SWITCH.fullmatch(body)
+                if switch and switch[3] == child[1]:
+                    handoff_ns = at - fork[0]
+                    break
+        else:
+            raise ValueError('missing first schedule of the batch worker')
+    elif issuer != caller:
+        raise ValueError('missing caller-to-worker fork')
+    return dict(status_calls=window['status_calls'], caller_poll_us=(end - begin) / 1000,
+                last_cqe_to_terminal_us=(end - last_cqe) / 1000, worker_fork_to_run_us=handoff_ns / 1000)
+
+
 def analyze(root):
     summaries = []
     for path in sorted(root.glob('*.windows.json')):
@@ -192,6 +220,10 @@ def analyze(root):
                        caller_sleeps=sum(e[2] == pid and e[3] == 'syscalls:sys_enter_clock_nanosleep' for e in own),
                        issuer_sleeps=sum(e[2] == issuer and e[3] == 'syscalls:sys_enter_clock_nanosleep' for e in own),
                        async_work=sum(e[3] == 'io_uring:io_uring_queue_async_work' for e in io))
+            if 'poll_begin_ns' in w:
+                if len(sq) != 8 or any(e[2] != issuer for e in sq):
+                    raise ValueError('expected one submitter and eight READ SQEs')
+                row.update(batch_read_phases(w, es, issuer, cq[-1][0]))
             row.update(blocks(es, pid))
             _, filesystem, direction, count, _ = name.removesuffix('-settled').removesuffix('-bulk').removesuffix('-legacy').split('-')
             row.update(window_io(active, begin, end, sq[0][0], pid,
@@ -231,6 +263,8 @@ def analyze(root):
         tail = sorted(rows, key=lambda r: r['latency_us'])[-max(1, len(rows) // 100):]
         metrics = [k for k in rows[0] if k.endswith('_us') or k in ('rings', 'sqes', 'cqes', 'enters', 'submitting_enters', 'cross_thread_cqes', 'caller_sleeps', 'issuer_sleeps', 'async_work', 'block_issues', 'paired_blocks', 'unmatched_block_issues', 'caller_forks')]
         metrics += ['max_batch_depth', 'block_bio_queue', 'block_bio_backmerge', 'block_bio_frontmerge', 'block_plug']
+        if 'status_calls' in rows[0]:
+            metrics.append('status_calls')
         def med(values):
             return {k: statistics.median(r[k] for r in values) for k in metrics}
         summary = dict(name=name, samples=len(rows), duplicate_perf_records=duplicate_records,
