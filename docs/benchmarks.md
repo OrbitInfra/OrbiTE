@@ -263,7 +263,8 @@ and an [independent runner pair](https://github.com/OrbitInfra/OrbiTE/actions/ru
 also observed zero worker starts and zero caller sleeps on the candidate
 before the short-submit ownership fix. Across those runs, untraced candidate
 p99 ranged from 47 to 252 µs. The final stable runner reached roughly the
-same p99 as TENT while delivering 1.48 times its goodput.
+same median p99 as TENT while delivering 1.48 times its goodput. In two
+of its six candidate-phase trials, OrbiTE p99 exceeded TENT p99 by over 5%.
 The [full CPU sweeps](https://github.com/OrbitInfra/OrbiTE/actions/runs/45089330744)
 use the standard 100-sample trials, compare with the fixed OrbiTE regression
 baseline and retain all TENT workload verdicts. The results above apply to
