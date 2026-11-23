@@ -194,6 +194,7 @@ if [[ ${2:-} == io-small ]]; then
     transport::io_uring::tests::inline::group::buffered_group_drains_only_the_consumed_prefix_and_preserves_gaps
     transport::io_uring::tests::inline::group::short_buffered_read_group_preserves_each_cqe_and_destination_guard
     transport::io_uring::tests::inline::group::lost_group_worker_retains_only_native_effects_for_the_consumed_prefix
+    transport::io_uring::tests::inline::group::invalid_ring_receipts_keep_the_consumed_ranges_and_charges
     transport::io_uring::tests::inline::group::group_caller_excludes_cold_direct_and_oversized_work
     transport::io_uring::tests::inline::ready_small_file_cqes_finish_on_the_caller_with_exact_prefix_and_guards
     transport::io_uring::tests::inline::pending_small_file_handoff_keeps_loans_through_cancel_timeout_and_close

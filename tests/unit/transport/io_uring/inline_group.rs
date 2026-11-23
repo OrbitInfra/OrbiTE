@@ -201,12 +201,14 @@ fn check_lost_group_worker(dir: &Path, op: TransferOp) -> Result<()> {
                 TransferOp::Write => RemoteEffect::Unknown,
             }
         );
-        if op == TransferOp::Read {
-            assert!(matches!(
-                f.memory.read(i * 2, &mut [0]),
-                Err(Error::Unavailable(_))
-            ));
-        }
+        assert!(matches!(
+            f.memory.read(i * 2, &mut [0]),
+            Err(Error::Unavailable(_))
+        ));
+        assert!(matches!(
+            f.memory.write(i * 2, &[0]),
+            Err(Error::Unavailable(_))
+        ));
     }
     let tail = batch.task_status(2)?;
     assert!(tail.locally_drained);
@@ -229,6 +231,48 @@ fn check_lost_group_worker(dir: &Path, op: TransferOp) -> Result<()> {
     drop(batch);
     assert!(trace.lock().unwrap().alive.upgrade().is_some());
     assert_eq!(f.engine.stats()?.inflight_bytes, 2);
+    Ok(())
+}
+
+#[test]
+fn invalid_ring_receipts_keep_the_consumed_ranges_and_charges() -> Result<()> {
+    let Some(dir) = directory("ORBITE_TMPFS_DIR") else {
+        return Ok(());
+    };
+    if !kernel() {
+        return Ok(());
+    }
+    for invalid_sq_head in [false, true] {
+        let (f, trace) = observed_at(&dir, b"ABCDEFGH", true, false, false)?;
+        warm(&f, &trace)?;
+        {
+            let mut t = trace.lock().unwrap();
+            t.submit_limit = Some(2);
+            t.invalid_sq_head = invalid_sq_head;
+            t.invalid_cqe = !invalid_sq_head;
+        }
+        let requests = [f.request(0, 0, 1), f.request(2, 2, 1), f.request(4, 4, 1)];
+        let batch =
+            f.engine
+                .submit_async(TransferOp::Read, &f.segment, &requests, None, TIMEOUT)?;
+        assert!(!batch.wait(TIMEOUT)?.locally_drained);
+        let retained = if invalid_sq_head { 3 } else { 2 };
+        for i in 0..retained {
+            assert!(!batch.task_status(i)?.locally_drained);
+            assert!(matches!(
+                f.memory.read(2 * i, &mut [0]),
+                Err(Error::Unavailable(_))
+            ));
+        }
+        if !invalid_sq_head {
+            assert!(batch.task_status(2)?.locally_drained);
+            f.memory.write(4, &[0x42])?;
+            let mut byte = [0];
+            f.memory.read(4, &mut byte)?;
+            assert_eq!(byte, [0x42]);
+        }
+        assert_eq!(f.engine.stats()?.inflight_bytes, retained);
+    }
     Ok(())
 }
 
