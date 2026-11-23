@@ -32,6 +32,57 @@ impl Drop for Bytes {
     }
 }
 
+struct Region {
+    ptr: *mut u8,
+    len: usize,
+}
+impl Region {
+    fn new(len: usize) -> io::Result<Self> {
+        // SAFETY: an independent anonymous mapping, without fixed addresses.
+        let addr = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                len,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+                -1,
+                0,
+            )
+        };
+        Self::owned(addr, len)
+    }
+    fn snapshot(ptr: *mut u8, len: usize) -> io::Result<Self> {
+        // SAFETY: a complete-page subrange of our own exclusive test mapping. The kernel
+        // selects the backup address. The original address remains mapped for direct I/O.
+        let res = unsafe {
+            libc::mremap(
+                ptr.cast(),
+                len,
+                len,
+                libc::MREMAP_MAYMOVE | libc::MREMAP_DONTUNMAP,
+                std::ptr::null_mut::<libc::c_void>(),
+            )
+        };
+        Self::owned(res, len)
+    }
+    fn owned(addr: *mut libc::c_void, len: usize) -> io::Result<Self> {
+        if addr == libc::MAP_FAILED {
+            Err(io::Error::last_os_error())
+        } else {
+            Ok(Self {
+                ptr: addr.cast(),
+                len,
+            })
+        }
+    }
+}
+impl Drop for Region {
+    fn drop(&mut self) {
+        // SAFETY: this exact mapping remains owned with no outstanding operation.
+        assert_eq!(unsafe { libc::munmap(self.ptr.cast(), self.len) }, 0);
+    }
+}
+
 struct Time(Instant, u64, i64);
 impl Time {
     fn now() -> Self {
@@ -132,7 +183,7 @@ struct Window {
 impl Window {
     fn new(mode: &str, slots: usize, chunk: usize, dst: *mut u8) -> io::Result<Self> {
         let ring = IoUring::new(slots as u32)?;
-        let raw = mode == "raw" || mode == "pipe";
+        let raw = mode.starts_with("raw") || mode.starts_with("snap") || mode == "pipe";
         let huge = mode.starts_with("huge") || mode.starts_with("move");
         let scratch = (!raw).then(|| Bytes::new(chunk * slots, if huge { 2 << 20 } else { 4096 }));
         if huge {
@@ -322,13 +373,18 @@ fn main() -> io::Result<()> {
     // SAFETY: F_GETFL reads status for the live descriptor and takes no variadic data.
     let flags = unsafe { libc::fcntl(direct.as_raw_fd(), libc::F_GETFL) };
     assert!(flags >= 0 && flags & libc::O_DIRECT != 0);
-    let guard = if mode == "move-aligned" {
-        2 << 20
-    } else {
-        4096
-    };
-    let dest = Bytes::new(total + guard + 4096, guard);
-    let target = dest.ptr(guard);
+    let huge = 2 << 20;
+    let dest = Region::new(total + 2 * huge + 8192)?;
+    let boundary = (dest.ptr as usize + 4096).next_multiple_of(huge);
+    let target = (boundary + if mode.ends_with("aligned") { 0 } else { 4096 }) as *mut u8;
+    let guard = target as usize - dest.ptr as usize;
+    if mode.contains("thp") {
+        // SAFETY: advise the whole exclusively owned mapping, including both guards.
+        assert_eq!(
+            unsafe { libc::madvise(dest.ptr.cast(), dest.len, libc::MADV_HUGEPAGE) },
+            0
+        );
+    }
     let mut image = vec![0xa5u8; total];
     let mut rows: Vec<Value> = Vec::new();
     let mut reusable = None;
@@ -355,8 +411,13 @@ fn main() -> io::Result<()> {
         file.write_all_at(&image, 4096)?;
         file.sync_data()?;
         // SAFETY: the full allocation is exclusively available before submission.
-        unsafe { dest.data.as_ptr().write_bytes(0xa5, total + guard + 4096) };
+        unsafe { dest.ptr.write_bytes(0xa5, dest.len) };
         let before = Time::now();
+        let backup = if mode.starts_with("snap") {
+            Some(Region::snapshot(target, total)?)
+        } else {
+            None
+        };
         let mut window = match reusable.take() {
             Some(x) => x,
             None => Window::new(mode, slots, chunk, target)?,
@@ -369,9 +430,10 @@ fn main() -> io::Result<()> {
         } else {
             drop(window)
         }
+        drop(backup);
         let finished = Time::now();
         // SAFETY: every byte in dest was initialized and all direct I/O has completed.
-        let bytes = unsafe { std::slice::from_raw_parts(dest.ptr(0), total + guard + 4096) };
+        let bytes = unsafe { std::slice::from_raw_parts(dest.ptr, dest.len) };
         assert!(bytes[..guard].iter().all(|&x| x == 0xa5));
         assert_eq!(&bytes[guard..guard + total], image.as_slice());
         assert!(bytes[guard + total..].iter().all(|&x| x == 0xa5));
@@ -382,6 +444,41 @@ fn main() -> io::Result<()> {
     let stat = std::fs::read_to_string("/proc/self/status")?;
     let rss = stat.lines().find(|s| s.starts_with("VmHWM:")).unwrap();
     let real_bytes = read_bytes()? - initial_bytes;
+    if mode.starts_with("snap") {
+        for cut in [0, 512, 4095, 4096, 4327, total - 512] {
+            file.set_len((4096 + total) as u64)?;
+            file.write_all_at(&image, 4096)?;
+            // SAFETY: restore the guarded initialized bytes before each new admission.
+            unsafe { dest.ptr.write_bytes(0xa5, dest.len) };
+            let old = Region::snapshot(target, total)?;
+            file.set_len((4096 + cut) as u64)?;
+            let mut ring = IoUring::new(4)?;
+            let iov = libc::iovec {
+                iov_base: target.cast(),
+                iov_len: total,
+            };
+            let sq = opcode::Readv::new(types::Fd(direct.as_raw_fd()), &iov, 1)
+                .offset(4096)
+                .build();
+            // SAFETY: this exclusive fixture owns the iovec, fd and two mappings through the CQE.
+            unsafe { ring.submission().push(&sq).unwrap() };
+            assert_eq!(ring.submit_and_wait(1)?, 1);
+            assert_eq!(ring.completion().next().unwrap().result(), cut as i32);
+            // SAFETY: valid CQE, disjoint mappings. Only its uncompleted suffix is restored.
+            unsafe {
+                std::ptr::copy_nonoverlapping(old.ptr.add(cut), target.add(cut), total - cut)
+            };
+            // SAFETY: mapping is initialized and the kernel released the request.
+            let bytes = unsafe { std::slice::from_raw_parts(dest.ptr, dest.len) };
+            assert_eq!(&bytes[guard..guard + cut], &image[..cut]);
+            assert!(
+                bytes[..guard]
+                    .iter()
+                    .chain(bytes[guard + cut..].iter())
+                    .all(|x| *x == 0xa5)
+            );
+        }
+    }
     println!(
         "{}",
         json!({"mode":mode,"size":total,"chunk":chunk,"slots":slots,"trials":rows,"hwm":rss,"read_bytes":real_bytes,"verified":true})
