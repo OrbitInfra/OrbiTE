@@ -211,6 +211,12 @@ fn check_lost_group_worker(dir: &Path, op: TransferOp) -> Result<()> {
     let tail = batch.task_status(2)?;
     assert!(tail.locally_drained);
     assert_eq!(tail.state, TaskState::Skipped);
+    let mut byte = [0];
+    f.memory.read(4, &mut byte)?;
+    assert_eq!(byte, [0x9a]);
+    f.memory.write(4, &[0x42])?;
+    f.memory.read(4, &mut byte)?;
+    assert_eq!(byte, [0x42]);
     let expected = match op {
         TransferOp::Read => *b"ABCDEFGH",
         TransferOp::Write => [0x9a, b'B', 0x9a, b'D', b'E', b'F', b'G', b'H'],
@@ -222,7 +228,7 @@ fn check_lost_group_worker(dir: &Path, op: TransferOp) -> Result<()> {
     ));
     drop(batch);
     assert!(trace.lock().unwrap().alive.upgrade().is_some());
-    assert!(f.engine.stats()?.inflight_bytes >= 2);
+    assert_eq!(f.engine.stats()?.inflight_bytes, 2);
     Ok(())
 }
 
