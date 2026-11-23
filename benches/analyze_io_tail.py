@@ -139,8 +139,9 @@ def scheduling(events, tid):
 def batch_read_phases(window, events, issuer, last_cqe):
     caller = window['pid']
     begin, end = window['poll_begin_ns'], window['poll_end_ns']
-    if last_cqe > end:
-        raise ValueError('terminal status preceded the last CQE')
+    if not (window['begin_ns'] <= begin <= end <= window['end_ns']
+            and window['begin_ns'] <= last_cqe <= end and window['status_calls'] >= 1):
+        raise ValueError('invalid terminal or poll interval')
     forks = [e for e in events if e[1:4] == (caller, caller, 'sched:sched_process_fork')]
     handoff_ns = 0
     if forks:
@@ -291,6 +292,21 @@ def main():
 
 
 def controls():
+    window = dict(pid=10, begin_ns=0, end_ns=20000, poll_begin_ns=2000, poll_end_ns=18000, status_calls=7)
+    fork = (1000, 10, 10, 'sched:sched_process_fork', 'comm=caller pid=10 child_comm=caller child_pid=20')
+    run = (4000, 0, 0, 'sched:sched_switch', 'idle:0 [120] R ==> caller:20 [120]')
+    phases = batch_read_phases(window, [fork, run], 20, 15000)
+    if phases != dict(status_calls=7, caller_poll_us=16, last_cqe_to_terminal_us=3, worker_fork_to_run_us=3):
+        raise ValueError('overlapping worker and caller intervals were misattributed')
+    if batch_read_phases(window, [], 10, 1000)['worker_fork_to_run_us'] != 0:
+        raise ValueError('caller submission invented a worker')
+    for events, issuer, cqe in [([], 20, 1000), ([fork], 20, 1000),
+                               ([fork, run], 21, 1000), ([], 10, 19000)]:
+        try:
+            batch_read_phases(window, events, issuer, cqe)
+        except ValueError:
+            continue
+        raise ValueError('incomplete batch READ timeline was accepted')
     # A blocked wait and a preemption are different causes of off-CPU time.
     es = [(0, 1, 1, 'sched:sched_switch', 'worker:1 [120] S ==> idle:0 [120]'),
           (10000, 0, 0, 'sched:sched_wakeup', 'worker:1 [120] CPU:001'),

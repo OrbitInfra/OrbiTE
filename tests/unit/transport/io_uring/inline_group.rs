@@ -110,6 +110,56 @@ fn buffered_group_drains_only_the_consumed_prefix_and_preserves_gaps() -> Result
 }
 
 #[test]
+fn short_buffered_read_group_preserves_each_cqe_and_destination_guard() -> Result<()> {
+    let Some(dir) = directory("ORBITE_TMPFS_DIR") else {
+        return Ok(());
+    };
+    if !kernel() {
+        return Ok(());
+    }
+    for ready in [true, false] {
+        let (f, trace) = observed_at(&dir, b"abcdefgh", ready, true, false)?;
+        warm(&f, &trace)?;
+        // Restore the advertised range for admission. The ring factory
+        // truncates it to three bytes after the requests have been prepared.
+        fs::write(&f.path, b"abcdefgh")?;
+        let requests = [f.request(1, 1, 4), f.request(9, 4, 2), f.request(17, 0, 3)];
+        let workers = WORKER_STARTS.with(|n| n.get());
+        let mut batch =
+            f.engine
+                .submit_async(TransferOp::Read, &f.segment, &requests, None, TIMEOUT)?;
+        let status = batch.wait(TIMEOUT)?;
+        assert!(status.locally_drained);
+        assert_eq!((status.completed_tasks, status.transferred_bytes), (1, 5));
+        let tasks = batch.task_statuses()?;
+        for (task, (state, bytes)) in tasks.iter().zip([
+            (TaskState::Failed, 2),
+            (TaskState::Failed, 0),
+            (TaskState::Completed, 3),
+        ]) {
+            assert_eq!(
+                (task.state, task.transferred_bytes, task.locally_drained),
+                (state, bytes, true)
+            );
+        }
+        assert_eq!(
+            WORKER_STARTS.with(|n| n.get()) - workers,
+            usize::from(!ready)
+        );
+        assert_eq!(trace.lock().unwrap().submits, 1);
+        let mut bytes = [0; 24];
+        f.memory.read(0, &mut bytes)?;
+        let mut expected = [0x9a; 24];
+        expected[1..3].copy_from_slice(b"bc");
+        expected[17..20].copy_from_slice(b"abc");
+        assert_eq!(bytes, expected);
+        batch.free()?;
+        assert_eq!(f.engine.stats()?.inflight_bytes, 0);
+    }
+    Ok(())
+}
+
+#[test]
 fn lost_group_worker_retains_only_native_effects_for_the_consumed_prefix() -> Result<()> {
     let Some(dir) = directory("ORBITE_TMPFS_DIR") else {
         return Ok(());
@@ -152,7 +202,10 @@ fn check_lost_group_worker(dir: &Path, op: TransferOp) -> Result<()> {
             }
         );
         if op == TransferOp::Read {
-            assert!(f.memory.read(i * 2, &mut [0]).is_err());
+            assert!(matches!(
+                f.memory.read(i * 2, &mut [0]),
+                Err(Error::Unavailable(_))
+            ));
         }
     }
     let tail = batch.task_status(2)?;
