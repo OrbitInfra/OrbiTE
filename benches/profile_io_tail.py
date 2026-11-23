@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import tempfile
@@ -53,9 +54,12 @@ def record(out, executables, args, env, tent_env):
                                          for layout in ("gapped", "contiguous")]
     shapes = [(*s, False) for s in shapes] + [("ext4", 64, layout, 0, True)
                                              for layout in ("gapped", "contiguous")]
-    focused = args.tail_profile_only == "tmpfs-read-batch"
+    focused = args.tail_profile_only != "all"
     if focused:
-        shapes = [("tmpfs", 8, "contiguous", 0, False)]
+        filesystem = args.tail_profile_only.split("-", 1)[0]
+        shapes = [(filesystem, 8, "contiguous", 0, False)]
+        timing_mount = args.ext4 if filesystem == "ext4" else args.tmpfs
+        expect_direct = filesystem == "ext4"
     samples = max(args.samples, 1000)
     for filesystem, batch, layout, settle_us, legacy_verify in shapes:
         for op in (("read",) if focused else ("read", "write")):
@@ -97,8 +101,8 @@ def record(out, executables, args, env, tent_env):
                     if result.get("verified") is not True or len(result["samples_ns"]) != samples:
                         raise ValueError("tail profile did not complete all byte checks")
                     if focused and (result["payload_bytes"] != 8 * 4096 or (implementation == "orbite" and
-                            (result["direct_io"] is not False or result["physical_owners"] != 8))):
-                        raise ValueError("expected eight buffered host READs")
+                            (result["direct_io"] is not expect_direct or result["physical_owners"] != 8))):
+                        raise ValueError("unexpected file route or owner count for eight host READs")
                     windows = []
                     polls = {}
                     for line in (root / (name + ".stderr")).read_text().splitlines():
@@ -148,6 +152,10 @@ def record(out, executables, args, env, tent_env):
                 path.unlink()
                 if json.loads((root / (name + "-fds.stdout")).read_text()).get("verified") is not True:
                     raise ValueError("descriptor trace failed byte checks")
+                if focused and expect_direct:
+                    descriptor_trace = (root / (name + ".strace")).read_text()
+                    if not re.search(r'\bO_DIRECT\b[^\n]*= \d+<' + re.escape(str(path)) + r'>', descriptor_trace):
+                        raise ValueError("missing successful O_DIRECT open of the benchmark file")
     if focused:
         from run import summarize
         trials = []
@@ -155,15 +163,16 @@ def record(out, executables, args, env, tent_env):
             for implementation, exe in (executables if trial % 2 == 0 else reversed(executables)):
                 name = f"untraced-{implementation}-{trial}"
                 overrides = tent_env if implementation == "tent" else {}
-                with tempfile.TemporaryDirectory(prefix="orbite-read-", dir=args.tmpfs) as directory:
+                with tempfile.TemporaryDirectory(prefix="orbite-read-", dir=timing_mount) as directory:
                     run(name, ["env", *[f"{k}={v}" for k, v in overrides.items()], exe,
                                "io_uring", "read", 4096, 8, "contiguous", args.warmup, samples,
                                args.workers, Path(directory) / "payload"])
                 row = json.loads((root / (name + ".stdout")).read_text())
-                if implementation == "orbite" and (row["direct_io"] is not False or row["physical_owners"] != 8):
+                if implementation == "orbite" and (row["direct_io"] is not expect_direct or row["physical_owners"] != 8):
                     raise ValueError("untraced READs used a different route or owner count")
                 trials.append(dict(implementation=implementation, trial=trial, **summarize(row, samples, 8 * 4096)))
         (root / "untraced.json").write_text(json.dumps(trials, indent=2) + "\n")
+        print(json.dumps({"untraced_trials": trials}), flush=True)
     from analyze_io_tail import analyze, controls
     controls()
     analyze(root)

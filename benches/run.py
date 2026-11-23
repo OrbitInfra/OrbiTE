@@ -114,8 +114,9 @@ def parse_args(argv=None):
     p.add_argument("--trials", type=int)
     p.add_argument("--profile", action="store_true", help="also collect strace/perf evidence for the slow-path targets")
     p.add_argument("--profile-only", action="store_true", help="collect profiles without reporting traced timings as benchmark rows")
-    p.add_argument("--tail-profile-only", nargs="?", const="all", default=False, choices=("all", "tmpfs-read-batch"),
-                   help="trace per-sample io_uring and scheduler timelines for the suite or just eight buffered READs")
+    p.add_argument("--tail-profile-only", nargs="?", const="all", default=False,
+                   choices=("all", "tmpfs-read-batch", "ext4-read-batch"),
+                   help="trace the full suite or eight contiguous file READs on one filesystem")
     p.add_argument("--tmpfs-tail-baseline", type=Path, help="compare singleton tmpfs tails in balanced A/A, A/B and TENT runs using the frozen OrbiTE checkout")
     rss = p.add_mutually_exclusive_group()
     rss.add_argument("--tcp-read-rss-only", action="store_true", help="measure process RSS and heap allocations for a 64 MiB TCP READ")

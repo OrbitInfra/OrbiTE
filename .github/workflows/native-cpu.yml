@@ -19,7 +19,7 @@ on:
       tail_workload:
         description: Workload when collecting per-sample timelines
         type: choice
-        options: [all, tmpfs-read-batch]
+        options: [all, tmpfs-read-batch, ext4-read-batch]
         default: all
       tmpfs_tail_only:
         description: Interleave frozen OrbiTE, the candidate and TENT for singleton tmpfs p99

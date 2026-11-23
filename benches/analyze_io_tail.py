@@ -156,6 +156,21 @@ def check_read_completions(submits, completions):
             raise ValueError('unmatched or short 4 KiB READ completion')
 
 
+def direct_read_phases(requests, first_sqe, last_cqe):
+    # Merging or splitting at the block layer is independent of the eight
+    # io_uring request identities. Use elapsed intervals, not summed waits.
+    if not requests or any(r['complete_ns'] is None or
+                           not first_sqe <= r['issue_ns'] <= r['complete_ns'] <= last_cqe
+                           for r in requests):
+        raise ValueError('missing or out-of-window direct READ completion')
+    first = min(r['issue_ns'] for r in requests)
+    last = max(r['complete_ns'] for r in requests)
+    return dict(sqe_to_first_block_us=(first - first_sqe) / 1000,
+                direct_block_span_us=(last - first) / 1000,
+                max_direct_block_us=max(r['complete_ns'] - r['issue_ns'] for r in requests) / 1000,
+                direct_block_to_last_cqe_us=(last_cqe - last) / 1000)
+
+
 def batch_read_phases(window, events, issuer, last_cqe):
     caller = window['pid']
     begin, end = window['poll_begin_ns'], window['poll_end_ns']
@@ -270,6 +285,8 @@ def analyze(root):
                                  'R' if direction == 'read' else 'W', 4096 * int(count)))
             if filesystem == 'ext4' and not row['window_direct_blocks']:
                 raise ValueError('missing ext4 direct block evidence')
+            if filesystem == 'ext4' and 'poll_begin_ns' in w:
+                row.update(direct_read_phases(row['direct_io_timeline'], sq[0][0], cq[-1][0]))
             row['last_block_to_cqe_us'] = ((cq[-1][0] - row['last_block_complete_ns']) / 1000
                                          if row['last_block_complete_ns'] else 0)
             # Preserve the exact kernel fields alongside per-sample correlation.
@@ -409,6 +426,16 @@ def controls():
     if [(r['sector'], r['bytes'], r['tid'], r['batch_depth_at_issue'])
         for r in depth['direct_io_timeline']] != [(8, 4096, 2, 1), (24, 4096, 3, 2), (40, 4096, 4, 2)]:
         raise ValueError('block geometry or per-batch issue depth was misattributed')
+    bios = [dict(issue_ns=2000, complete_ns=6000), dict(issue_ns=3000, complete_ns=5000)]
+    if direct_read_phases(bios, 1000, 8000) != dict(sqe_to_first_block_us=1, direct_block_span_us=4,
+                                                     max_direct_block_us=4, direct_block_to_last_cqe_us=2):
+        raise ValueError('overlapping block intervals were double counted')
+    for bad in ([], [dict(issue_ns=2000, complete_ns=None)], [dict(issue_ns=2000, complete_ns=8100)]):
+        try:
+            direct_read_phases(bad, 1000, 8000)
+        except ValueError:
+            continue
+        raise ValueError('invalid direct READ completion accepted')
     try:
         window_io(block_requests(es), 10, 60, 20, 1, 'R', 2048)
     except ValueError:
