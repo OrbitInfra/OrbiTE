@@ -270,6 +270,69 @@ use the standard 100-sample trials, compare with the fixed OrbiTE regression
 baseline and retain all TENT workload verdicts. The results above apply to
 one caller reading a warmed tmpfs file.
 
+### Eight contiguous direct READs
+
+This workload reads eight adjacent 4 KiB blocks from a preallocated ext4
+file through a direct descriptor. The [same-boot comparison](https://github.com/OrbitInfra/OrbiTE/actions/runs/45118467752)
+used parent `e4a12a2`, candidate `27bfe46` and frozen Mooncake TENT
+`e1ea5d31`. Each toolchain ran on its own x86-64 Linux guest. Both phases
+used the same caller, kernel, mounts and TENT binary on that guest.
+Run `benches/run.py --tail-profile-only ext4-read-batch` with the reference,
+output and mount arguments from the [CPU sweeps](#cpu-sweeps). Each of six
+fresh processes per implementation and phase ran three warmups and 1,000
+measured batches, alternating implementation order. File reset and
+`fdatasync` preceded timing. Each batch was checked for bytes, guards and
+eight independent receipts.
+
+The table gives the median of the **untraced** process trials. Goodput counts
+32 KiB per batch. CPU time includes all threads in the process and p99 covers
+the full batch. The TENT columns use its candidate-phase trials.
+
+| Rust | OrbiTE GiB/s, before → after | TENT GiB/s | OrbiTE CPU ns/byte, before → after | TENT CPU ns/byte | OrbiTE p99 µs, before → after | TENT p99 µs |
+|---|---:|---:|---:|---:|---:|---:|
+| Stable | 0.189 → 0.393 | 0.513 | 3.248 → 1.355 | 1.833 | 202.90 → 132.99 | 122.51 |
+| Rust 1.85 | 0.190 → 0.389 | 0.509 | 3.246 → 1.379 | 1.847 | 204.16 → 136.71 | 115.80 |
+
+Separate captures verify a successful `O_DIRECT` open on the payload and
+match every READV to its full 4 KiB CQE. For each issuing block device the
+analyzer matches the queued data sectors to issued requests and completions,
+including requests merged or split by the kernel. The span runs from first
+issue to last completion on the guest. Worker handoff runs from fork to
+first scheduled execution. Caller polling runs from the first public status
+call to the terminal observation. These intervals overlap. Recompute the
+distributions with `python3 benches/analyze_io_tail.py /path/to/tail`.
+
+| Trace median, µs | Stable OrbiTE, before → after | Stable TENT | Rust 1.85 OrbiTE, before → after | Rust 1.85 TENT |
+|---|---:|---:|---:|---:|
+| Batch start to first SQE | 49.97 → 18.62 | 23.89 | 49.27 → 19.35 | 23.94 |
+| Guest block issue to completion | 32.93 → 35.62 | 21.82 | 32.74 → 36.15 | 21.87 |
+| Worker handoff | 9.18 → 0 | 0 | 9.32 → 0 | 0 |
+| Caller polling | 143.63 → 0.10 | 26.41 | 143.10 → 0.09 | 26.47 |
+| Last CQE to terminal observation | 56.51 → 15.76 | 1.38 | 56.82 → 16.17 | 1.43 |
+
+The parent started a worker and entered polling backoff in every measured
+batch. Even after the last CQE it spent a median 55.21 / 55.42 µs asleep
+on stable / Rust 1.85. The bounded caller path completed all 1,000 groups
+per toolchain before the first status call. It retained eight independent
+SQEs, CQEs and byte counts. On the stable candidate, a gap in the underlying
+sector mapping split each group into 4 KiB and 28 KiB requests on one
+guest device. The other seven captures issued one 32 KiB request per group.
+The candidate protected each destination against a concurrent
+truncate by copying only its CQE prefix from private storage.
+
+On these hosts OrbiTE reached 77% of TENT goodput, used 25–26% less CPU
+per byte and took 9–18% longer at p99. Both the guest block span and the
+time between the final CQE and the public receipt still exceeded TENT.
+The [CQ polling experiment](https://github.com/OrbitInfra/OrbiTE/actions/runs/45119467264)
+compares a 16 µs active wait against the bounded sleeping wait on the
+same protected READ implementation. The [full CPU sweeps](https://github.com/OrbitInfra/OrbiTE/actions/runs/45118496460)
+compare all shapes, including single 64 MiB direct READs, with the fixed
+OrbiTE baseline and frozen TENT using three 100-batch trials per shape.
+Guest storage varied between hosts. In the [original Azure capture](https://github.com/OrbitInfra/OrbiTE/actions/runs/45116563186)
+the ten slowest Rust 1.85 parent batches spent a median 13.07 ms of their
+13.42 ms at the block device. Physical NVMe latency remains a separate
+qualification.
+
 ### Singleton tmpfs tail latency
 
 The `tmpfs_tail_only` input of the native CPU workflow measures warmed, buffered
@@ -832,10 +895,11 @@ The proposed engine explanations can be narrowed:
 - All 64-block CQEs are published on the submitting batch worker. There is
   no caller-to-worker ring handoff in this case. Worker drain has **zero
   nanosleeps**; the benchmark caller still uses its documented status backoff.
-- Aligned gaps allocate **no bounce buffer**. The new
-  `aligned_file_batches_use_one_ring_without_bounce_for_gaps_or_contiguous_ranges`
-  control fails every bounce allocation and checks one ring, full bytes and
-  guards for READ/WRITE, 8/64 blocks, contiguous/gapped, ext4/tmpfs.
+- At that revision aligned gaps required no bounce allocation. Current direct
+  READs isolate the destination until the CQE to preserve bytes beyond EOF.
+  The [ext4 READ study](#eight-contiguous-direct-reads) covers that change.
+  Aligned WRITEs and buffered READs still check one ring and intact guards
+  with every bounce allocation denied.
 - The traced direct-I/O workload creates **one OrbiTE batch worker** per multi-request submission; TENT
   creates none. Before-first-SQE time in OrbiTE's slow 64-block samples is
   105–148 µs in the fixed paired traces, much shorter than the block wait. Removing thread creation

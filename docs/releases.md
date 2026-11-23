@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Small aligned groups of consecutive direct file READs can complete on the
+  caller. Direct io_uring READs now reserve private storage until the CQE
+  protects the returned prefix. Concurrent file truncation preserves the
+  remaining registered bytes for both scalar and vectored reads. [File transfers](storage.md#dram-transfers-with-io_uring)
+
 - Dependency security fixes: PyO3 requires 0.29.3 or a compatible patch
   (locked at 0.29.3), covering GHSA-36hh-v3qg-5jq4 and GHSA-chgr-c6px-7xpp.
   The Python module explicitly retains its GIL requirement; blocking calls

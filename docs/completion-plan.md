@@ -144,9 +144,8 @@ after each:
 
 The [direct-I/O comparison](benchmarks.md#direct-io-issue-paths-and-verification-load)
 is complete. Its remaining Rust 1.85 gapped WRITE p99 (16.26 ms versus TENT
-3.59 ms, overlapping three-trial ranges) is a P11 limit, not a tuning target
-on the CI virtual disk. Do no more virtual-disk tail work; measure physical
-NVMe tails in the hardware batch.
+3.59 ms, overlapping three-trial ranges) is a P11 limit. Measure the tails
+of that 64-block gapped WRITE on physical NVMe in the hardware batch.
 
 The [release ladder](#release-ladder) retains the beta API decisions,
 test-consolidation and installed acceptance gates. Publication remains the
@@ -208,9 +207,14 @@ Done:
   while each batch started a worker. Known buffered host READs now use the
   same bounded caller path as WRITEs. Same-boot untraced p99 fell from
   212 to 175 µs on stable and from 171 to 50 µs on Rust 1.85.
-  Next, measure the corresponding direct ext4 READ. Separate block completion
-  from worker scheduling and caller polling before changing direct-file
-  admission. The buffered tmpfs measurements cover a different route.
+  For [eight contiguous direct ext4 READs](benchmarks.md#eight-contiguous-direct-reads),
+  the parent slept another 55 µs after the last CQE on both toolchains.
+  Warmed, aligned host READ groups now use the bounded caller wait. They
+  retain independent CQEs and publish only each direct READ's completed
+  prefix, even across a concurrent truncate. On the matched guests goodput
+  rose from 0.19 to 0.39 GiB/s and CPU time fell from 3.25 to 1.35–1.38 ns
+  per byte. TENT reached 0.51 GiB/s. The guest block span and the final
+  CQE-to-receipt interval account for the remaining measured gaps.
 
 - **S16 — reference fixtures.** Retain the CPU trace contract and three frozen
   request prefixes used by native-listener rejection. Compatibility inventories

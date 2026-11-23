@@ -569,7 +569,7 @@ OrbiTE gapped WRITE trace still has a slowest-1% median of 31.8 ms, including
 31.3 ms block waits, despite zero extra writes/flushes/FUA/discards in the
 case. Stable uses EPYC 9V74 and has different tails. These traced times are
 diagnostic, not benchmark p99s. Both implementations use one ring and one
-submitting enter per group; aligned gaps need no bounce allocation, and the
+submitting enter per group. The measured gapped WRITEs needed no bounce allocation, and the
 drain worker does not sleep with backoff. The [subsequent block-layer comparison](benchmarks.md#direct-io-issue-paths-and-verification-load)
 finds a verification/load-dependent tail below driver issue, reproduced in
 unchanged TENT by bulk verification reads. Normal verification is now bulk in
@@ -732,9 +732,19 @@ after a short submission, a short READ, EOF and a later successful READ in
 the same batch. After a two-of-three submission, worker loss or an invalid CQE
 retains the two consumed ranges and their bytes. The third range accepts a
 new write and returns its new value. An invalid SQ head keeps all three
-inaccessible and charged. Cold file routes, direct-capable files and oversized
-groups exercise worker submission. The [eight-block profile](benchmarks.md#eight-contiguous-buffered-reads)
+inaccessible and charged. Cold file routes and oversized groups exercise
+worker submission. The [eight-block profile](benchmarks.md#eight-contiguous-buffered-reads)
 measures both completion paths on tmpfs.
+
+On ext4, real-ring controls cover a warmed, consecutive group of eight
+direct 4 KiB READs, reversed CQEs, partial submission and handoff after the
+caller wait. Cold descriptors, gaps, direct WRITEs and misaligned ranges
+exercise worker submission. Truncating the file after preparation produces
+full, short and zero-byte CQEs. The tests read back the entire destination,
+including bytes beyond EOF and the guards around vector elements and padding.
+Scratch allocation failure must leave the ring untouched and return the
+pageable charge. The [direct READ profile](benchmarks.md#eight-contiguous-direct-reads)
+checks the descriptor and the kernel block events for the warmed workload.
 
 `cargo test --locked --lib segment::file::tests` uses real temporary files.
 It checks shared and stale handles, cached size and refresh after resize,

@@ -338,8 +338,10 @@ this brief wait can finish a late CQE without a thread handoff. A timeout or
 enter error transfers the unchanged ring to the batch worker.
 The [singleton tmpfs measurements](benchmarks.md#singleton-tmpfs-tail-latency)
 time the public batch lifecycle, including this handoff when it occurs.
-For a known buffered file, a group of at most eight plain host READs or WRITEs totaling
-64 KiB or less may use the caller under the same policy and deadline. One
+Groups of at most eight plain host requests totaling 64 KiB or less may use the
+caller under the same policy and deadline. A previously probed buffered file
+admits READ or WRITE. A direct descriptor admits consecutive READ extents
+with aligned host destinations. One
 deadline-capped timed enter can wait for the consumed SQ prefix. The single
 CQ owner leaves all completions visible for the worker if the set is incomplete.
 Each READ has its own destination loan. After a short submission the SQ head
@@ -372,9 +374,14 @@ it does not defer completion work to the submitting thread's next ring call.
 `pending_native_io_completes_on_worker_while_caller_only_computes` forces
 asynchronous kernel I/O and checks reaping on the worker without caller polling.
 The same preflight, partial-submit drain and prefix aggregation serve both paths.
-Aligned gapped and contiguous host batches keep one ring for the whole group,
-without bounce allocation, as checked by
-`aligned_file_batches_use_one_ring_without_bounce_for_gaps_or_contiguous_ranges`.
+Aligned gapped and contiguous host batches keep one ring for the whole group.
+On an ext4 direct READ racing a truncate, Linux can write past the byte count
+in its CQE. Each direct host READ therefore targets private, byte-budgeted
+storage. Its CQE authorizes copying that prefix to the retained registration,
+including a vector in file order. Aligned WRITEs and aligned buffered READs
+can still use the registration directly. The real-ring control
+`aligned_file_batches_use_one_ring_and_only_direct_reads_require_scratch`
+checks allocation failure before submission, bytes, guards and ring count.
 For an aligned [64 MiB buffered file READ](benchmarks.md#peak-memory-for-a-64-mib-file-read),
 the observed CQE completed the full payload without a bounce buffer. The
 process reached peak RSS in the benchmark's subsequent byte checks.
