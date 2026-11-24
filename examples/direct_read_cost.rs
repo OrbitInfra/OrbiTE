@@ -83,6 +83,60 @@ impl Drop for Region {
     }
 }
 
+struct Exchange {
+    _maps: [Region; 2],
+    windows: [*mut u8; 2],
+    active: usize,
+}
+impl Exchange {
+    fn new(size: usize, dst: *mut u8, huge: bool) -> io::Result<Self> {
+        let unit = 2 << 20;
+        let maps = [
+            Region::new(size + 2 * unit + 8192)?,
+            Region::new(size + 2 * unit + 8192)?,
+        ];
+        let mut windows = [std::ptr::null_mut(); 2];
+        for (i, map) in maps.iter().enumerate() {
+            if huge {
+                // SAFETY: advise only this diagnostic's independent anonymous VMAs.
+                assert_eq!(
+                    unsafe { libc::madvise(map.ptr.cast(), map.len, libc::MADV_HUGEPAGE) },
+                    0
+                );
+            }
+            windows[i] = ((map.ptr as usize + 4096).next_multiple_of(unit) + (dst as usize % unit))
+                as *mut u8;
+        }
+        Ok(Self {
+            _maps: maps,
+            windows,
+            active: 0,
+        })
+    }
+    fn publish(&mut self, dst: *mut u8, len: usize) -> io::Result<()> {
+        let next = self.active ^ 1;
+        for (src, target) in [(dst, self.windows[next]), (self.windows[self.active], dst)] {
+            // SAFETY: the three nonoverlapping extents are exclusive anonymous regions in
+            // this process. No I/O is outstanding. Both original addresses stay reserved.
+            let v = unsafe {
+                libc::mremap(
+                    src.cast(),
+                    len,
+                    len,
+                    libc::MREMAP_MAYMOVE | libc::MREMAP_FIXED | libc::MREMAP_DONTUNMAP,
+                    target.cast::<libc::c_void>(),
+                )
+            };
+            if v == libc::MAP_FAILED {
+                return Err(io::Error::last_os_error());
+            }
+            assert_eq!(v, target.cast());
+        }
+        self.active = next;
+        Ok(())
+    }
+}
+
 struct Time(Instant, u64, i64);
 impl Time {
     fn now() -> Self {
@@ -177,13 +231,22 @@ struct Window {
     // Close the ring (including fixed registrations) before dropping the allocations.
     ring: IoUring,
     scratch: Option<Bytes>,
+    exchange: Option<Exchange>,
     iovs: Vec<libc::iovec>,
     pipe: Option<(OwnedFd, OwnedFd, usize)>,
 }
 impl Window {
     fn new(mode: &str, slots: usize, chunk: usize, dst: *mut u8) -> io::Result<Self> {
         let ring = IoUring::new(slots as u32)?;
-        let raw = mode.starts_with("raw") || mode.starts_with("snap") || mode == "pipe";
+        let exchange = if mode.starts_with("xchg") {
+            Some(Exchange::new(chunk * slots, dst, mode.contains("thp"))?)
+        } else {
+            None
+        };
+        let raw = exchange.is_some()
+            || mode.starts_with("raw")
+            || mode.starts_with("snap")
+            || mode == "pipe";
         let huge = mode.starts_with("huge") || mode.starts_with("move");
         let scratch = (!raw).then(|| Bytes::new(chunk * slots, if huge { 2 << 20 } else { 4096 }));
         if huge {
@@ -226,6 +289,7 @@ impl Window {
         Ok(Self {
             ring,
             scratch,
+            exchange,
             iovs,
             pipe,
         })
@@ -290,6 +354,11 @@ impl Window {
             let prep = Time::now();
             for i in 0..n {
                 let offset = (4096 + base + i * chunk) as u64;
+                if let Some(x) = &self.exchange {
+                    self.iovs[i].iov_base = x.windows[x.active].wrapping_add(i * chunk).cast();
+                } else if self.scratch.is_none() {
+                    self.iovs[i].iov_base = dst.wrapping_add(base + i * chunk).cast();
+                }
                 let sqe = if mode.starts_with("fixed") {
                     opcode::ReadFixed::new(
                         types::Fd(fd),
@@ -329,6 +398,10 @@ impl Window {
             assert_eq!(seen, (1 << n) - 1);
             let at = Time::now();
             add(&mut io_cost, at.since(&prep));
+            if let Some(x) = &mut self.exchange {
+                x.publish(dst.wrapping_add(base), n * chunk)?;
+                add(&mut copy_cost, Time::now().since(&at));
+            }
             if let Some(b) = &self.scratch {
                 let target = dst.wrapping_add(base);
                 if mode.starts_with("move") {
@@ -444,6 +517,64 @@ fn main() -> io::Result<()> {
     let stat = std::fs::read_to_string("/proc/self/status")?;
     let rss = stat.lines().find(|s| s.starts_with("VmHWM:")).unwrap();
     let real_bytes = read_bytes()? - initial_bytes;
+    if mode.starts_with("xchg") {
+        let size = chunk * slots;
+        let mut exchange = Exchange::new(size, target, mode.contains("thp"))?;
+        for cut in [
+            Some(0),
+            Some(512),
+            Some(4095),
+            Some(size - 512),
+            Some(size),
+            None,
+        ] {
+            file.set_len((4096 + size) as u64)?;
+            file.write_all_at(&image[..size], 4096)?;
+            // SAFETY: verified private destination and guards, with no pending SQEs.
+            unsafe { dest.ptr.write_bytes(0xa5, dest.len) };
+            if let Some(n) = cut {
+                file.set_len((4096 + n) as u64)?;
+            }
+            let mut ring = IoUring::new(4)?;
+            let private = exchange.windows[exchange.active];
+            let iov = libc::iovec {
+                iov_base: private.cast(),
+                iov_len: size,
+            };
+            let sq = opcode::Readv::new(
+                types::Fd(if cut.is_some() {
+                    direct.as_raw_fd()
+                } else {
+                    -1
+                }),
+                &iov,
+                1,
+            )
+            .offset(4096)
+            .build();
+            // SAFETY: keep the private slot, iovec and file alive through the real CQE.
+            unsafe { ring.submission().push(&sq).unwrap() };
+            assert_eq!(ring.submit_and_wait(1)?, 1);
+            let result = ring.completion().next().unwrap().result();
+            assert_eq!(result, cut.map_or(-libc::EBADF, |n| n as i32));
+            let valid = result.max(0) as usize;
+            if valid == size {
+                exchange.publish(target, size)?;
+            } else if valid > 0 {
+                // SAFETY: only covered CQE bytes go to the private, exclusively held destination.
+                unsafe { std::ptr::copy_nonoverlapping(private, target, valid) };
+            }
+            // SAFETY: both mappings are initialized and all I/O has finished.
+            let bytes = unsafe { std::slice::from_raw_parts(dest.ptr, dest.len) };
+            assert_eq!(&bytes[guard..guard + valid], &image[..valid]);
+            assert!(
+                bytes[..guard]
+                    .iter()
+                    .chain(bytes[guard + valid..].iter())
+                    .all(|b| *b == 0xa5)
+            );
+        }
+    }
     if mode.starts_with("snap") {
         for cut in [0, 512, 4095, 4096, 4327, total - 512] {
             file.set_len((4096 + total) as u64)?;

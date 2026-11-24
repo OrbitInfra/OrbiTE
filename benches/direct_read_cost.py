@@ -13,9 +13,10 @@ raw = (out / "samples.jsonl").open("w")
 series = {}
 for size in (1<<20, 64<<20):
     variants = [
-        ("raw",size,1), ("raw-thp",size,1), ("snap",size,1),
-        ("snap-thp",size,1), ("raw-thp-aligned",size,1),
-        ("snap-thp-aligned",size,1), ("huge",size,1),
+        ("raw",size,1), ("raw",8<<20,2), ("raw-thp",size,1),
+        ("xchg-keep",8<<20,2), ("xchg-keep-thp",4<<20,2),
+        ("xchg-keep-thp",8<<20,2), ("xchg-keep-thp",16<<20,1),
+        ("xchg-keep-thp",size,1), ("xchg-keep-thp-aligned",8<<20,2),
     ]
     for trial in range(4):
         order = variants[trial:] + variants[:trial]
@@ -35,7 +36,7 @@ for size in (1<<20, 64<<20):
                 raise RuntimeError((p.args,p.stderr[-1000:]))
             row=json.loads(p.stdout); assert row["verified"] and len(row["trials"])==15
             if row["read_bytes"] < size*(3+15):
-                print("insufficient block-read evidence",mode,chunk,slots,row["read_bytes"],flush=True)
+                raise RuntimeError(("insufficient block-read evidence",mode,chunk,slots,row["read_bytes"]))
             row["process_trial"]=trial
             print(json.dumps(row),file=raw,flush=True)
             series.setdefault((size,mode,chunk,slots),[]).append(row)
