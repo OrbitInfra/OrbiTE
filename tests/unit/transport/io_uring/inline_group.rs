@@ -37,6 +37,174 @@ fn direct_fixture(
 }
 
 #[test]
+#[allow(unsafe_code)]
+fn idle_direct_read_ring_yields_its_fd_to_larger_and_scalar_submissions() -> Result<()> {
+    let Some(dir) = directory("ORBITE_EXT4_DIR") else {
+        return Ok(());
+    };
+    if !kernel() {
+        return Ok(());
+    }
+    const CHILD: &str = "ORBITE_IDLE_RING_FD_LIMIT_CHILD";
+    if std::env::var_os(CHILD).is_none() {
+        let run = std::process::Command::new(std::env::current_exe()?)
+            .args(["--exact", "transport::io_uring::tests::inline::group::idle_direct_read_ring_yields_its_fd_to_larger_and_scalar_submissions"])
+            .env(CHILD, "1")
+            .output()?;
+        let out = String::from_utf8_lossy(&run.stdout);
+        let err = String::from_utf8_lossy(&run.stderr);
+        assert!(
+            run.status.success() && out.contains("1 passed"),
+            "{out}\n{err}"
+        );
+        return Ok(());
+    }
+    let limit = libc::rlimit {
+        rlim_cur: 64,
+        rlim_max: 64,
+    };
+    // SAFETY: limit is initialized and this child runs only the fd pressure test.
+    if unsafe { libc::setrlimit(libc::RLIMIT_NOFILE, &limit) } != 0 {
+        return Err(io::Error::last_os_error().into());
+    }
+    let image: Vec<_> = (0..8 * PAGE).map(|i| (i % 251) as u8).collect();
+    for width in [8, 1] {
+        let (f, trace, start) = direct_fixture(&dir, &image, true)?;
+        warm(&f, &trace)?;
+        trace.lock().unwrap().allow_reuse = true;
+        let reqs: Vec<_> = (0..8)
+            .map(|i| f.request(start + i * PAGE, (i * PAGE) as u64, PAGE))
+            .collect();
+        let mut b =
+            f.engine
+                .submit_async(TransferOp::Read, &f.segment, &reqs[..2], None, TIMEOUT)?;
+        assert_eq!(b.wait(TIMEOUT)?.completed_tasks, 2);
+        b.free()?;
+        assert!(trace.lock().unwrap().alive.upgrade().is_some());
+        let mut expected = vec![0x9a; f.memory.len()];
+        f.memory.write(0, &expected)?;
+        let mut held = Vec::new();
+        loop {
+            match fs::File::open("/dev/null") {
+                Ok(fd) => held.push(fd),
+                Err(e) if e.raw_os_error() == Some(libc::EMFILE) => break,
+                Err(e) => return Err(e.into()),
+            }
+        }
+        let mut b =
+            f.engine
+                .submit_async(TransferOp::Read, &f.segment, &reqs[..width], None, TIMEOUT)?;
+        let st = b.wait(TIMEOUT)?;
+        assert_eq!(
+            (st.completed_tasks, st.transferred_bytes),
+            (width, width * PAGE)
+        );
+        b.free()?;
+        drop(held);
+        // Growing evicts before setup. An unrelated scalar setup retries once.
+        let t = trace.lock().unwrap();
+        assert_eq!(t.setups, if width == 8 { 2 } else { 3 });
+        assert_eq!(t.submits, 2);
+        drop(t);
+        expected[start..start + width * PAGE].copy_from_slice(&image[..width * PAGE]);
+        let mut actual = vec![0; expected.len()];
+        f.memory.read(0, &mut actual)?;
+        assert_eq!(actual, expected);
+    }
+    Ok(())
+}
+
+#[test]
+fn drained_direct_read_ring_is_bounded_and_short_cqes_retire_it() -> Result<()> {
+    let Some(dir) = directory("ORBITE_EXT4_DIR") else {
+        return Ok(());
+    };
+    if !kernel() {
+        return Ok(());
+    }
+    let image = vec![0x76; 8 * PAGE];
+    let (f, trace, start) = direct_fixture(&dir, &image, true)?;
+    warm(&f, &trace)?;
+    trace.lock().unwrap().allow_reuse = true;
+    assert_eq!(
+        f.engine.file_segment_info(&f.segment)?.direct_io,
+        Some(true)
+    );
+    let reqs: Vec<_> = (0..8)
+        .map(|i| f.request(start + i * PAGE, (i * PAGE) as u64, PAGE))
+        .collect();
+    for _ in 0..2 {
+        let mut b = f
+            .engine
+            .submit_async(TransferOp::Read, &f.segment, &reqs, None, TIMEOUT)?;
+        assert_eq!(b.wait(TIMEOUT)?.completed_tasks, 8);
+        assert!(
+            b.task_statuses()?
+                .iter()
+                .all(|t| t.transferred_bytes == PAGE && t.locally_drained)
+        );
+        b.free()?;
+        assert_eq!(trace.lock().unwrap().setups, 1);
+    }
+    let mut bytes = vec![0; f.memory.len()];
+    f.memory.read(0, &mut bytes)?;
+    assert_eq!(&bytes[start..start + image.len()], image.as_slice());
+    for (i, byte) in bytes.iter_mut().enumerate() {
+        *byte = (i % 251) as u8;
+    }
+    f.memory.write(0, &bytes)?;
+    // Shrink only after range admission, before the cached ring publishes SQEs.
+    trace.lock().unwrap().truncate_before_push =
+        Some((f.path.clone(), (image.len() - PAGE + 512) as u64));
+    let mut b = f
+        .engine
+        .submit_async(TransferOp::Read, &f.segment, &reqs, None, TIMEOUT)?;
+    let st = b.wait(TIMEOUT)?;
+    assert!(st.locally_drained);
+    assert_eq!(
+        (st.completed_tasks, st.transferred_bytes),
+        (7, 7 * PAGE + 512)
+    );
+    let prefix = 7 * PAGE + 512;
+    bytes[start..start + prefix].copy_from_slice(&image[..prefix]);
+    let mut actual = vec![0; bytes.len()];
+    f.memory.read(0, &mut actual)?;
+    assert_eq!(actual, bytes);
+    b.free()?;
+    assert!(
+        f.engine
+            .io_uring
+            .as_ref()
+            .unwrap()
+            .idle_read
+            .lock()
+            .unwrap()
+            .take(8)
+            .is_none()
+    );
+    fs::write(&f.path, &image)?;
+    let mut b = f
+        .engine
+        .submit_async(TransferOp::Read, &f.segment, &reqs, None, TIMEOUT)?;
+    assert_eq!(b.wait(TIMEOUT)?.completed_tasks, 8);
+    b.free()?;
+    assert_eq!(trace.lock().unwrap().setups, 2);
+    f.engine.close(TIMEOUT)?;
+    assert!(
+        f.engine
+            .io_uring
+            .as_ref()
+            .unwrap()
+            .idle_read
+            .lock()
+            .unwrap()
+            .take(8)
+            .is_none()
+    );
+    Ok(())
+}
+
+#[test]
 fn direct_read_group_keeps_eight_receipts_across_partial_submit_and_handoff() -> Result<()> {
     let Some(dir) = directory("ORBITE_EXT4_DIR") else {
         return Ok(());

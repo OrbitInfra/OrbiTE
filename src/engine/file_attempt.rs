@@ -470,6 +470,7 @@ impl TransferEngine {
                     &requests[..count],
                     requests.len(),
                     owner.deadline,
+                    true,
                 )
         };
         let mut consumed = None;

@@ -134,7 +134,7 @@ An unavailable kernel makes io_uring ineligible. QoS, the runtime window
 and the submission deadline apply to files. Local files require no receiver
 credit and reject attached notifications.
 
-The caller or existing batch worker owns one ring per submission. Before
+The caller or existing batch worker exclusively owns its submission's ring. Before
 publishing any SQE it validates every request, acquires exclusive host ranges,
 allocates aligned bounce buffers and checks SQ space. An overlapping host
 loan fails the group before I/O. An idle asynchronous batch can submit one
@@ -148,6 +148,11 @@ up to eight plain host requests with a common route and deadline, totaling
 at most 64 KiB. A previously probed buffered file admits READs and WRITEs.
 A cached direct descriptor admits READs whose file offsets are consecutive
 and whose lengths, offsets and host addresses meet the direct-path alignment.
+Successive direct READ groups can reuse one drained ring per engine. It holds
+at most eight entries and one file descriptor. A larger group releases an
+undersized ring before setup. If another ring setup exhausts file descriptors
+or memory, it can release the idle descriptor and mappings and retry setup once.
+The idle slot retains only the ring. Engine close releases its descriptor.
 The caller checks the number of visible CQEs and can make one timed
 wait for the entire consumed SQ prefix. Only a full set is reaped on the
 caller. Each offset, native loan, and completion stays independent. If the

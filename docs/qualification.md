@@ -745,9 +745,14 @@ including bytes beyond EOF and the guards around vector elements and padding.
 Scratch allocation failure must leave the ring untouched and return the
 pageable charge. A 2 MiB direct READ control rejects the optional huge-page
 alignment at allocation. It checks the complete destination after a full CQE
-and after a truncate between preflight and ring submission. The
-[direct READ profile](benchmarks.md#eight-contiguous-direct-reads)
-checks the descriptor and the kernel block events for the warmed workload.
+and after a truncate between preflight and ring submission. Two fully drained
+eight-page READs can use the same ring. A short CQE retires that ring and
+preserves the unconfirmed destination suffix. An isolated process exhausts
+its 64 file descriptors after warming a two-entry ring and verifies a larger
+group and a scalar READ, including payloads, guards and submit counts.
+The [direct READ profile](benchmarks.md#eight-contiguous-direct-reads)
+matches the direct descriptor and block events to all eight CQEs, including
+when the ring was created in a warmup.
 
 `cargo test --locked --lib segment::file::tests` uses real temporary files.
 It checks shared and stale handles, cached size and refresh after resize,

@@ -15,6 +15,86 @@ READ_BIO = re.compile(r'(\d+,\d+) (?:R|RS) (\d+) \+ (\d+)\b')
 REQUEST_ID = r'\breq (0x[0-9a-fA-F]+), user_data (0x[0-9a-fA-F]+), '
 READ_SUBMIT = re.compile(REQUEST_ID + r'opcode READV,')
 FULL_PAGE_CQE = re.compile(REQUEST_ID + r'result 4096,')
+SUBMITS = ('io_uring:io_uring_submit_req', 'io_uring:io_uring_submit_sqe')
+RING_CTX = re.compile(r'\bring (\S+),')
+RING_OPEN = re.compile(r'\bring (\S+), fd (\d+)\b')
+RING_ENTER = re.compile(r'\bfd: (0x[0-9a-fA-F]+), to_submit: (0x[0-9a-fA-F]+),')
+
+
+def ring_lifetimes(events, pid):
+    """Join the creator's setup entry, create and returned fd to its close."""
+    setups, by_fd, live, history = {}, {}, {}, collections.defaultdict(list)
+    for at, proc, tid, name, detail in events:
+        if proc != pid:
+            continue
+        if name == 'syscalls:sys_enter_io_uring_setup':
+            if tid in setups:
+                raise ValueError('missing io_uring_setup return')
+            setups[tid] = None
+        elif name == 'io_uring:io_uring_create':
+            match = RING_OPEN.search(detail)
+            if tid not in setups or setups[tid] is not None or not match:
+                raise ValueError('unmatched io_uring_create')
+            setups[tid] = match[1], int(match[2])
+        elif name == 'syscalls:sys_exit_io_uring_setup':
+            if tid not in setups:
+                raise ValueError('missing io_uring_setup entry')
+            opened = setups.pop(tid)
+            fd = int(detail.strip(), 0)
+            if not 0 <= fd < 2**31:
+                continue
+            if not opened or opened[1] != fd:
+                raise ValueError('successful io_uring_setup lacks its matching create')
+            ctx = opened[0]
+            if fd in by_fd or ctx in live:
+                raise ValueError('ring generation reused without an observed close')
+            record = [at, None, fd]
+            live[ctx] = record
+            by_fd[fd] = ctx
+            history[ctx].append(record)
+        elif name == 'syscalls:sys_enter_close':
+            # A close can release the descriptor before the syscall returns.
+            # Even an interrupted close ends its eligibility for reuse evidence.
+            fd = int(detail.split('fd: ', 1)[1], 0)
+            ctx = by_fd.pop(fd, None)
+            if ctx is not None:
+                live.pop(ctx)[1] = at
+    if setups:
+        raise ValueError('unfinished io_uring_setup')
+    return history
+
+
+def direct_read_contexts(events, times, windows):
+    """Bind each submit and CQE set to one live setup, including the warmups."""
+    pid = windows[0]['pid']
+    history = ring_lifetimes(events, pid)
+    prior_groups, contexts = set(), {}
+    for w in windows:
+        begin, end = w['begin_ns'], w['end_ns']
+        es = events[bisect.bisect_left(times, begin):bisect.bisect_right(times, end)]
+        own = [e for e in es if e[1] == pid]
+        sq = [e for e in own if e[3] in SUBMITS]
+        rings = {RING_CTX.search(e[4])[1] for e in sq}
+        if len(rings) != 1:
+            raise ValueError('expected exactly one submitting READ ring')
+        ctx, = rings
+        cq = [e for e in es if e[3] == 'io_uring:io_uring_complete' and RING_CTX.search(e[4])[1] == ctx]
+        check_read_completions(sq, cq)
+        records = history.get(ctx, [])
+        i = bisect.bisect_right(records, sq[0][0], key=lambda rec: rec[0]) - 1
+        if i < 0:
+            raise ValueError('no successful setup for the submitting READ ring')
+        born, closed, fd = records[i]
+        if closed is not None and closed <= cq[-1][0]:
+            raise ValueError('READ receipts outlived their ring generation')
+        entries = [RING_ENTER.search(e[4]) for e in own if e[3] == 'syscalls:sys_enter_io_uring_enter']
+        if not entries or not all(entries) or {int(e[1], 16) for e in entries if int(e[2], 16)} != {fd}:
+            raise ValueError('READ submission used a different descriptor')
+        if born < begin and (ctx, born) not in prior_groups:
+            raise ValueError('cached ring lacks an earlier verified READ group')
+        prior_groups.add((ctx, born))
+        contexts[w['sample']] = ctx
+    return contexts
 
 
 def block_requests(events):
@@ -262,6 +342,8 @@ def analyze(root):
         duplicate_records = len(events) - len(set(events))
         events = sorted(set(events))
         times = [e[0] for e in events]
+        direct_contexts = (direct_read_contexts(events, times, windows)
+                           if name == 'orbite-ext4-read-8-contiguous' else {})
         requests = iter(block_requests(events))
         next_request = next(requests, None)
         active = []
@@ -279,16 +361,18 @@ def analyze(root):
             es = events[bisect.bisect_left(times, begin):bisect.bisect_right(times, end)]
             own = [e for e in es if e[1] == pid]
             rings = [e for e in own if e[3] == 'io_uring:io_uring_create']
-            contexts = {re.search(r'ring (\S+),', e[4])[1] for e in rings}
+            contexts = {RING_CTX.search(e[4])[1] for e in rings}
+            if not rings and w['sample'] in direct_contexts:
+                contexts.add(direct_contexts[w['sample']])
             io = [e for e in es if e[3].startswith('io_uring:') and any('ring ' + ctx + ',' in e[4] for ctx in contexts)]
-            sq = [e for e in io if e[3] in ('io_uring:io_uring_submit_req', 'io_uring:io_uring_submit_sqe')]
+            sq = [e for e in io if e[3] in SUBMITS]
             cq = [e for e in io if e[3] == 'io_uring:io_uring_complete']
-            if len(rings) != 1 or not sq or len(sq) != len(cq):
+            if len(contexts) != 1 or len(rings) > 1 or not sq or len(sq) != len(cq):
                 raise ValueError(f'{name}/{w["sample"]}: incomplete ring/SQE/CQE timeline')
             issuer = sq[0][2]
             enters = [e for e in own if e[3] == 'syscalls:sys_enter_io_uring_enter']
             row = dict(sample=w['sample'], begin_ns=begin, end_ns=end, caller=pid, issuer=issuer,
-                       latency_us=(end - begin) / 1000, rings=len(rings), sqes=len(sq), cqes=len(cq),
+                       latency_us=(end - begin) / 1000, rings=len(contexts), ring_creates=len(rings), sqes=len(sq), cqes=len(cq),
                        enters=len(enters), submitting_enters=sum('to_submit: 0x00000000,' not in e[4] for e in enters),
                        submit_ns=sq[0][0], first_cqe_ns=cq[0][0], last_cqe_ns=cq[-1][0],
                        before_submit_us=(sq[0][0] - begin) / 1000,
@@ -373,6 +457,19 @@ def main():
 
 
 def controls():
+    open_events = [(0, 31, 32, 'syscalls:sys_enter_io_uring_setup', ''),
+                   (1, 31, 32, 'io_uring:io_uring_create', 'ring 0xabc, fd 21 sq size 8,'),
+                   (2, 31, 32, 'syscalls:sys_exit_io_uring_setup', '0x15')]
+    close = (30, 31, 32, 'syscalls:sys_enter_close', 'fd: 0x15')
+    if ring_lifetimes(open_events + [close],31)['0xabc'] != [[2,30,21]]:
+        raise ValueError('READ ring lifetime escaped its descriptor')
+    for bad in (open_events[1:], open_events[::2], open_events[:-1], open_events * 2,
+                open_events[:2] + [(2,31,32,'syscalls:sys_exit_io_uring_setup','0x16')]):
+        try:
+            ring_lifetimes(bad,31)
+        except ValueError:
+            continue
+        raise ValueError('unproven ring generation was accepted')
     ids = [f'req 0x{i:x}, user_data 0x{i:x}, ' for i in range(8)]
     sq = [(i, 10, 10, '', ident + 'opcode READV,') for i, ident in enumerate(ids)]
     cq = [(20, 10, 10, '', ident + 'result 4096,') for ident in reversed(ids)]

@@ -2,6 +2,9 @@ use super::*;
 
 #[derive(Default)]
 struct Trace {
+    allow_reuse: bool,
+    setups: usize,
+    truncate_before_push: Option<(PathBuf, u64)>,
     submitter: Option<std::thread::ThreadId>,
     submits: usize,
     peeks: usize,
@@ -25,6 +28,11 @@ struct Observed {
     no_space: bool,
 }
 impl Ring for Observed {
+    fn empty_after_drain(&mut self) -> bool {
+        self.trace.lock().unwrap().allow_reuse
+            && self.receipts.is_empty()
+            && self.ring.empty_after_drain()
+    }
     fn space(&mut self) -> usize {
         if self.no_space { 0 } else { self.ring.space() }
     }
@@ -36,6 +44,12 @@ impl Ring for Observed {
         }
     }
     fn push(&mut self, entries: &[squeue::Entry]) -> io::Result<()> {
+        if let Some((path, size)) = self.trace.lock().unwrap().truncate_before_push.take() {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(path)?
+                .set_len(size)?;
+        }
         self.ring.push(entries)
     }
     fn submit(&mut self, count: u32) -> io::Result<usize> {
@@ -120,6 +134,7 @@ fn observed_at(
         .unwrap();
     io.available = Arc::new(true.into());
     io.create = Arc::new(move |count| {
+        copy.lock().unwrap().setups += 1;
         let length = copy
             .lock()
             .unwrap()

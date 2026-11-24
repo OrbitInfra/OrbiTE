@@ -192,6 +192,8 @@ if [[ ${2:-} == io-small ]]; then
   controls=(
     transport::io_uring::tests::aligned_file_batches_use_one_ring_and_only_direct_reads_require_scratch
     transport::io_uring::tests::inline::group::direct_read_group_keeps_eight_receipts_across_partial_submit_and_handoff
+    transport::io_uring::tests::inline::group::drained_direct_read_ring_is_bounded_and_short_cqes_retire_it
+    transport::io_uring::tests::inline::group::idle_direct_read_ring_yields_its_fd_to_larger_and_scalar_submissions
     transport::io_uring::tests::inline::group::direct_groups_that_need_a_worker_keep_worker_submission
     transport::io_uring::tests::inline::group::direct_read_copies_only_each_cqes_prefix_after_truncate
     transport::io_uring::tests::inline::group::large_direct_read_uses_device_alignment_when_huge_alignment_is_unavailable

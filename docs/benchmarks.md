@@ -344,6 +344,28 @@ the ten slowest Rust 1.85 parent batches spent a median 13.07 ms of their
 13.42 ms at the block device. Physical NVMe latency remains a separate
 qualification.
 
+With the caller path and private destinations fixed, a native control changed
+only the ring lifetime. Setup and retirement together cost 12–13 µs per batch
+with fresh rings and about 1.3 µs with a drained ring. Each ring still issued
+eight separate READVs. [Ring creation and retirement measurements](https://github.com/OrbitInfra/OrbiTE/actions/runs/45395500236)
+
+The public engine comparison below measures `d54910b` (fresh) and `bbb05cc`
+(reused) on each guest, using the same six-process protocol. During all
+1,000 traced batches, the OrbiTE ring had been created in warmup. All eight
+READVs and CQEs matched the same still-open ring descriptor. Frozen TENT
+opened a fresh ring per batch. [Paired public-engine trials and traces](https://github.com/OrbitInfra/OrbiTE/actions/runs/45407741022)
+
+| Rust | GiB/s, fresh / reused / TENT | CPU ns/byte, fresh / reused / TENT | p99 µs, fresh / reused / TENT |
+|---|---:|---:|---:|
+| Stable | 0.384 / 0.487 / 0.488 | 1.415 / 0.883 / 1.913 | 143.58 / 79.57 / 122.81 |
+| 1.85 | 0.378 / 0.479 / 0.486 | 1.435 / 0.906 / 1.925 | 142.78 / 82.38 / 137.49 |
+
+Ring reuse cut batch start to first SQE from 18.84 to 8.22 µs on stable
+and from 19.36 to 8.55 µs on Rust 1.85. Last CQE to return after batch free
+fell from 17.58 to 11.16 µs and from 17.70 to 11.41 µs. TENT measured
+11.16 and 10.97 µs on that boundary. The remaining guest block span was
+36.73 / 36.38 µs for OrbiTE against 22.02 / 21.45 µs for TENT.
+
 ### Large direct READs
 
 A buffered reset and `fdatasync` precede each measured 64 MiB single READ

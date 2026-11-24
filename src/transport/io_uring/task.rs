@@ -111,7 +111,7 @@ enum HostMemory {
 }
 
 pub(super) struct Task {
-    file: Arc<File>,
+    pub(super) file: Arc<File>,
     memory: Option<HostMemory>,
     length: usize,
     bounce: Option<Scratch>,

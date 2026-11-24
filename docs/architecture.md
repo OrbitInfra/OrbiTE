@@ -327,7 +327,14 @@ change the file an admitted operation uses. A lease keeps the fd until its I/O
 finishes; close fences all aliases before waiting, and a timeout keeps the entry
 charged until close is retried. See [file segments](storage.md).
 
-An idle engine retains no storage thread or ring after the setup probe.
+The setup probe drops its ring. A warmed engine can retain one idle ring
+of at most eight entries for consecutive, aligned direct host READ groups.
+Frozen TENT allocates and frees a ring per sub-batch. OrbiTE returns only
+the plain ring to the idle slot, after every SQE has a full, successful CQE
+and both queues are empty. The submitting owner releases the file leases,
+buffers and registrations independently. Concurrent batches take exclusive
+rings. A short or failed operation retires its ring through the usual drain.
+Closing the engine also closes the idle slot.
 For DRAM/file payloads the caller or existing batch worker owns the io_uring,
 iovecs, host range loans and bounce storage through CQE drain. File and peer
 targets share admission and batch progress. One small contiguous host-file

@@ -119,7 +119,7 @@ impl Submission<'_> {
             });
         }
         let width = piece_count.min(max_batch_requests).min(MAX_SQ_ENTRIES);
-        let mut ring = (transport.create)(width as u32)?;
+        let mut ring = transport.create_ring(width as u32)?;
         if ring.space() < width {
             return Err(Error::ResourceExhausted);
         }

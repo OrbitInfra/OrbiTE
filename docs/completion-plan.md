@@ -211,11 +211,12 @@ Done:
   the parent slept another 55 µs after the last CQE on both toolchains.
   Warmed, aligned host READ groups now use the bounded caller wait. They
   retain independent CQEs and publish only each direct READ's completed
-  prefix, even across a concurrent truncate. On the matched guests goodput
-  rose from 0.19 to 0.39 GiB/s and CPU time fell from 3.25 to 1.35–1.38 ns
-  per byte. TENT reached 0.51 GiB/s. The guest block span and the final
-  CQE-to-receipt interval were both longer. A 16 µs active poll increased
-  CPU per byte by 41–45% in a separate paired test. The [large direct READ controls](benchmarks.md#large-direct-reads)
+  prefix, even across a concurrent truncate. Removing the handoff raised
+  goodput from 0.19 to 0.39 GiB/s. A separate paired run reused a single
+  fully drained ring and reached 0.48–0.49 GiB/s at 0.88–0.91 ns per byte,
+  with an 80–82 µs p99. TENT reached 0.49 GiB/s at about 1.92 ns per byte.
+  Guest block service still took about 36–37 µs against 21–22 µs for TENT.
+  The [large direct READ controls](benchmarks.md#large-direct-reads)
   traced much of the 64 MiB regression to populating private pages and
   copying the completed prefix. Advising huge pages raised single-read
   goodput to 2.52–2.55 GiB/s from 2.01–2.10 GiB/s. The fixed baseline
@@ -454,11 +455,12 @@ OrbitKV keeps extents, placement, eviction and recovery policy.
 - [x] **P7.1 — local file segments (Implemented).** Engine-local `file://`
   segments with cached size and refresh, permissions, checked byte offsets and
   close that drains pending fd users. See [file segments](storage.md).
-- [x] **P7.2 — DRAM/file io_uring (Qualified on Linux CI).** One ring per submission,
+- [x] **P7.2 — DRAM/file io_uring (Qualified on Linux CI).** Exclusive ring ownership per submission,
   exact short/error byte counts, partial submission, queued cancellation and
   CQE drain before releasing registered memory or file leases. Small host
   submissions can consume a ready CQE on the caller; pending work hands the
-  existing ring to the batch worker without resubmission.
+  existing ring to the batch worker without resubmission. Consecutive
+  direct READ groups can reuse one empty ring after all successful CQEs.
 - [x] **P7.3 — CUDA/file staging (Implemented).** An optional file pool supplies whole-request pinned slots. Larger requests and pool misses use caller-driven rounds of
   charged pinned chunks, device-range loans and event-confirmed copyback.
   The installed GPU/NVMe profile is unqualified.

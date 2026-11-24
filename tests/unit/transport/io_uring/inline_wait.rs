@@ -14,6 +14,7 @@ fn caller_wait_is_bounded_by_one_window_the_request_deadline_and_three_enters() 
         // No SQEs are published: inject interrupted enters at the same boundary
         // as the real ring, without scheduling a payload or a worker.
         let live = LiveBatch {
+            idle_read: None,
             ring: Box::new(Observed {
                 ring: ring::create(1)?,
                 trace: trace.clone(),
@@ -23,7 +24,7 @@ fn caller_wait_is_bounded_by_one_window_the_request_deadline_and_three_enters() 
                 no_space: false,
             }),
             tasks: vec![],
-            iovecs: vec![],
+            iovecs: Box::default(),
         };
         let start = Instant::now();
         let deadline = start + budget;
