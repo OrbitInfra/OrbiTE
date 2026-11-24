@@ -238,6 +238,15 @@ struct Window {
 impl Window {
     fn new(mode: &str, slots: usize, chunk: usize, dst: *mut u8) -> io::Result<Self> {
         let ring = IoUring::new(slots as u32)?;
+        Self::with_ring(mode, slots, chunk, dst, ring)
+    }
+    fn with_ring(
+        mode: &str,
+        slots: usize,
+        chunk: usize,
+        dst: *mut u8,
+        ring: IoUring,
+    ) -> io::Result<Self> {
         let exchange = if mode.starts_with("xchg") {
             Some(Exchange::new(chunk * slots, dst, mode.contains("thp"))?)
         } else {
@@ -447,9 +456,13 @@ fn main() -> io::Result<()> {
     let flags = unsafe { libc::fcntl(direct.as_raw_fd(), libc::F_GETFL) };
     assert!(flags >= 0 && flags & libc::O_DIRECT != 0);
     let huge = 2 << 20;
-    let dest = Region::new(total + 2 * huge + 8192)?;
-    let boundary = (dest.ptr as usize + 4096).next_multiple_of(huge);
-    let target = (boundary + if mode.ends_with("aligned") { 0 } else { 4096 }) as *mut u8;
+    let dest = Region::new(total + if total < huge { 8192 } else { 2 * huge + 8192 })?;
+    let target = if total < huge {
+        dest.ptr.wrapping_add(4096)
+    } else {
+        let boundary = (dest.ptr as usize + 4096).next_multiple_of(huge);
+        (boundary + if mode.ends_with("aligned") { 0 } else { 4096 }) as *mut u8
+    };
     let guard = target as usize - dest.ptr as usize;
     if mode.contains("thp") {
         // SAFETY: advise the whole exclusively owned mapping, including both guards.
@@ -461,6 +474,7 @@ fn main() -> io::Result<()> {
     let mut image = vec![0xa5u8; total];
     let mut rows: Vec<Value> = Vec::new();
     let mut reusable = None;
+    let mut idle_ring = None;
     let read_bytes = || -> io::Result<u64> {
         let io = std::fs::read_to_string("/proc/self/io")?;
         Ok(io
@@ -493,12 +507,25 @@ fn main() -> io::Result<()> {
         };
         let mut window = match reusable.take() {
             Some(x) => x,
-            None => Window::new(mode, slots, chunk, target)?,
+            None => match idle_ring.take() {
+                Some(ring) => Window::with_ring(mode, slots, chunk, target, ring)?,
+                None => Window::new(mode, slots, chunk, target)?,
+            },
         };
         let prepared = Time::now();
         let (io_cost, copy_cost) = window.read(direct.as_raw_fd(), mode, total, chunk, target)?;
         let copied = Time::now();
-        if mode.contains("keep") {
+        if mode == "protected-ring" {
+            let Window {
+                ring,
+                scratch,
+                exchange,
+                iovs,
+                pipe,
+            } = window;
+            idle_ring = Some(ring);
+            drop((scratch, exchange, iovs, pipe));
+        } else if mode.contains("keep") {
             reusable = Some(window)
         } else {
             drop(window)
