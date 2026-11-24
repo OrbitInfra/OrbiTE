@@ -51,6 +51,7 @@ impl Scratch {
         transport: &super::IoUringTransport,
         length: usize,
         alignment: usize,
+        direct_read: bool,
     ) -> Result<Self> {
         if let Some(slot) = transport.pool.acquire(
             length,
@@ -61,8 +62,33 @@ impl Scratch {
             return Ok(Self::Slot(slot));
         }
         let charge = transport.pool.charge(length)?;
+        // Faulting every base page during GUP dominates a large, fresh direct
+        // READ buffer. Only advise complete 2 MiB units of private scratch.
+        // The kernel can always satisfy this hint with ordinary pages.
+        const HUGE: usize = 2 << 20;
+        let advise = direct_read && length >= HUGE;
+        let buffer = if advise && alignment < HUGE {
+            match (transport.allocate)(length, HUGE) {
+                Err(Error::ResourceExhausted) => (transport.allocate)(length, alignment)?,
+                result => result?,
+            }
+        } else {
+            (transport.allocate)(length, alignment)?
+        };
+        if advise && buffer.ptr.as_ptr() as usize % HUGE == 0 {
+            // SAFETY: the pointer is huge-page aligned and exclusively owned.
+            // The hinted extent only includes complete units inside the allocation.
+            #[allow(unsafe_code)]
+            unsafe {
+                libc::madvise(
+                    buffer.ptr.as_ptr().cast(),
+                    length / HUGE * HUGE,
+                    libc::MADV_HUGEPAGE,
+                );
+            }
+        }
         Ok(Self::Pageable {
-            buffer: (transport.allocate)(length, alignment)?,
+            buffer,
             _charge: charge,
         })
     }
@@ -112,7 +138,7 @@ impl Task {
             let padding = if padding_bytes == 0 {
                 None
             } else {
-                let scratch = Scratch::acquire(transport, padding_bytes, 4096)?;
+                let scratch = Scratch::acquire(transport, padding_bytes, 4096, false)?;
                 if operation == TransferOp::Write {
                     // SAFETY: this exclusive scratch lease covers all padding bytes.
                     // A reused slot may contain bytes from an earlier READ.
@@ -153,7 +179,12 @@ impl Task {
                 }
                 drop(padding);
                 (
-                    Some(Scratch::acquire(transport, request.length, alignment)?),
+                    Some(Scratch::acquire(
+                        transport,
+                        request.length,
+                        alignment,
+                        true,
+                    )?),
                     None,
                 )
             } else {
@@ -213,7 +244,7 @@ impl Task {
         // even when its CQE reports a shorter prefix. Keep that write private.
         let protect = request.lease.is_direct_read(operation, &file);
         let bounce = if protect || memory.address().as_ptr() as usize % staging_alignment != 0 {
-            let bounce = Scratch::acquire(transport, request.length, staging_alignment)?;
+            let bounce = Scratch::acquire(transport, request.length, staging_alignment, protect)?;
             if operation == TransferOp::Write {
                 // SAFETY: the exclusive loan covers all initialized WRITE bytes.
                 // The fresh bounce is disjoint and has exactly that capacity.

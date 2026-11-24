@@ -194,6 +194,7 @@ if [[ ${2:-} == io-small ]]; then
     transport::io_uring::tests::inline::group::direct_read_group_keeps_eight_receipts_across_partial_submit_and_handoff
     transport::io_uring::tests::inline::group::direct_groups_that_need_a_worker_keep_worker_submission
     transport::io_uring::tests::inline::group::direct_read_copies_only_each_cqes_prefix_after_truncate
+    transport::io_uring::tests::inline::group::large_direct_read_uses_device_alignment_when_huge_alignment_is_unavailable
     transport::io_uring::tests::inline::group::direct_vector_read_preserves_ranges_beyond_eof_and_skips_padding
     transport::io_uring::tests::inline::group::buffered_group_drains_only_the_consumed_prefix_and_preserves_gaps
     transport::io_uring::tests::inline::group::short_buffered_read_group_preserves_each_cqe_and_destination_guard

@@ -215,9 +215,12 @@ Done:
   rose from 0.19 to 0.39 GiB/s and CPU time fell from 3.25 to 1.35–1.38 ns
   per byte. TENT reached 0.51 GiB/s. The guest block span and the final
   CQE-to-receipt interval were both longer. A 16 µs active poll increased
-  CPU per byte by 41–45% in a separate paired test. Further CPU work should
-  measure the allocation and copy cost of larger direct READs while
-  preserving the verified EOF prefix.
+  CPU per byte by 41–45% in a separate paired test. The [large direct READ controls](benchmarks.md#large-direct-reads)
+  traced much of the 64 MiB regression to populating private pages and
+  copying the completed prefix. Advising huge pages raised single-read
+  goodput to 2.52–2.55 GiB/s from 2.01–2.10 GiB/s. The fixed baseline
+  reached 6.24–6.52 GiB/s on the same boots. The performance step remains
+  open until a protected implementation meets the large-read guards.
 
 - **S16 — reference fixtures.** Retain the CPU trace contract and three frozen
   request prefixes used by native-listener rejection. Compatibility inventories

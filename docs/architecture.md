@@ -379,7 +379,12 @@ On an ext4 direct READ racing a truncate, Linux can write past the byte count
 in its CQE. Each direct host READ therefore targets private, byte-budgeted
 storage. Its CQE authorizes copying that prefix to the retained registration,
 including a vector in file order. Aligned WRITEs and aligned buffered READs
-can still use the registration directly. The real-ring control
+can still use the registration directly. After trying the configured staging
+slots, a direct READ of at least 2 MiB can request 2 MiB-aligned pageable
+scratch and advise transparent huge pages on complete units. If the larger
+alignment exhausts resources, preflight retries with the descriptor's
+required alignment. Both attempts share one outstanding byte charge.
+The real-ring control
 `aligned_file_batches_use_one_ring_and_only_direct_reads_require_scratch`
 checks allocation failure before submission, bytes, guards and ring count.
 For an aligned [64 MiB buffered file READ](benchmarks.md#peak-memory-for-a-64-mib-file-read),

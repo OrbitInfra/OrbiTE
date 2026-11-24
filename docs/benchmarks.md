@@ -344,6 +344,29 @@ the ten slowest Rust 1.85 parent batches spent a median 13.07 ms of their
 13.42 ms at the block device. Physical NVMe latency remains a separate
 qualification.
 
+### Large direct READs
+
+A buffered reset and `fdatasync` precede each measured 64 MiB single READ
+on ext4. The public caller checks the payload, destination guards, byte
+count and direct descriptor. Six fresh processes per engine version cover
+every run order, with three warmups and 30 samples each. Each row gives the
+median of the six untraced process trials. The fixed baseline is
+`12d1e839`. The protected engine receives the direct READ into private
+storage, then copies the CQE-confirmed prefix to the caller. The last
+entry in each group uses 2 MiB-aligned private storage with transparent
+huge-page advice. [Matched public-engine trials](https://github.com/OrbitInfra/OrbiTE/actions/runs/45130293237)
+
+| Rust | GiB/s, baseline / protected / advised | CPU ns/byte, baseline / protected / advised | p99 ms, baseline / protected / advised | peak RSS MiB, baseline / protected / advised |
+|---|---:|---:|---:|---:|
+| Stable | 6.24 / 2.01 / 2.52 | 0.145 / 0.471 / 0.341 | 11.64 / 32.49 / 28.44 | 323.4 / 323.5 / 323.5 |
+| 1.85 | 6.52 / 2.10 / 2.55 | 0.140 / 0.453 / 0.331 | 11.81 / 31.13 / 27.94 | 323.5 / 323.5 / 323.5 |
+
+Separate native READV controls measured about 16,385 minor faults per
+64 MiB read. Huge-page advice reduced that count to about 34. A full CQE
+still required one copy of the entire payload. The matched engine exceeded
+its CPU and p99 limits and missed its goodput floor on both toolchains.
+Peak RSS remained within its limit. [Page-fault and copy controls](https://github.com/OrbitInfra/OrbiTE/actions/runs/45128204113)
+
 A single 64 MiB direct READ needs 64 MiB of private storage through its
 CQE. A separate Linux aarch64 guest with 3 vCPUs measured the parent, the
 protected default and the protected engine with one reusable 64 MiB slot.

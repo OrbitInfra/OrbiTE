@@ -209,6 +209,66 @@ fn direct_read_copies_only_each_cqes_prefix_after_truncate() -> Result<()> {
 }
 
 #[test]
+fn large_direct_read_uses_device_alignment_when_huge_alignment_is_unavailable() -> Result<()> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static HINT_ATTEMPTS: AtomicUsize = AtomicUsize::new(0);
+    let Some(dir) = directory("ORBITE_EXT4_DIR") else {
+        return Ok(());
+    };
+    if !kernel() {
+        return Ok(());
+    }
+    let length = 2 << 20;
+    let image: Vec<_> = (0..length).map(|i| (i % 251) as u8).collect();
+    for prefix in [length, length - PAGE + 511] {
+        let (mut f, trace, start) = direct_fixture(&dir, &image, true)?;
+        Arc::get_mut(&mut f.engine)
+            .unwrap()
+            .io_uring
+            .as_mut()
+            .unwrap()
+            .allocate = |len, align| {
+            if align > PAGE {
+                HINT_ATTEMPTS.fetch_add(1, Ordering::Relaxed);
+                Err(Error::ResourceExhausted)
+            } else {
+                task::Bounce::new(len, align)
+            }
+        };
+        warm(&f, &trace)?;
+        assert_eq!(
+            f.engine.file_segment_info(&f.segment)?.direct_io,
+            Some(true)
+        );
+        let mut expected = vec![0; f.memory.len()];
+        f.memory.read(0, &mut expected)?;
+        expected[start..start + prefix].copy_from_slice(&image[..prefix]);
+        if prefix < length {
+            trace.lock().unwrap().truncate_to = Some(prefix as u64);
+        }
+        let before = HINT_ATTEMPTS.load(Ordering::Relaxed);
+        let mut batch = f.engine.submit_async(
+            TransferOp::Read,
+            &f.segment,
+            &[f.request(start, 0, length)],
+            None,
+            TIMEOUT,
+        )?;
+        let status = batch.wait(TIMEOUT)?;
+        assert_eq!(HINT_ATTEMPTS.load(Ordering::Relaxed) - before, 1);
+        assert!(status.locally_drained);
+        assert_eq!(status.transferred_bytes, prefix);
+        assert_eq!(status.completed_tasks, usize::from(prefix == length));
+        let mut received = vec![0; expected.len()];
+        f.memory.read(0, &mut received)?;
+        assert_eq!(received, expected);
+        batch.free()?;
+        assert_eq!(f.engine.stats()?.io_uring.unwrap().pageable_bytes, 0);
+    }
+    Ok(())
+}
+
+#[test]
 fn direct_vector_read_preserves_ranges_beyond_eof_and_skips_padding() -> Result<()> {
     let Some(dir) = directory("ORBITE_EXT4_DIR") else {
         return Ok(());

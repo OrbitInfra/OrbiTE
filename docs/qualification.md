@@ -743,7 +743,10 @@ exercise worker submission. Truncating the file after preparation produces
 full, short and zero-byte CQEs. The tests read back the entire destination,
 including bytes beyond EOF and the guards around vector elements and padding.
 Scratch allocation failure must leave the ring untouched and return the
-pageable charge. The [direct READ profile](benchmarks.md#eight-contiguous-direct-reads)
+pageable charge. A 2 MiB direct READ control rejects the optional huge-page
+alignment at allocation. It checks the complete destination after a full CQE
+and after a truncate between preflight and ring submission. The
+[direct READ profile](benchmarks.md#eight-contiguous-direct-reads)
 checks the descriptor and the kernel block events for the warmed workload.
 
 `cargo test --locked --lib segment::file::tests` uses real temporary files.
