@@ -53,7 +53,12 @@ def probeoffset():
 tr=Path("/sys/kernel/tracing");ev="orbite_prefix_guard"
 restore()
 cmd([raw,path,length,"uring","full"])
-with (tr/"uprobe_events").open("a") as f:f.write(f"p:{ev} {exe}:0x{probeoffset():x}\n")
+def setprobe(spec):
+    data=(spec+"\n").encode()
+    fd=os.open(tr/"uprobe_events",os.O_WRONLY|os.O_APPEND)
+    try:assert os.write(fd,data)==len(data)
+    finally:os.close(fd)
+setprobe(f"p:{ev} {exe}:0x{probeoffset():x}")
 enable=tr/"events/uprobes"/ev/"enable"
 try:
     enable.write_text("1")
@@ -81,4 +86,4 @@ try:
     print("PASS all confirmed prefixes, tails, both guards and EIO",flush=True)
 finally:
     if enable.exists():enable.write_text("0")
-    with (tr/"uprobe_events").open("a") as f:f.write(f"-:{ev}\n")
+    setprobe(f"-:{ev}")

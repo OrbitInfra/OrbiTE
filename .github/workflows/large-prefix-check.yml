@@ -15,7 +15,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 2
+          fetch-depth: 0
       - name: Build public consumer against confirmed source
         run: |
           git diff --exit-code 9066bdd785645cad6118ca1fd74e4dc1bc3d607f HEAD -- src Cargo.toml Cargo.lock
