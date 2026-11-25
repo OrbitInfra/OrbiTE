@@ -1,0 +1,83 @@
+name: Balanced SHM read latency
+on:
+  push:
+    branches: ['test/shm-read-p99-retest']
+    paths: ['benches/shm_retest.py', '.github/workflows/shm-read-retest.yml']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  measure:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        replica: [1, 2]
+    env:
+      FIXED_SHA: 12d1e83964a596d9b578e9d2879b5cd78e776da6
+      MAIN_SHA: e4a12a20b4f47201c48f9e562aa5d95ea1db83e4
+      REPLICA: ${{ matrix.replica }}
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          fetch-depth: 0
+      - name: Capture provenance and build both engine revisions
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          out="$RUNNER_TEMP/shm-study"
+          mkdir -p "$out"
+          git worktree add --detach "$RUNNER_TEMP/shm-main" "$MAIN_SHA"
+          git worktree add --detach "$RUNNER_TEMP/shm-fixed" "$FIXED_SHA"
+          test "$(git -C "$RUNNER_TEMP/shm-main" rev-parse HEAD)" = "$MAIN_SHA"
+          test "$(git -C "$RUNNER_TEMP/shm-fixed" rev-parse HEAD)" = "$FIXED_SHA"
+          test "$(findmnt -n -o FSTYPE -T /dev/shm)" = tmpfs
+          uname -a > "$out/uname"
+          cat /proc/sys/kernel/random/boot_id > "$out/boot"
+          findmnt -T /dev/shm > "$out/mount"
+          lscpu > "$out/lscpu"
+          taskset -pc $$ > "$out/affinity"
+          git rev-parse HEAD > "$out/harness-revision"
+          env | grep -E '^(ImageOS|ImageVersion|RUNNER_ARCH)=' > "$out/runner"
+          mountpoint -q /dev/shm
+          for toolchain in stable 1.85.0; do
+            rustup toolchain install "$toolchain" --profile minimal
+            rustc +"$toolchain" -Vv > "$out/$toolchain-rustc"
+            for kind in fixed main; do
+              src="$RUNNER_TEMP/shm-$kind"
+              cd "$src"
+              git rev-parse HEAD > "$out/$toolchain-$kind-revision"
+              sha256sum Cargo.lock benches/transfer.rs > "$out/$toolchain-$kind-inputs"
+              caller="$RUNNER_TEMP/shm-main/benches/transfer.rs"
+              export RUSTC_WORKSPACE_WRAPPER="$RUNNER_TEMP/shm-main/benches/build_caller.py"
+              export CARGO_TARGET_DIR="$RUNNER_TEMP/shm-build/$toolchain/$kind"
+              cargo +"$toolchain" build --release --locked --features io-uring --bench transfer --message-format=json > "$out/$toolchain-$kind-build.jsonl"
+              exe="$(jq -r 'select(.target.name=="transfer" and .executable!=null) | .executable' "$out/$toolchain-$kind-build.jsonl")"
+              test -x "$exe"
+              PYTHONPATH="$RUNNER_TEMP/shm-main/benches" python3 -c 'from pathlib import Path; from run import check_caller_dep_info; import sys; e,c=map(Path,sys.argv[1:]); check_caller_dep_info(e.with_suffix(".d").read_text(),e,c)' "$exe" "$caller"
+              sha256sum "$exe" "$caller" "$RUSTC_WORKSPACE_WRAPPER" > "$out/$toolchain-$kind-selected"
+              cp "$exe" "$RUNNER_TEMP/shm-$toolchain-$kind-bench"
+            done
+          done
+      - name: Measure byte-checked aligned SHM reads
+        shell: bash
+        run: |
+          set -euo pipefail
+          chains=(stable 1.85.0)
+          if [[ "$REPLICA" = 2 ]]; then chains=(1.85.0 stable); fi
+          for toolchain in "${chains[@]}"; do
+            python3 benches/shm_retest.py --harness "$RUNNER_TEMP/shm-main" \
+              --fixed "$RUNNER_TEMP/shm-$toolchain-fixed-bench" --main "$RUNNER_TEMP/shm-$toolchain-main-bench" \
+              --out "$RUNNER_TEMP/shm-study/$toolchain" --replica "$REPLICA" --compiler "$toolchain"
+          done
+      - name: Upload samples and receipts
+        if: always()
+        uses: actions/upload-artifact@v7.0.2
+        with:
+          name: shm-read-replica-${{ matrix.replica }}
+          path: ${{ runner.temp }}/shm-study
+          if-no-files-found: error
