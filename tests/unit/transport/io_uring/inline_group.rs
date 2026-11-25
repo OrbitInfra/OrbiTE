@@ -78,6 +78,7 @@ fn large_direct_read_with_negative_cqe_preserves_the_entire_destination() -> Res
     );
     assert!(status.locally_drained && task.locally_drained);
     assert_eq!((task.state, task.transferred_bytes), (TaskState::Failed, 0));
+    assert_eq!((status.completed_tasks, status.transferred_bytes), (0, 0));
     assert!(
         matches!(&task.failure.unwrap().error, Error::Backend { code, .. } if *code == -libc::EIO)
     );
