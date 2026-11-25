@@ -15,6 +15,7 @@ struct Trace {
     submit_limit: Option<u32>,
     invalid_sq_head: bool,
     invalid_cqe: bool,
+    read_bytes_before_eio: Option<usize>,
     truncate_to: Option<u64>,
     errors: std::collections::VecDeque<i32>,
     alive: std::sync::Weak<()>,
@@ -70,7 +71,17 @@ impl Ring for Observed {
         for _ in 0..n {
             // Hold real CQEs and expose them in reverse order, so independent
             // task publication and handoff do not depend on kernel timing.
-            let (id, result) = self.ring.reap(Instant::now() + EVENTUAL_PROGRESS)?;
+            let (id, mut result) = self.ring.reap(Instant::now() + EVENTUAL_PROGRESS)?;
+            if let Ok(bytes) = usize::try_from(result) {
+                let mut trace = self.trace.lock().unwrap();
+                if let Some(left) = trace.read_bytes_before_eio {
+                    trace.read_bytes_before_eio = left.checked_sub(bytes);
+                    if trace.read_bytes_before_eio.is_none() {
+                        // Replace a real, completed READ receipt after its DMA writes.
+                        result = -libc::EIO;
+                    }
+                }
+            }
             self.receipts
                 .push_front((if invalid_cqe { u64::MAX } else { id }, result));
         }
@@ -123,7 +134,9 @@ fn observed_at(
     truncate: bool,
     no_space: bool,
 ) -> Result<(Fixture, Arc<Mutex<Trace>>)> {
-    let mut f = Fixture::new(directory, image, TransferEngine::new(Default::default())?)?;
+    let mut config = EngineConfig::default();
+    config.max_transfer_bytes = config.max_transfer_bytes.max(image.len());
+    let mut f = Fixture::new(directory, image, TransferEngine::new(config)?)?;
     let path = f.path.clone();
     let trace = Arc::new(Mutex::new(Trace::default()));
     let copy = trace.clone();
