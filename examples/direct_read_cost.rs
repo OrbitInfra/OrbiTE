@@ -234,6 +234,7 @@ struct Window {
     exchange: Option<Exchange>,
     iovs: Vec<libc::iovec>,
     pipe: Option<(OwnedFd, OwnedFd, usize)>,
+    pipes: Vec<(OwnedFd, OwnedFd)>,
 }
 impl Window {
     fn new(mode: &str, slots: usize, chunk: usize, dst: *mut u8) -> io::Result<Self> {
@@ -255,7 +256,7 @@ impl Window {
         let raw = exchange.is_some()
             || mode.starts_with("raw")
             || mode.starts_with("snap")
-            || mode == "pipe";
+            || mode.starts_with("pipe");
         let huge = mode.starts_with("huge") || mode.starts_with("move");
         let scratch = (!raw).then(|| Bytes::new(chunk * slots, if huge { 2 << 20 } else { 4096 }));
         if huge {
@@ -295,12 +296,33 @@ impl Window {
         } else {
             None
         };
+        let mut pipes = Vec::new();
+        if mode.starts_with("pipegroup") {
+            for _ in 0..slots {
+                let mut pair = [-1; 2];
+                // SAFETY: pipe2 initializes both descriptors in the supplied array.
+                if unsafe { libc::pipe2(pair.as_mut_ptr(), libc::O_CLOEXEC) } != 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                // SAFETY: pipe2 returned two new owned file descriptors.
+                let (rd, wr) =
+                    unsafe { (OwnedFd::from_raw_fd(pair[0]), OwnedFd::from_raw_fd(pair[1])) };
+                // SAFETY: this fcntl operates on the retained write descriptor.
+                let capacity = unsafe { libc::fcntl(pair[1], libc::F_SETPIPE_SZ, chunk as i32) };
+                if capacity < 0 {
+                    return Err(io::Error::last_os_error());
+                }
+                assert!(capacity as usize >= chunk);
+                pipes.push((rd, wr));
+            }
+        }
         Ok(Self {
             ring,
             scratch,
             exchange,
             iovs,
             pipe,
+            pipes,
         })
     }
     fn read(
@@ -314,6 +336,11 @@ impl Window {
         let slots = self.iovs.len();
         let mut io_cost = [0; 3];
         let mut copy_cost = [0; 3];
+        if !self.pipes.is_empty() {
+            let (read, copy, done) = self.splice_read(fd, total, chunk, dst)?;
+            assert_eq!(done, total);
+            return Ok((read, copy));
+        }
         if let Some((rd, wr, capacity)) = &self.pipe {
             let mut base = 0;
             while base < total {
@@ -428,6 +455,70 @@ impl Window {
         }
         Ok((io_cost, copy_cost))
     }
+
+    fn splice_read(
+        &mut self,
+        fd: i32,
+        total: usize,
+        chunk: usize,
+        dst: *mut u8,
+    ) -> io::Result<([u64; 3], [u64; 3], usize)> {
+        let mut read = [0; 3];
+        let mut copy = [0; 3];
+        let mut done = 0;
+        for base in (0..total).step_by(self.pipes.len() * chunk) {
+            let start = Time::now();
+            let width = self.pipes.len().min((total - base) / chunk);
+            for (i, (_, w)) in self.pipes[..width].iter().enumerate() {
+                let entry = opcode::Splice::new(
+                    types::Fd(fd),
+                    (4096 + base + i * chunk) as i64,
+                    types::Fd(w.as_raw_fd()),
+                    -1,
+                    chunk as u32,
+                )
+                .build()
+                .user_data(i as u64);
+                // SAFETY: the direct file and private pipe remain live until every operation returns.
+                unsafe {
+                    self.ring.submission().push(&entry).expect("ring depth");
+                }
+            }
+            assert_eq!(self.ring.submit_and_wait(width)?, width);
+            let mut receipts = [None; 64];
+            for cq in self.ring.completion() {
+                let id = cq.user_data() as usize;
+                assert!(id < width && receipts[id].replace(cq.result()).is_none());
+            }
+            let now = Time::now();
+            add(&mut read, now.since(&start));
+            for (i, (r, _)) in self.pipes[..width].iter().enumerate() {
+                let n = receipts[i].expect("missing CQE");
+                if n < 0 {
+                    return Err(io::Error::from_raw_os_error(-n));
+                }
+                let mut left = n as usize;
+                assert!(left <= chunk);
+                while left > 0 {
+                    // SAFETY: the positive splice receipt bounds these initialized pipe bytes;
+                    // the destination covers the entire checked request.
+                    let copied = unsafe { libc::read(r.as_raw_fd(), dst.add(done).cast(), left) };
+                    if copied < 0 {
+                        return Err(io::Error::last_os_error());
+                    }
+                    assert!(copied > 0);
+                    done += copied as usize;
+                    left -= copied as usize;
+                }
+                if n as usize != chunk {
+                    add(&mut copy, Time::now().since(&now));
+                    return Ok((read, copy, done));
+                }
+            }
+            add(&mut copy, Time::now().since(&now));
+        }
+        Ok((read, copy, done))
+    }
 }
 fn main() -> io::Result<()> {
     let a: Vec<String> = std::env::args().collect();
@@ -522,9 +613,10 @@ fn main() -> io::Result<()> {
                 exchange,
                 iovs,
                 pipe,
+                pipes,
             } = window;
             idle_ring = Some(ring);
-            drop((scratch, exchange, iovs, pipe));
+            drop((scratch, exchange, iovs, pipe, pipes));
         } else if mode.contains("keep") {
             reusable = Some(window)
         } else {
@@ -544,6 +636,32 @@ fn main() -> io::Result<()> {
     let stat = std::fs::read_to_string("/proc/self/status")?;
     let rss = stat.lines().find(|s| s.starts_with("VmHWM:")).unwrap();
     let real_bytes = read_bytes()? - initial_bytes;
+    if mode.starts_with("pipegroup") {
+        for cut in [0, 512, chunk + 513, total - 512] {
+            file.set_len((4096 + total) as u64)?;
+            file.write_all_at(&image, 4096)?;
+            file.sync_data()?;
+            let mut window = Window::new(mode, slots, chunk, target)?;
+            file.set_len((4096 + cut) as u64)?;
+            // SAFETY: all previously submitted operations drained, and dest owns this full extent.
+            unsafe {
+                for i in 0..dest.len {
+                    *dest.ptr.add(i) = (i % 251) as u8;
+                }
+            }
+            let (_, _, n) = window.splice_read(direct.as_raw_fd(), total, chunk, target)?;
+            assert_eq!(n, cut);
+            // SAFETY: all dest bytes are initialized and all pipe reads completed.
+            let bytes = unsafe { std::slice::from_raw_parts(dest.ptr, dest.len) };
+            assert_eq!(&bytes[guard..guard + cut], &image[..cut]);
+            assert!(
+                bytes
+                    .iter()
+                    .enumerate()
+                    .all(|(i, &b)| (guard..guard + cut).contains(&i) || b == (i % 251) as u8)
+            );
+        }
+    }
     if mode.starts_with("xchg") {
         let size = chunk * slots;
         let mut exchange = Exchange::new(size, target, mode.contains("thp"))?;
