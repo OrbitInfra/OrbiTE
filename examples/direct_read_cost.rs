@@ -8,6 +8,8 @@ use std::os::fd::{AsRawFd, FromRawFd, OwnedFd};
 use std::os::unix::fs::{FileExt, OpenOptionsExt};
 use std::ptr::NonNull;
 use std::time::Instant;
+#[path = "direct_read_cost/pipeline.rs"]
+mod pipeline;
 
 struct Bytes {
     data: NonNull<u8>,
@@ -256,7 +258,7 @@ impl Window {
             || mode.starts_with("raw")
             || mode.starts_with("snap")
             || mode == "pipe";
-        let huge = mode.starts_with("huge") || mode.starts_with("move");
+        let huge = mode.contains("huge") || mode.starts_with("move");
         let scratch = (!raw).then(|| Bytes::new(chunk * slots, if huge { 2 << 20 } else { 4096 }));
         if huge {
             let b = scratch.as_ref().unwrap();
@@ -513,7 +515,25 @@ fn main() -> io::Result<()> {
             },
         };
         let prepared = Time::now();
-        let (io_cost, copy_cost) = window.read(direct.as_raw_fd(), mode, total, chunk, target)?;
+        let mut overlaps = 0;
+        let mut arrivals = 0;
+        let (io_cost, copy_cost) = if mode.contains("roll") {
+            if mode.ends_with("-nt") {
+                assert!(std::is_x86_feature_detected!("avx2"));
+            }
+            let start = Time::now();
+            let result = window.rolling_read(direct.as_raw_fd(), mode, total, chunk, target, None);
+            assert_eq!((result.prefix, result.retired), (total, total / chunk));
+            overlaps = result.overlap_opportunities;
+            arrivals = result.arrivals_during_copy;
+            let mut io_cost = Time::now().since(&start);
+            for (n, c) in io_cost.iter_mut().zip(result.copies) {
+                *n -= c;
+            }
+            (io_cost, result.copies)
+        } else {
+            window.read(direct.as_raw_fd(), mode, total, chunk, target)?
+        };
         let copied = Time::now();
         if mode == "protected-ring" {
             let Window {
@@ -538,12 +558,54 @@ fn main() -> io::Result<()> {
         assert_eq!(&bytes[guard..guard + total], image.as_slice());
         assert!(bytes[guard + total..].iter().all(|&x| x == 0xa5));
         if i >= 3 {
-            rows.push(json!({"setup":prepared.since(&before),"read":io_cost,"copy":copy_cost,"retire":finished.since(&copied),"total":finished.since(&before)}));
+            rows.push(json!({"setup":prepared.since(&before),"read":io_cost,"copy":copy_cost,"retire":finished.since(&copied),"total":finished.since(&before),"can_overlap":overlaps,"arrived_during_copy":arrivals}));
         }
     }
     let stat = std::fs::read_to_string("/proc/self/status")?;
     let rss = stat.lines().find(|s| s.starts_with("VmHWM:")).unwrap();
     let real_bytes = read_bytes()? - initial_bytes;
+    if mode.contains("roll") {
+        drop(reusable.take());
+        let mut window = Window::new(mode, slots, chunk, target)?;
+        for (prefix, bad_index) in [
+            (slots * chunk + 123, None),
+            (slots * chunk, None),
+            (chunk, Some(1)),
+        ] {
+            assert!(prefix < total && slots >= 2);
+            file.set_len((4096 + total) as u64)?;
+            file.write_all_at(&image, 4096)?;
+            file.sync_data()?;
+            // SAFETY: all previous reads drained. Initialize the whole guarded mapping.
+            let bytes = unsafe { std::slice::from_raw_parts_mut(dest.ptr, dest.len) };
+            for (i, x) in bytes.iter_mut().enumerate() {
+                *x = (i % 239) as u8;
+            }
+            let c = pipeline::Control {
+                truncate_after_first: bad_index
+                    .is_none()
+                    .then_some((&file, (4096 + prefix) as u64)),
+                bad_index,
+            };
+            let rr = window.rolling_read(direct.as_raw_fd(), mode, total, chunk, target, Some(&c));
+            assert_eq!(rr.prefix, prefix);
+            if bad_index.is_some() {
+                assert!(
+                    rr.successes_after_gap > 0,
+                    "later valid CQE must not publish beyond failure"
+                );
+            }
+            // SAFETY: every submitted slot was drained and the output is initialized.
+            let actual = unsafe { std::slice::from_raw_parts(dest.ptr, dest.len) };
+            assert_eq!(&actual[guard..guard + prefix], &image[..prefix]);
+            assert!(
+                actual
+                    .iter()
+                    .enumerate()
+                    .all(|(i, b)| (guard..guard + prefix).contains(&i) || *b == (i % 239) as u8)
+            );
+        }
+    }
     if mode.starts_with("xchg") {
         let size = chunk * slots;
         let mut exchange = Exchange::new(size, target, mode.contains("thp"))?;

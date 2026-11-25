@@ -38,7 +38,7 @@ jobs:
           sudo prlimit --pid "$$" --memlock=134217728:134217728
           ulimit -l
           rustc -Vv
-          python3 -B benches/small_ring_cost.py target/release/examples/direct_read_cost "$dir" "$RUNNER_TEMP/read-costs"
+          python3 -B benches/rolling_read_cost.py target/release/examples/direct_read_cost "$dir" "$RUNNER_TEMP/read-costs"
       - uses: actions/upload-artifact@v7.0.2
         if: always()
         with:
