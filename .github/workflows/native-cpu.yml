@@ -18,18 +18,20 @@ jobs:
         run: |
           rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
           cargo build --release --locked --features io-uring --example direct_read_cost
-      - name: Measure real ext4 direct reads
+      - name: Measure ext4 direct reads on a RAM-backed loop device
         shell: bash
         run: |
           sudo sysctl -w kernel.io_uring_disabled=0
           dir="$RUNNER_TEMP/direct-ext4"
-          mkdir -p "$dir"
-          if [[ "$(findmnt -n -o FSTYPE -T "$dir")" != ext4 ]]; then
-            truncate -s 512M "$RUNNER_TEMP/direct-ext4.img"
-            mkfs.ext4 -q -F "$RUNNER_TEMP/direct-ext4.img"
-            sudo mount -o loop "$RUNNER_TEMP/direct-ext4.img" "$dir"
-            sudo chown "$(id -u):$(id -g)" "$dir"
-          fi
+          backing="$RUNNER_TEMP/ram-block"
+          mkdir -p "$dir" "$backing"
+          sudo mount -t tmpfs -o size=768M tmpfs "$backing"
+          sudo truncate -s 512M "$backing/ext4.img"
+          sudo mkfs.ext4 -q -F "$backing/ext4.img"
+          sudo mount -o loop "$backing/ext4.img" "$dir"
+          sudo chown "$(id -u):$(id -g)" "$dir"
+          findmnt -n -o SOURCE,FSTYPE,OPTIONS -T "$backing/ext4.img"
+          losetup --list --output NAME,BACK-FILE,DIO
           findmnt -n -o SOURCE,FSTYPE,OPTIONS -T "$dir"
           lscpu
           uname -a
@@ -42,6 +44,6 @@ jobs:
       - uses: actions/upload-artifact@v7.0.2
         if: always()
         with:
-          name: direct-cost-${{ matrix.rust }}
+          name: ram-loop-${{ matrix.rust }}
           path: ${{ runner.temp }}/read-costs/
           if-no-files-found: error
