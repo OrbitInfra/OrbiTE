@@ -259,7 +259,9 @@ impl Window {
             || mode.starts_with("snap")
             || mode == "pipe";
         let huge = mode.contains("huge") || mode.starts_with("move");
-        let scratch = (!raw).then(|| Bytes::new(chunk * slots, if huge { 2 << 20 } else { 4096 }));
+        let bias = pipeline::bias(mode);
+        let scratch =
+            (!raw).then(|| Bytes::new(chunk * slots + bias, if huge { 2 << 20 } else { 4096 }));
         if huge {
             let b = scratch.as_ref().unwrap();
             // SAFETY: the pointer and length cover complete aligned pages in this allocation.
@@ -269,7 +271,10 @@ impl Window {
         }
         let iovs: Vec<_> = (0..slots)
             .map(|i| libc::iovec {
-                iov_base: scratch.as_ref().map_or(dst, |b| b.ptr(i * chunk)).cast(),
+                iov_base: scratch
+                    .as_ref()
+                    .map_or(dst, |b| b.ptr(i * chunk + bias))
+                    .cast(),
                 iov_len: chunk,
             })
             .collect();
@@ -457,6 +462,33 @@ fn main() -> io::Result<()> {
     // SAFETY: F_GETFL reads status for the live descriptor and takes no variadic data.
     let flags = unsafe { libc::fcntl(direct.as_raw_fd(), libc::F_GETFL) };
     assert!(flags >= 0 && flags & libc::O_DIRECT != 0);
+    let mut sx = std::mem::MaybeUninit::<libc::statx>::uninit();
+    // SAFETY: AT_EMPTY_PATH queries this live ext4 fd and sx receives statx output.
+    let align = unsafe {
+        assert_eq!(
+            libc::statx(
+                direct.as_raw_fd(),
+                c"".as_ptr(),
+                libc::AT_EMPTY_PATH,
+                libc::STATX_DIOALIGN,
+                sx.as_mut_ptr()
+            ),
+            0
+        );
+        let s = sx.assume_init();
+        if s.stx_mask & libc::STATX_DIOALIGN != 0 {
+            s.stx_dio_mem_align
+        } else {
+            0
+        }
+    };
+    if pipeline::bias(mode) > 0 && (align == 0 || pipeline::bias(mode) % align as usize != 0) {
+        println!(
+            "{}",
+            json!({"unsupported_bias":true,"mode":mode,"dio_align":align,"bias":pipeline::bias(mode)})
+        );
+        return Ok(());
+    }
     let huge = 2 << 20;
     let dest = Region::new(total + if total < huge { 8192 } else { 2 * huge + 8192 })?;
     let target = if total < huge {
@@ -475,6 +507,7 @@ fn main() -> io::Result<()> {
     }
     let mut image = vec![0xa5u8; total];
     let mut rows: Vec<Value> = Vec::new();
+    let mut detail = Vec::new();
     let mut reusable = None;
     let mut idle_ring = None;
     let read_bytes = || -> io::Result<u64> {
@@ -490,7 +523,7 @@ fn main() -> io::Result<()> {
     if mode.contains("keep") {
         reusable = Some(Window::new(mode, slots, chunk, target)?)
     }
-    for i in 0..3 + count {
+    for i in 0..3 + count + 1 {
         let v = (i % 251 + 1) as u8;
         for (tile, region) in image.chunks_exact_mut(4096).enumerate() {
             region.fill(v.wrapping_add((tile % 251) as u8));
@@ -518,11 +551,19 @@ fn main() -> io::Result<()> {
         let mut overlaps = 0;
         let mut arrivals = 0;
         let (io_cost, copy_cost) = if mode.contains("roll") {
-            if mode.ends_with("-nt") {
+            if mode.ends_with("-nt") || mode.ends_with("-gnt") {
                 assert!(std::is_x86_feature_detected!("avx2"));
             }
             let start = Time::now();
-            let result = window.rolling_read(direct.as_raw_fd(), mode, total, chunk, target, None);
+            let result = window.rolling_read(
+                direct.as_raw_fd(),
+                mode,
+                total,
+                chunk,
+                target,
+                None,
+                i >= 3 + count,
+            );
             assert_eq!((result.prefix, result.retired), (total, total / chunk));
             overlaps = result.overlap_opportunities;
             arrivals = result.arrivals_during_copy;
@@ -557,7 +598,11 @@ fn main() -> io::Result<()> {
         assert!(bytes[..guard].iter().all(|&x| x == 0xa5));
         assert_eq!(&bytes[guard..guard + total], image.as_slice());
         assert!(bytes[guard + total..].iter().all(|&x| x == 0xa5));
-        if i >= 3 {
+        if i >= 3 + count {
+            detail.push(
+                json!({"copy":copy_cost, "can_overlap":overlaps,"arrived_during_copy":arrivals}),
+            );
+        } else if i >= 3 {
             rows.push(json!({"setup":prepared.since(&before),"read":io_cost,"copy":copy_cost,"retire":finished.since(&copied),"total":finished.since(&before),"can_overlap":overlaps,"arrived_during_copy":arrivals}));
         }
     }
@@ -587,7 +632,15 @@ fn main() -> io::Result<()> {
                     .then_some((&file, (4096 + prefix) as u64)),
                 bad_index,
             };
-            let rr = window.rolling_read(direct.as_raw_fd(), mode, total, chunk, target, Some(&c));
+            let rr = window.rolling_read(
+                direct.as_raw_fd(),
+                mode,
+                total,
+                chunk,
+                target,
+                Some(&c),
+                false,
+            );
             assert_eq!(rr.prefix, prefix);
             if bad_index.is_some() {
                 assert!(
@@ -701,7 +754,7 @@ fn main() -> io::Result<()> {
     }
     println!(
         "{}",
-        json!({"mode":mode,"size":total,"chunk":chunk,"slots":slots,"trials":rows,"hwm":rss,"read_bytes":real_bytes,"verified":true})
+        json!({"mode":mode,"size":total,"chunk":chunk,"slots":slots,"trials":rows,"hwm":rss,"read_bytes":real_bytes,"verified":true,"probe":detail,"dio_align":align,"bias":pipeline::bias(mode)})
     );
     drop(direct);
     drop(file);

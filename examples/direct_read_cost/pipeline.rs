@@ -1,6 +1,46 @@
 use super::*;
 use std::fs::File;
 
+pub(super) fn bias(mode: &str) -> usize {
+    if mode.contains("off512") {
+        512
+    } else if mode.contains("off2k") {
+        2048
+    } else {
+        0
+    }
+}
+
+#[target_feature(enable = "avx2")]
+unsafe fn grouped_nt(src: *const u8, dst: *mut u8, len: usize) {
+    assert_eq!((src as usize | dst as usize | len) % 32, 0);
+    assert_eq!(len % 256, 0);
+    for at in (0..len).step_by(256) {
+        let source = src.wrapping_add(at);
+        let target = dst.wrapping_add(at);
+        let prefetch = src.wrapping_add((at + 2048).min(len - 64));
+        // SAFETY: 256 aligned confirmed source bytes and 256 disjoint destination
+        // bytes remain live. The caller fences all streaming stores before return.
+        unsafe {
+            std::arch::asm!(
+                "prefetcht0 [{prefetch}]",
+                "vmovdqa ymm0, [{source}]", "vmovdqa ymm1, [{source}+32]",
+                "vmovdqa ymm2, [{source}+64]", "vmovdqa ymm3, [{source}+96]",
+                "vmovdqa ymm4, [{source}+128]", "vmovdqa ymm5, [{source}+160]",
+                "vmovdqa ymm6, [{source}+192]", "vmovdqa ymm7, [{source}+224]",
+                "vmovntdq [{target}], ymm0", "vmovntdq [{target}+32], ymm1",
+                "vmovntdq [{target}+64], ymm2", "vmovntdq [{target}+96], ymm3",
+                "vmovntdq [{target}+128], ymm4", "vmovntdq [{target}+160], ymm5",
+                "vmovntdq [{target}+192], ymm6", "vmovntdq [{target}+224], ymm7",
+                source=in(reg) source, target=in(reg) target, prefetch=in(reg) prefetch,
+                out("ymm0") _, out("ymm1") _, out("ymm2") _, out("ymm3") _,
+                out("ymm4") _, out("ymm5") _, out("ymm6") _, out("ymm7") _,
+                options(nostack, preserves_flags)
+            )
+        }
+    }
+}
+
 #[derive(Default)]
 pub(super) struct Receipt {
     pub(super) prefix: usize,
@@ -28,6 +68,7 @@ impl Window {
         chunk: usize,
         dst: *mut u8,
         control: Option<&Control<'_>>,
+        detailed: bool,
     ) -> Receipt {
         let slots = self.iovs.len();
         let chunks = total / chunk;
@@ -35,6 +76,9 @@ impl Window {
         let mut posted = 0;
         let mut next = 0;
         let mut stopped = false;
+        let mut queued = 0;
+        let burst = mode.contains("burst");
+        let grouped = mode.ends_with("-gnt");
         let mut cqes = vec![None; slots];
         let bad_index = control.and_then(|c| c.bad_index);
         let mut truncate = control.and_then(|c| c.truncate_after_first);
@@ -77,6 +121,10 @@ impl Window {
         while next < posted {
             let slot = next % slots;
             while cqes[slot].is_none() {
+                if queued > 0 && self.ring.completion().is_empty() {
+                    submit(&mut self.ring, queued);
+                    queued = 0;
+                }
                 if self.ring.completion().is_empty() && self.ring.submit_and_wait(1).is_err() {
                     std::process::abort()
                 }
@@ -96,24 +144,30 @@ impl Window {
                 result.successes_after_gap += usize::from(received == chunk);
             } else {
                 if received > 0 {
-                    let remaining = posted - next - 1;
-                    let known = cqes.iter().filter(|s| s.is_some()).count();
-                    let before_cq = self.ring.completion().len();
-                    result.overlap_opportunities += usize::from(remaining > known + before_cq);
-                    let t = Time::now();
+                    let measure = detailed.then(|| {
+                        let before_cq = self.ring.completion().len();
+                        let known = cqes.iter().filter(|s| s.is_some()).count();
+                        result.overlap_opportunities +=
+                            usize::from(posted - next - 1 - queued > known + before_cq);
+                        (Time::now(), before_cq)
+                    });
                     let src = self.iovs[slot].iov_base.cast::<u8>();
                     let target = dst.wrapping_add(next * chunk);
                     // SAFETY: this slot returned its terminal CQE. The caller owns the
                     // whole output and we only publish the contiguous confirmed prefix.
                     unsafe {
-                        if mode.ends_with("-nt") && received == chunk {
+                        if grouped && received == chunk {
+                            grouped_nt(src, target, received);
+                        } else if mode.ends_with("-nt") && received == chunk {
                             stream_copy(src, target, received);
                         } else {
                             std::ptr::copy_nonoverlapping(src, target, received)
                         }
                     }
-                    add(&mut result.copies, Time::now().since(&t));
-                    result.arrivals_during_copy += self.ring.completion().len() - before_cq;
+                    if let Some((t, before_cq)) = measure {
+                        add(&mut result.copies, Time::now().since(&t));
+                        result.arrivals_during_copy += self.ring.completion().len() - before_cq;
+                    }
                     result.prefix += received;
                 }
                 stopped = received < chunk;
@@ -127,10 +181,19 @@ impl Window {
             if !stopped && posted < chunks {
                 queue(&mut self.ring, posted);
                 posted += 1;
-                submit(&mut self.ring, 1);
+                queued += 1;
+                if !burst || queued >= (slots / 2).max(1) {
+                    submit(&mut self.ring, queued);
+                    queued = 0;
+                }
             }
         }
-        assert_eq!(result.retired, posted);
+        if grouped {
+            // SAFETY: x86-64 provides SSE2. Publish all streaming stores before
+            // returning the completed prefix to the caller for inspection.
+            unsafe { std::arch::x86_64::_mm_sfence() }
+        }
+        assert_eq!((result.retired, queued), (posted, 0));
         result
     }
 }

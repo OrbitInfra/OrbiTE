@@ -9,13 +9,24 @@ exe, mount, output = sys.argv[1:]
 out = Path(output)
 out.mkdir()
 size = 64 << 20
-samples = 30
+samples = 24
 variants = [
-    ("raw", size, 1), ("huge", size, 1),
-    ("huge-keep", 4<<20, 2), ("huge-roll-keep", 4<<20, 2),
-    ("huge-roll-keep-nt", 4<<20, 2), ("huge-roll-keep-nt", 2<<20, 4),
-    ("fixed-huge-roll-keep-nt", 2<<20, 4), ("huge-roll-nt", 2<<20, 4),
-    ("huge-roll-keep-nt", 8<<20, 2), ("fixed-huge-roll-keep-nt", 4<<20, 4),
+    ("raw-A", size, 1), ("raw-B", size, 1), ("huge", size, 1),
+    ("fixed-huge-roll-keep-nt", 2<<20, 4),
+    ("fixed-huge-roll-keep-nt",512<<10,8),
+    ("fixed-huge-roll-keep-nt",256<<10,16),
+    ("fixed-huge-roll-keep-nt",128<<10,16),
+    ("fixed-huge-roll-keep-off512-nt",512<<10,8),
+    ("fixed-huge-roll-keep-off2k-nt",512<<10,8),
+    ("fixed-huge-roll-keep-gnt",512<<10,8),
+    ("fixed-huge-roll-keep-off512-gnt",512<<10,8),
+    ("fixed-huge-roll-keep-off2k-gnt",256<<10,16),
+    ("fixed-huge-roll-keep-off2k-burst-gnt",256<<10,16),
+    ("fixed-huge-roll-keep-off512-burst-gnt",128<<10,16),
+    ("fixed-huge-roll-keep-off512-burst-gnt",512<<10,8),
+    ("huge-roll-keep-off512-burst-gnt",512<<10,8),
+    ("fixed-huge-roll-keep-off512-burst",256<<10,16),
+    ("fixed-huge-roll-keep-off2k-gnt",2<<20,4),
 ]
 boot = Path("/proc/sys/kernel/random/boot_id").read_text().strip()
 for i in range(6):
@@ -26,8 +37,12 @@ for i in range(6):
     for mode, chunk, slots in ordered:
         cmd = [exe, mode, str(Path(mount)/"payload"), str(size), str(chunk), str(slots), str(samples)]
         data = json.loads(subprocess.check_output(cmd, text=True))
+        if data.get("unsupported_bias"):
+            print("unsupported address offset",mode,chunk,slots,data,flush=True)
+            (out/f"{i}-{mode}-{chunk}-{slots}-ineligible.json").write_text(json.dumps(data))
+            continue
         ts = data["trials"]
-        assert data["verified"] and data["read_bytes"] >= size*(samples + 3)
+        assert data["verified"] and data["read_bytes"] >= size*(samples + 4) and len(data["probe"])==1
         assert len(ts)==samples and data["size"]==size and data["chunk"]==chunk and data["slots"]==slots
         data.update(boot=boot, process=i, order=ordered)
         (out/f"{i}-{mode}-{chunk}-{slots}.json").write_text(json.dumps(data))
