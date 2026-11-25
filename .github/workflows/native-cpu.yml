@@ -9,17 +9,23 @@ jobs:
     steps:
       - uses: actions/checkout@v7.0.1
         with:
-          fetch-depth: 2
+          fetch-depth: 0
       - name: Build pristine and instrumented public callers on both toolchains
         run: |
           git worktree add --detach "$RUNNER_TEMP/plain" ea265fdecbea48e4f05dff32314f966251943f52
+          git worktree add --detach "$RUNNER_TEMP/fixed" 12d1e83964a596d9b578e9d2879b5cd78e776da6
           for tc in stable 1.85.0; do
             rustup toolchain install "$tc" --profile minimal
-            for kind in plain probe; do
+            for kind in plain fixed probe; do
               src="$GITHUB_WORKSPACE"
-              if [[ "$kind" == plain ]]; then src="$RUNNER_TEMP/plain"; fi
-              (cd "$src" && CARGO_TARGET_DIR="$RUNNER_TEMP/build-$tc-$kind" cargo +"$tc" build --release --locked --features io-uring --bench transfer --message-format=json) > "$RUNNER_TEMP/build.jsonl"
+              wrapper=()
+              if [[ "$kind" != probe ]]; then src="$RUNNER_TEMP/$kind"; fi
+              if [[ "$kind" == fixed ]]; then wrapper=("RUSTC_WORKSPACE_WRAPPER=$RUNNER_TEMP/plain/benches/build_caller.py"); fi
+              (cd "$src" && env "${wrapper[@]}" CARGO_TARGET_DIR="$RUNNER_TEMP/build-$tc-$kind" cargo +"$tc" build --release --locked --features io-uring --bench transfer --message-format=json) > "$RUNNER_TEMP/build.jsonl"
               jq -r 'select(.target.name=="transfer" and .executable!=null)|.executable' "$RUNNER_TEMP/build.jsonl" > "$RUNNER_TEMP/$tc-$kind.exe"
+              if [[ "$kind" == fixed ]]; then
+                PYTHONPATH=benches python3 -B -c 'from run import check_caller_dep_info; from pathlib import Path; import sys; exe=Path(Path(sys.argv[1]).read_text().strip()); check_caller_dep_info(exe.with_suffix(".d").read_text(),exe,Path(sys.argv[2]))' "$RUNNER_TEMP/$tc-$kind.exe" "$RUNNER_TEMP/plain/benches/transfer.rs"
+              fi
             done
           done
       - name: Measure production owners on direct ext4
