@@ -134,7 +134,9 @@ fn observed_at(
     truncate: bool,
     no_space: bool,
 ) -> Result<(Fixture, Arc<Mutex<Trace>>)> {
-    let mut f = Fixture::new(directory, image, TransferEngine::new(Default::default())?)?;
+    let mut config = EngineConfig::default();
+    config.max_transfer_bytes = config.max_transfer_bytes.max(image.len());
+    let mut f = Fixture::new(directory, image, TransferEngine::new(config)?)?;
     let path = f.path.clone();
     let trace = Arc::new(Mutex::new(Trace::default()));
     let copy = trace.clone();

@@ -1545,6 +1545,7 @@ fn rolling_direct_read_distinguishes_prefix_eof_and_mid_request_eio() -> Result<
         .collect();
     for mode in 0..3 {
         let mut config = EngineConfig::default();
+        config.max_transfer_bytes = SIZE;
         if mode == 2 {
             config.io_uring.pinned_staging = true;
             config.io_uring.staging_slots = 1;

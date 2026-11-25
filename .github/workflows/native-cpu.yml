@@ -36,6 +36,11 @@ jobs:
           tail -30 "$RUNNER_TEMP/red.log"
           grep -F 'left: (Failed, 8388608)' "$RUNNER_TEMP/red.log"
           grep -F 'right: (Failed, 0)' "$RUNNER_TEMP/red.log"
+          for tc in stable 1.85.0; do
+            rustup toolchain install "$tc" --profile minimal
+            cargo +"$tc" test --locked --features io-uring --lib rolling_direct_read_distinguishes_prefix_eof_and_mid_request_eio -- --nocapture |& tee "$RUNNER_TEMP/native-$tc.log"
+            grep -F '1 passed' "$RUNNER_TEMP/native-$tc.log"
+          done
       - uses: actions/upload-artifact@v7.0.2
         if: always()
         with:
@@ -43,3 +48,4 @@ jobs:
           path: |
             ${{ runner.temp }}/green.log
             ${{ runner.temp }}/red.log
+            ${{ runner.temp }}/native-*.log
