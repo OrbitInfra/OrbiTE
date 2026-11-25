@@ -1,0 +1,37 @@
+name: Single direct READ fixed-buffer control
+on:
+  push:
+    branches: [test/single-fixed-direct-read-copy]
+permissions:
+  contents: read
+jobs:
+  compare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 65
+    steps:
+      - uses: actions/checkout@v7.0.1
+      - name: Build one workload on both Rust compilers
+        run: |
+          for tc in stable 1.85.0; do
+            rustup toolchain install "$tc" --profile minimal
+            CARGO_TARGET_DIR="$RUNNER_TEMP/$tc" cargo +"$tc" build --release --locked --features io-uring --example direct_read_cost
+          done
+      - name: Compare single native direct READs on ext4
+        run: |
+          if test -e /proc/sys/kernel/io_uring_disabled; then sudo sysctl -w kernel.io_uring_disabled=0; fi
+          dir="$RUNNER_TEMP/fixed-ext4"
+          mkdir -p "$dir"
+          if [[ "$(findmnt -n -o FSTYPE -T "$dir")" != ext4 ]]; then
+            truncate -s 512M "$RUNNER_TEMP/ext4-fixed.img"
+            mkfs.ext4 -q -F "$RUNNER_TEMP/ext4-fixed.img"
+            sudo mount -o loop "$RUNNER_TEMP/ext4-fixed.img" "$dir"
+            sudo chown "$(id -u):$(id -g)" "$dir"
+          fi
+          sudo prlimit --pid "$$" --memlock=134217728:134217728
+          python3 -B benches/single_fixed_cost.py "$dir" "$RUNNER_TEMP/single-fixed-cost"
+      - uses: actions/upload-artifact@v7.0.2
+        if: always()
+        with:
+          name: ext4-single-fixed-control
+          path: ${{ runner.temp }}/single-fixed-cost/
+          if-no-files-found: warn

@@ -193,6 +193,85 @@ unsafe fn stream_copy(src: *const u8, dst: *mut u8, len: usize) {
     }
 }
 
+#[cfg(target_arch = "x86_64")]
+#[allow(unsafe_code)]
+#[target_feature(enable = "avx2")]
+unsafe fn stream_prefix(src: *const u8, dst: *mut u8, len: usize) {
+    use std::arch::x86_64::{__m256i, _mm_sfence, _mm256_load_si256, _mm256_stream_si256};
+    let bulk = len / 256 * 256;
+    // SAFETY: the caller checks AVX2, both alignments and the confirmed byte
+    // extent. The exclusive loan and private source are disjoint until publication.
+    unsafe {
+        for offset in (0..bulk).step_by(256) {
+            let from = src.add(offset).cast::<__m256i>();
+            let to = dst.add(offset).cast::<__m256i>();
+            let vectors: [__m256i; 8] = std::array::from_fn(|i| _mm256_load_si256(from.add(i)));
+            for (i, value) in vectors.into_iter().enumerate() {
+                _mm256_stream_si256(to.add(i), value);
+            }
+        }
+        std::ptr::copy_nonoverlapping(src.add(bulk), dst.add(bulk), len - bulk);
+        _mm_sfence();
+    }
+}
+
+struct CopyHelper {
+    send: std::sync::mpsc::SyncSender<(usize, usize, usize)>,
+    ack: std::sync::mpsc::Receiver<()>,
+    handle: std::thread::JoinHandle<()>,
+}
+impl CopyHelper {
+    fn new() -> Self {
+        let (send, rx) = std::sync::mpsc::sync_channel::<(usize, usize, usize)>(0);
+        let (complete, ack) = std::sync::mpsc::sync_channel(0);
+        let handle = std::thread::spawn(move || {
+            while let Ok((src, dst, len)) = rx.recv() {
+                // SAFETY: the caller grants disjoint exclusive destination space and
+                // keeps the source, registration and all storage live through the ack.
+                unsafe {
+                    stream_prefix(src as *const u8, dst as *mut u8, len);
+                }
+                complete.send(()).unwrap();
+            }
+        });
+        Self { send, ack, handle }
+    }
+    fn finish(self) {
+        drop(self.send);
+        self.handle.join().unwrap();
+    }
+}
+// Complete one full native CQE before publishing any part of a confirmed prefix.
+fn publish_prefix(src: *const u8, dst: *mut u8, len: usize, helper: Option<&CopyHelper>) {
+    if len == 0 {
+        return;
+    }
+    let half = if helper.is_some() && len >= 4 << 20 {
+        len / 2 / 256 * 256
+    } else {
+        0
+    };
+    if half > 0 {
+        helper
+            .unwrap()
+            .send
+            .send((
+                src.wrapping_add(half) as usize,
+                dst.wrapping_add(half) as usize,
+                len - half,
+            ))
+            .unwrap();
+    }
+    // SAFETY: x86 AVX2 and both disjoint ranges are checked at mode setup.
+    // Both halves are 32-byte aligned. The single-thread function fences the exact prefix.
+    unsafe {
+        stream_prefix(src, dst, if half == 0 { len } else { half });
+    }
+    if half > 0 {
+        helper.unwrap().ack.recv().unwrap();
+    }
+}
+
 fn move_pages(dst: *mut u8, src: *mut u8, len: usize) -> io::Result<()> {
     // This private diagnostic owns anonymous pages on both sides. Only whole,
     // fully completed pages enter this code. Check forward progress explicitly.
@@ -278,6 +357,19 @@ impl Window {
                 iov_len: chunk,
             })
             .collect();
+        if mode.contains("keep") && scratch.is_some() {
+            let ptr = scratch.as_ref().unwrap().ptr(0);
+            let bytes = chunk * slots;
+            // SAFETY: this scratch covers full privately owned pages, before any native submit.
+            unsafe {
+                for offset in (0..bytes).step_by(4096) {
+                    ptr.add(offset).write_volatile(0x6a);
+                }
+                let mut resident = vec![0u8; bytes / 4096];
+                assert_eq!(libc::mincore(ptr.cast(), bytes, resident.as_mut_ptr()), 0);
+                assert!(resident.iter().all(|b| b & 1 != 0));
+            }
+        }
         if mode.starts_with("fixed") {
             // SAFETY: every slot outlives the ring's registered buffer table.
             unsafe {
@@ -317,6 +409,7 @@ impl Window {
         total: usize,
         chunk: usize,
         dst: *mut u8,
+        helper: Option<&CopyHelper>,
     ) -> io::Result<([u64; 3], [u64; 3])> {
         let slots = self.iovs.len();
         let mut io_cost = [0; 3];
@@ -375,7 +468,7 @@ impl Window {
                 } else if self.scratch.is_none() {
                     self.iovs[i].iov_base = dst.wrapping_add(base + i * chunk).cast();
                 }
-                let sqe = if mode.starts_with("fixed") {
+                let sqe = if mode.starts_with("fixed") && !mode.contains("readv") {
                     opcode::ReadFixed::new(
                         types::Fd(fd),
                         self.iovs[i].iov_base.cast(),
@@ -422,6 +515,12 @@ impl Window {
                 let target = dst.wrapping_add(base);
                 if mode.starts_with("move") {
                     move_pages(target, b.ptr(0), n * chunk)?;
+                } else if mode.ends_with("-one") || mode.ends_with("-two") {
+                    assert!(
+                        std::is_x86_feature_detected!("avx2")
+                            && (target as usize | b.ptr(0) as usize) % 32 == 0
+                    );
+                    publish_prefix(b.ptr(0), target, n * chunk, helper);
                 } else if mode.ends_with("-nt") {
                     assert!(std::is_x86_feature_detected!("avx2"));
                     // SAFETY: these complete, aligned, disjoint ranges passed the full CQE check.
@@ -520,9 +619,12 @@ fn main() -> io::Result<()> {
             .unwrap())
     };
     let initial_bytes = read_bytes()?;
+    let helper = mode.ends_with("-two").then(CopyHelper::new);
+    let cold = Time::now();
     if mode.contains("keep") {
         reusable = Some(Window::new(mode, slots, chunk, target)?)
     }
+    let cold_setup = Time::now().since(&cold);
     for i in 0..3 + count + 1 {
         let v = (i % 251 + 1) as u8;
         for (tile, region) in image.chunks_exact_mut(4096).enumerate() {
@@ -573,7 +675,14 @@ fn main() -> io::Result<()> {
             }
             (io_cost, result.copies)
         } else {
-            window.read(direct.as_raw_fd(), mode, total, chunk, target)?
+            window.read(
+                direct.as_raw_fd(),
+                mode,
+                total,
+                chunk,
+                target,
+                helper.as_ref(),
+            )?
         };
         let copied = Time::now();
         if mode == "protected-ring" {
@@ -609,6 +718,67 @@ fn main() -> io::Result<()> {
     let stat = std::fs::read_to_string("/proc/self/status")?;
     let rss = stat.lines().find(|s| s.starts_with("VmHWM:")).unwrap();
     let real_bytes = read_bytes()? - initial_bytes;
+    // Direct fault controls for the one-SQE protected modes. The same fixed/readv opcode,
+    // address and confirmation rule drives full and short native reads before inspecting guards.
+    if mode.ends_with("-one") || mode.ends_with("-two") {
+        let mut tmp = None;
+        if reusable.is_none() {
+            tmp = Some(Window::new(mode, slots, chunk, target)?);
+        }
+        let window = reusable.as_mut().or(tmp.as_mut()).unwrap();
+        for prefix in [
+            Some((32 << 20) + 1),
+            Some((32 << 20) + 255),
+            Some(4095),
+            None,
+        ] {
+            file.set_len((4096 + total) as u64)?;
+            file.write_all_at(&image, 4096)?;
+            if let Some(n) = prefix {
+                file.set_len((4096 + n) as u64)?;
+            }
+            file.sync_data()?;
+            // SAFETY: all previous CQEs and both publication threads drained.
+            let dst = unsafe { std::slice::from_raw_parts_mut(dest.ptr, dest.len) };
+            for (i, v) in dst.iter_mut().enumerate() {
+                *v = (i % 239) as u8;
+            }
+            let fd = types::Fd(if prefix.is_some() {
+                direct.as_raw_fd()
+            } else {
+                -1
+            });
+            let iov = &window.iovs[0];
+            let entry = if mode.starts_with("fixed") && !mode.contains("readv") {
+                opcode::ReadFixed::new(fd, iov.iov_base.cast(), total as u32, 0)
+                    .offset(4096)
+                    .build()
+            } else {
+                opcode::Readv::new(fd, iov, 1).offset(4096).build()
+            };
+            // SAFETY: the full scratch, iovec, file and ring outlive the CQE.
+            unsafe {
+                window.ring.submission().push(&entry).unwrap();
+            }
+            assert_eq!(window.ring.submit_and_wait(1)?, 1);
+            let got = window.ring.completion().next().unwrap().result();
+            assert_eq!(got, prefix.map_or(-libc::EBADF, |n| n as i32));
+            let bytes = got.max(0) as usize;
+            publish_prefix(iov.iov_base.cast(), target, bytes, helper.as_ref());
+            // SAFETY: the CQE drained and all copy work has joined.
+            let dst = unsafe { std::slice::from_raw_parts(dest.ptr, dest.len) };
+            assert_eq!(&dst[guard..guard + bytes], &image[..bytes]);
+            assert!(
+                dst.iter()
+                    .enumerate()
+                    .all(|(i, b)| (guard..guard + bytes).contains(&i) || *b == (i % 239) as u8)
+            );
+        }
+    }
+    if let Some(h) = helper {
+        h.finish();
+    }
+
     if mode.contains("roll") {
         drop(reusable.take());
         let mut window = Window::new(mode, slots, chunk, target)?;
@@ -754,7 +924,7 @@ fn main() -> io::Result<()> {
     }
     println!(
         "{}",
-        json!({"mode":mode,"size":total,"chunk":chunk,"slots":slots,"trials":rows,"hwm":rss,"read_bytes":real_bytes,"verified":true,"probe":detail,"dio_align":align,"bias":pipeline::bias(mode)})
+        json!({"mode":mode,"size":total,"chunk":chunk,"slots":slots,"trials":rows,"hwm":rss,"cold_setup":cold_setup,"fixed_bytes":if mode.starts_with("fixed"){chunk*slots}else{0},"retained_scratch_bytes":if mode.contains("keep")&&!mode.starts_with("raw"){chunk*slots}else{0},"read_bytes":real_bytes,"verified":true,"probe":detail,"dio_align":align,"bias":pipeline::bias(mode)})
     );
     drop(direct);
     drop(file);
