@@ -242,6 +242,11 @@ fn run(p: &Parameters) -> Result<()> {
         config.max_failover_attempts = 0;
         config.max_transfer_bytes = LIMIT;
         config.max_inflight_bytes = LIMIT;
+        if std::env::var_os("ORBITE_LARGE_PHASE_POOL").is_some() {
+            config.io_uring.pinned_staging = true;
+            config.io_uring.staging_slot_kb = LIMIT / 1024;
+            config.io_uring.staging_slots = 1;
+        }
         config.hp_tcp = {
             let mut config = orbite::HpTcpConfig::default();
             config.enable = transport == Transport::HpTcp;

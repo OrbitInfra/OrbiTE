@@ -10,6 +10,9 @@ use super::FileRequest;
 use crate::memory::DmaLease;
 use crate::{Error, Result, TransferOp};
 
+#[path = "../../../bench_probes/owner.rs"]
+mod owner;
+
 pub(super) struct Bounce {
     pub(super) ptr: NonNull<u8>,
     layout: Layout,
@@ -111,6 +114,7 @@ enum HostMemory {
 }
 
 pub(super) struct Task {
+    probe: Option<Box<owner::Probe>>,
     pub(super) file: Arc<File>,
     memory: Option<HostMemory>,
     length: usize,
@@ -198,6 +202,7 @@ impl Task {
             };
             return Ok((
                 Self {
+                    probe: None,
                     file,
                     memory: Some(HostMemory::Vector {
                         _loans: loans,
@@ -243,8 +248,12 @@ impl Task {
         // A direct READ racing truncate can zero the rest of the last block
         // even when its CQE reports a shorter prefix. Keep that write private.
         let protect = request.lease.is_direct_read(operation, &file);
+        let mut probe = owner::Probe::start(request.length, protect);
         let bounce = if protect || memory.address().as_ptr() as usize % staging_alignment != 0 {
             let bounce = Scratch::acquire(transport, request.length, staging_alignment, protect)?;
+            if let Some(p) = &mut probe {
+                p.ready(bounce.address(), request.length);
+            }
             if operation == TransferOp::Write {
                 // SAFETY: the exclusive loan covers all initialized WRITE bytes.
                 // The fresh bounce is disjoint and has exactly that capacity.
@@ -270,6 +279,7 @@ impl Task {
         };
         Ok((
             Self {
+                probe,
                 file,
                 memory: Some(HostMemory::One(memory)),
                 length: request.length,
@@ -312,6 +322,9 @@ impl Task {
         }
         self.result = Some(result);
         self.late = late;
+        if let Some(p) = &mut self.probe {
+            p.cqe();
+        }
         if operation == TransferOp::Read && result > 0 {
             if let Some(bounce) = &self.bounce {
                 let source = bounce.address().as_ptr();
@@ -350,8 +363,14 @@ impl Task {
         }
         // Publish only after releasing this CQE's exclusive range. Another task
         // in the same ring can still be using its own disjoint range.
+        if let Some(p) = &mut self.probe {
+            p.copied();
+        }
         self.bounce.take();
         self.memory.take();
+        if let Some(p) = self.probe.take() {
+            p.emit(result);
+        }
         true
     }
 }
