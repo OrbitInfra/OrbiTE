@@ -1,0 +1,47 @@
+name: Large direct READ prefix controls
+on:
+  push:
+    branches: [test/verify-large-direct-prefix]
+permissions:
+  contents: read
+jobs:
+  ext4:
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        channel: [stable, 1.85.0]
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 2
+      - name: Build public consumer against confirmed source
+        run: |
+          git diff --exit-code 9066bdd785645cad6118ca1fd74e4dc1bc3d607f HEAD -- src Cargo.toml Cargo.lock
+          rustup toolchain install "${{ matrix.channel }}" --profile minimal
+          cargo +${{ matrix.channel }} build --locked --release --features io-uring --example observe_eio
+          cc -O2 tests/bench-controls/raw_read.c -o "$RUNNER_TEMP/raw-read"
+          sha256sum target/release/examples/observe_eio "$RUNNER_TEMP/raw-read"
+      - name: Test full read, non-vector tails, boundary and failed CQE
+        shell: bash
+        run: |
+          set -euo pipefail
+          uname -a
+          grep -m1 -w avx2 /proc/cpuinfo
+          root="$RUNNER_TEMP/read-guard"
+          image="$RUNNER_TEMP/read-guard.img"
+          mkdir "$root"
+          truncate -s 384M "$image"
+          loop=$(sudo losetup --find --show "$image")
+          cleanup() {
+            sudo umount "$root" || true
+            sudo dmsetup remove orbite-read-guard || true
+            sudo losetup -d "$loop"
+          }
+          trap cleanup EXIT
+          sudo mkfs.ext4 -q -b 4096 "$loop"
+          sudo mount "$loop" "$root"
+          if [[ -e /proc/sys/kernel/io_uring_disabled ]]; then sudo sysctl -w kernel.io_uring_disabled=0; fi
+          if ! mountpoint -q /sys/kernel/tracing; then sudo mount -t tracefs nodev /sys/kernel/tracing; fi
+          sudo env RUNNER_TEMP="$RUNNER_TEMP" OBS_ROOT="$root" OBS_EXE="$PWD/target/release/examples/observe_eio" OBS_RAW="$RUNNER_TEMP/raw-read" OBS_LOOP="$loop" python3 tests/bench-controls/public_head.py
