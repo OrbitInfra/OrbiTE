@@ -452,6 +452,10 @@ and background Auto stays on DMA unless explicitly configured.
 
 ## CPU benchmark evidence
 
+The [two-host SHM study](benchmarks.md#eight-contiguous-shm-reads) covers
+eight contiguous 4 KiB READs. It retains the stable host-1 p99 and CPU
+threshold misses alongside the balanced repeat measurements.
+
 Apply the [CPU workload thresholds](benchmarks.md#cpu-workload-thresholds)
 per Linux toolchain, workload and baseline. An archived sweep marked
 `passed` completed its byte checks. Performance qualification requires a

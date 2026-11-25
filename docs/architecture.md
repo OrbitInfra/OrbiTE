@@ -284,6 +284,10 @@ proves that a later connection cannot identify the old listener. TCP staging
 teardown similarly waits for its own acceptor-join receipt before checking that
 an abandoned native delegate still retains its pin.
 
+Eight adjacent 4 KiB SHM READs can share one physical request. The
+[public caller retest](benchmarks.md#eight-contiguous-shm-reads) measures
+this case from batch allocation through retirement on the same host.
+
 SHM follows the shared allocator and synchronous copy in frozen TENT. TENT
 can also copy a caller-supplied path from `MemoryOptions`. OrbiTE publishes
 only allocations whose mapping and fd it owns, so an ordinary host buffer

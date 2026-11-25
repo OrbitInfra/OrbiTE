@@ -192,7 +192,10 @@ Done:
   measures caller completion on warmed tmpfs at eight gapped 4 KiB offsets.
   The [single-block tmpfs retest](benchmarks.md#singleton-tmpfs-tail-latency)
   found all eight READ/WRITE p99 paired medians within the self-baseline limit
-  across two runs on stable and 1.85.0. The [64 MiB TCP READ memory profile](benchmarks.md#process-memory-for-a-64-mib-read)
+  across two runs on stable and 1.85.0. For [eight adjacent SHM READs](benchmarks.md#eight-contiguous-shm-reads),
+  one stable 3 × 100 trial group exceeded both its p99 and CPU limits.
+  The tail increase did not repeat on the second host or on Rust 1.85.
+  The [64 MiB TCP READ memory profile](benchmarks.md#process-memory-for-a-64-mib-read)
   traced the [historical 1.144× TENT peak RSS](https://github.com/OrbitInfra/OrbiTE/actions/runs/44868978517) to a 64 MiB file-verification
   image kept live during TCP.
   The requester and source retain both TCP payload buffers through their

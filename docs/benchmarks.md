@@ -194,8 +194,8 @@ followed by frozen TENT from the candidate sweep in parentheses.
 Both toolchains met all four TENT targets for the gapped WRITE. In the same paired run, five
 other workloads crossed a common self-baseline guard. Ext4 WRITE goodput crossed for a
 single 4 KiB block and eight gapped 4 KiB blocks. The single 4 KiB tmpfs READ and WRITE and
-the SHM contiguous 8 × 4 KiB READ crossed the p99 guard. These signals stay open for
-follow-up. The [singleton tmpfs retest](#singleton-tmpfs-tail-latency) revisits the two tmpfs rows.
+the SHM contiguous 8 × 4 KiB READ crossed the p99 guard. The [singleton tmpfs retest](#singleton-tmpfs-tail-latency) revisits the two
+tmpfs rows. The [SHM retest](#eight-contiguous-shm-reads) follows the shared-memory signal.
 
 Independent Linux aarch64 tracing counted one batch-worker start per target batch before the
 change and zero after, with one ring setup in both cases. The target kept all eight physical
@@ -317,8 +317,39 @@ For example, stable WRITE in run 1 gave 1.413 with the baseline first and
 0.816 with the candidate first. The same-binary WRITE control gave 1.229.
 Taking only the first 100 samples changed run 1 stable READ from 1.019 to
 1.274 and run 2 stable WRITE from 1.015 to 1.170. These measurements support
-retaining the current single-request submission path. The ext4 WRITE goodput
-and SHM READ p99 cases from the full sweep remain open.
+retaining the current single-request submission path. The ext4 WRITE goodput cases from the full sweep remain open.
+
+### Eight contiguous SHM READs
+
+The public Rust caller read eight adjacent 4 KiB blocks in one batch on two
+independent Linux boots. It used one requester, two configured handler threads
+per engine, one merged physical request in the warmup receipt and three warmups
+per fresh process. The caller checked the bytes and guards outside the timer.
+Stable and Rust 1.85 each ran on both hosts with the same caller source, linked
+against fixed OrbiTE `12d1e83` and `main` at `e4a12a2`. The SHM workload
+uses OrbiTE as its reference. [Build provenance and raw samples](https://github.com/OrbitInfra/OrbiTE/actions/runs/45631673459)
+
+For the first comparison each version ran in three fresh processes of 100
+batches, matching the workload thresholds. A separate experiment rotated
+launch order for 12 fixed/fixed and 12 fixed/main pairs per host and toolchain.
+Each process in those pairs ran 1,000 batches. The table gives the ratio of
+process medians for the short comparison and the median of within-pair ratios
+for the longer comparison. The p99 limit is 1.05 inclusive.
+
+| Linux host | Rust | 3 × 100 fixed → main p99 (µs) | 3 × 100 ratio | Fixed/fixed, 1,000 | Fixed/main, 1,000 |
+|---|---|---:|---:|---:|---:|
+| 1 | stable | 107.06 → 121.08 | 1.131 | 0.994 | 1.045 |
+| 2 | stable | 104.75 → 107.63 | 1.028 | 1.017 | 1.008 |
+| 1 | 1.85 | 117.13 → 115.68 | 0.988 | 1.023 | 0.989 |
+| 2 | 1.85 | 110.97 → 112.91 | 1.017 | 1.021 | 1.016 |
+
+Stable on host 1 also crossed the CPU limit in the short comparison, from
+2.498 to 2.835 ns per byte. The other three combinations met all four limits
+in that comparison. All four longer-run paired medians met all four limits,
+though 12 of 48 fixed/main pairs and 9 of 48 identical-binary pairs exceeded
+the p99 limit. Neither the stable host-1 result nor the earlier Rust 1.85 tail
+reproduced across both hosts and compilers. This case provides no basis for
+changing SHM batch submission. The original short-run crossings remain recorded.
 
 ## Peak memory for a 64 MiB file READ
 
