@@ -37,6 +37,70 @@ fn direct_fixture(
 }
 
 #[test]
+fn large_direct_read_with_negative_cqe_preserves_the_entire_destination() -> Result<()> {
+    let Some(dir) = directory("ORBITE_EXT4_DIR") else {
+        return Ok(());
+    };
+    if !kernel() {
+        return Ok(());
+    }
+    const SIZE: usize = 64 << 20;
+    let (f, trace, start) = direct_fixture(&dir, &vec![0xe7; SIZE], true)?;
+    // The registered destination includes both guards; every old byte differs from the file.
+    let expected: Vec<_> = (0..64 * 1024)
+        .map(|i: usize| ((i ^ (i >> 8)) & 0x7f) as u8)
+        .collect();
+    for at in (0..f.memory.len()).step_by(expected.len()) {
+        f.memory
+            .write(at, &expected[..expected.len().min(f.memory.len() - at)])?;
+    }
+    // One 64 MiB SQE yields -EIO. Smaller native reads can finish 8 MiB
+    // before the injected failure in this same public task.
+    trace.lock().unwrap().read_bytes_before_eio = Some(8 << 20);
+    let mut batch = f.engine.submit_async(
+        TransferOp::Read,
+        &f.segment,
+        &[TransferRequest::new(
+            Transport::IoUring,
+            f.memory.base_address() + start as u64,
+            0,
+            SIZE,
+        )],
+        None,
+        TIMEOUT,
+    )?;
+    let status = batch.wait(TIMEOUT)?;
+    let task = batch.task_status(0)?;
+    assert!(trace.lock().unwrap().read_bytes_before_eio.is_none());
+    assert_eq!(
+        f.engine.file_segment_info(&f.segment)?.direct_io,
+        Some(true)
+    );
+    assert!(status.locally_drained && task.locally_drained);
+    assert_eq!((task.state, task.transferred_bytes), (TaskState::Failed, 0));
+    assert!(
+        matches!(&task.failure.unwrap().error, Error::Backend { code, .. } if *code == -libc::EIO)
+    );
+    let mut actual = vec![0; expected.len()];
+    for at in (0..f.memory.len()).step_by(expected.len()) {
+        let len = actual.len().min(f.memory.len() - at);
+        f.memory.read(at, &mut actual[..len])?;
+        assert!(
+            actual[..len] == expected[..len],
+            "destination changed in chunk at {at}"
+        );
+    }
+    batch.free()?;
+    let stats = f.engine.stats()?;
+    let file = stats.io_uring.unwrap();
+    assert_eq!(
+        (stats.inflight_bytes, file.pageable_bytes, file.active_slots),
+        (0, 0, 0)
+    );
+    Ok(())
+}
+
+#[test]
 #[allow(unsafe_code)]
 fn idle_direct_read_ring_yields_its_fd_to_larger_and_scalar_submissions() -> Result<()> {
     let Some(dir) = directory("ORBITE_EXT4_DIR") else {

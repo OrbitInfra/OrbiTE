@@ -1,57 +1,45 @@
-name: Measure public rolling protected direct READ
+name: Replay large direct READ EIO contract against positive and negative controls
 on: workflow_dispatch
 permissions:
   contents: read
 jobs:
-  public-caller:
+  test:
     runs-on: ubuntu-24.04
-    timeout-minutes: 70
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
-      - name: Build fixed, PR head and rolling public callers on both toolchains
+      - name: Compare real CQE fault control on existing and rolling private owners
         run: |
-          git worktree add --detach "$RUNNER_TEMP/plain" ea265fdecbea48e4f05dff32314f966251943f52
-          git worktree add --detach "$RUNNER_TEMP/fixed" 12d1e83964a596d9b578e9d2879b5cd78e776da6
-          for tc in stable 1.85.0; do
-            rustup toolchain install "$tc" --profile minimal
-            for kind in plain fixed candidate; do
-              src="$GITHUB_WORKSPACE"
-              wrapper=()
-              if [[ "$kind" != candidate ]]; then src="$RUNNER_TEMP/$kind"; fi
-              if [[ "$kind" == fixed ]]; then wrapper=("RUSTC_WORKSPACE_WRAPPER=$RUNNER_TEMP/plain/benches/build_caller.py"); fi
-              (cd "$src" && env "${wrapper[@]}" CARGO_TARGET_DIR="$RUNNER_TEMP/build-$tc-$kind" cargo +"$tc" build --release --locked --features io-uring --bench transfer --message-format=json) > "$RUNNER_TEMP/build.jsonl"
-              jq -r 'select(.target.name=="transfer" and .executable!=null)|.executable' "$RUNNER_TEMP/build.jsonl" > "$RUNNER_TEMP/$tc-$kind.exe"
-              if [[ "$kind" == fixed ]]; then
-                PYTHONPATH=benches python3 -B -c 'from run import check_caller_dep_info; from pathlib import Path; import sys; exe=Path(Path(sys.argv[1]).read_text().strip()); check_caller_dep_info(exe.with_suffix(".d").read_text(),exe,Path(sys.argv[2]))' "$RUNNER_TEMP/$tc-$kind.exe" "$RUNNER_TEMP/plain/benches/transfer.rs"
-              fi
-            done
-          done
-      - name: Measure production owners on direct ext4
-        run: |
-          if test -e /proc/sys/kernel/io_uring_disabled; then sudo sysctl -w kernel.io_uring_disabled=0; fi
-          dir="$RUNNER_TEMP/direct-ext4"
-          mkdir -p "$dir"
-          if [[ "$(findmnt -n -o FSTYPE -T "$dir")" != ext4 ]]; then
-            truncate -s 512M "$RUNNER_TEMP/direct-ext4.img"
-            mkfs.ext4 -q -F "$RUNNER_TEMP/direct-ext4.img"
-            sudo mount -o loop "$RUNNER_TEMP/direct-ext4.img" "$dir"
-            sudo chown "$(id -u):$(id -g)" "$dir"
+          set -euo pipefail
+          export CARGO_TARGET_DIR="$RUNNER_TEMP/build"
+          export ORBITE_REQUIRE_IO_URING=1 ORBITE_EXT4_DIR="$RUNNER_TEMP/eio-ext4"
+          mkdir -p "$ORBITE_EXT4_DIR"
+          if [[ "$(findmnt -n -o FSTYPE -T "$ORBITE_EXT4_DIR")" != ext4 ]]; then
+            truncate -s 384M "$RUNNER_TEMP/fixture.img"
+            mkfs.ext4 -q -F "$RUNNER_TEMP/fixture.img"
+            sudo mount -o loop "$RUNNER_TEMP/fixture.img" "$ORBITE_EXT4_DIR"
+            sudo chown "$(id -u):$(id -g)" "$ORBITE_EXT4_DIR"
           fi
-          findmnt -T "$dir"
-          sudo prlimit --pid $$ --memlock=134217728:134217728
-          python3 -B bench_probes/run.py "$dir" "$RUNNER_TEMP/owner-timings"
-      - name: Confirm concurrent truncation and middle-window EIO
-        if: ${{ !cancelled() }}
-        run: |
-          sudo prlimit --pid $$ --memlock=134217728:134217728
-          for tc in stable 1.85.0; do
-            ORBITE_REQUIRE_IO_URING=1 ORBITE_EXT4_DIR="$RUNNER_TEMP/direct-ext4" CARGO_TARGET_DIR="$RUNNER_TEMP/build-$tc-candidate" cargo +"$tc" test --release --locked --features io-uring --lib rolling_direct_read_distinguishes_prefix_eof_and_mid_request_eio -- --nocapture
-          done
+          findmnt -n -o SOURCE,FSTYPE,TARGET -T "$ORBITE_EXT4_DIR"
+          sudo sysctl -w kernel.io_uring_disabled=0
+          git worktree add --detach "$RUNNER_TEMP/original" ea265fdecbea48e4f05dff32314f966251943f52
+          cp tests/unit/transport/io_uring/{inline.rs,inline_group.rs} "$RUNNER_TEMP/original/tests/unit/transport/io_uring/"
+          filter=large_direct_read_with_negative_cqe_preserves_the_entire_destination
+          (cd "$RUNNER_TEMP/original" && cargo test --locked --features io-uring --lib "$filter" -- --nocapture) |& tee "$RUNNER_TEMP/green.log"
+          grep -F '1 passed' "$RUNNER_TEMP/green.log"
+          if cargo test --locked --features io-uring --lib "$filter" -- --nocapture > "$RUNNER_TEMP/red.log" 2>&1; then
+            cat "$RUNNER_TEMP/red.log"
+            exit 1
+          fi
+          tail -30 "$RUNNER_TEMP/red.log"
+          grep -F 'left: (Failed, 8388608)' "$RUNNER_TEMP/red.log"
+          grep -F 'right: (Failed, 0)' "$RUNNER_TEMP/red.log"
       - uses: actions/upload-artifact@v7.0.2
         if: always()
         with:
-          name: public-rolling-receipts
-          path: ${{ runner.temp }}/owner-timings/
-          if-no-files-found: error
+          name: contract-replay
+          path: |
+            ${{ runner.temp }}/green.log
+            ${{ runner.temp }}/red.log
