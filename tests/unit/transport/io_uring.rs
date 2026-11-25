@@ -1479,3 +1479,127 @@ mod vectored;
 
 #[path = "io_uring/inline.rs"]
 mod inline;
+
+#[test]
+fn rolling_direct_read_distinguishes_prefix_eof_and_mid_request_eio() -> Result<()> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    if !kernel() {
+        return Ok(());
+    }
+    let Some(dir) = std::env::var_os("ORBITE_EXT4_DIR") else {
+        assert!(!required(), "ext4 fixture missing");
+        eprintln!("set ORBITE_EXT4_DIR for rolling direct reads");
+        return Ok(());
+    };
+    const SIZE: usize = 64 << 20;
+    let chunk = rolling::CHUNK;
+    struct Controlled {
+        ring: Box<dyn Ring>,
+        file: fs::File,
+        mode: usize,
+        calls: Arc<AtomicUsize>,
+    }
+    impl Controlled {
+        fn result(&self, (id, n): (u64, i32)) -> (u64, i32) {
+            let bad = match self.mode {
+                1 => Some(1),
+                2 => Some(0),
+                _ => None,
+            };
+            (id, if bad == Some(id) { -libc::EIO } else { n })
+        }
+    }
+    impl Ring for Controlled {
+        fn space(&mut self) -> usize {
+            self.ring.space()
+        }
+        fn queued(&mut self) -> usize {
+            self.ring.queued()
+        }
+        fn push(&mut self, s: &[squeue::Entry]) -> io::Result<()> {
+            self.ring.push(s)
+        }
+        fn register_private(&self, p: std::ptr::NonNull<u8>, n: usize) -> bool {
+            self.ring.register_private(p, n)
+        }
+        fn submit(&mut self, n: u32) -> io::Result<usize> {
+            let done = self.ring.submit(n)?;
+            let previous = self.calls.fetch_add(1, Ordering::Relaxed);
+            if self.mode == 0 && previous == 0 {
+                assert_eq!(done, 4);
+                self.file.set_len((4 * rolling::CHUNK + 123) as u64)?;
+            }
+            Ok(done)
+        }
+        fn peek(&mut self) -> io::Result<Option<(u64, i32)>> {
+            let c = self.ring.peek()?;
+            Ok(c.map(|v| self.result(v)))
+        }
+        fn reap(&mut self, t: Instant) -> io::Result<(u64, i32)> {
+            let c = self.ring.reap(t)?;
+            Ok(self.result(c))
+        }
+    }
+    let image: Vec<_> = (0..SIZE)
+        .map(|i| (i.wrapping_mul(31) ^ (i >> 12) ^ (i >> 21)) as u8)
+        .collect();
+    for mode in 0..3 {
+        let mut config = EngineConfig::default();
+        if mode == 2 {
+            config.io_uring.pinned_staging = true;
+            config.io_uring.staging_slots = 1;
+        }
+        let mut engine = TransferEngine::new(config)?;
+        let path = PathBuf::from(&dir).join(format!("orbite-rolling-{}", SourceEpoch::generate()?));
+        fs::write(&path, &image)?;
+        let file = fs::OpenOptions::new().write(true).open(&path)?;
+        let calls = Arc::new(AtomicUsize::new(0));
+        let count = Arc::clone(&calls);
+        engine.io_uring.as_mut().unwrap().create = Arc::new(move |n| {
+            Ok(Box::new(Controlled {
+                ring: ring::create(n)?,
+                file: file.try_clone()?,
+                mode,
+                calls: Arc::clone(&count),
+            }))
+        });
+        let s = engine.open_file_segment(
+            &format!("file://{}", path.display()),
+            Permission::RemoteReadWrite,
+        )?;
+        let m = engine.register_memory(
+            vec![0x9a; SIZE + 5].into_boxed_slice(),
+            Permission::LocalOnly,
+        )?;
+        let req = TransferRequest::new(Transport::IoUring, m.base_address() + 3, 0, SIZE);
+        let engine = Arc::new(engine);
+        let b = engine.submit_async(TransferOp::Read, &s, &[req], None, TIMEOUT)?;
+        let done = b.wait(EVENTUAL_PROGRESS)?;
+        assert!(done.locally_drained);
+        let status = b.task_status(0)?;
+        assert_eq!(status.state, TaskState::Failed);
+        let expected = match mode {
+            0 => 4 * chunk + 123,
+            1 => chunk,
+            _ => 0,
+        };
+        assert_eq!(status.transferred_bytes, expected);
+        assert_eq!(done.completed_tasks, 0);
+        // The report preserves the original failure reason, including middle-window -EIO.
+        let err = status.failure.expect("failure").error.for_report();
+        match mode {
+            0 => assert!(matches!(err,Error::Io(ref e) if e.kind()==io::ErrorKind::UnexpectedEof)),
+            _ => assert!(matches!(err,Error::Backend{code,..} if code == -libc::EIO)),
+        }
+        let mut bytes = vec![0; SIZE + 5];
+        m.read(0, &mut bytes)?;
+        assert!(bytes[..3].iter().all(|b| *b == 0x9a));
+        assert!(bytes[3..3 + expected] == image[..expected]);
+        assert!(bytes[3 + expected..].iter().all(|b| *b == 0x9a));
+        assert!(calls.load(Ordering::Relaxed) > 0);
+        drop(b);
+        engine.close_file_segment(&s, TIMEOUT)?;
+        fs::remove_file(path)?;
+    }
+    Ok(())
+}

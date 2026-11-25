@@ -61,7 +61,17 @@ impl Scratch {
         )? {
             return Ok(Self::Slot(slot));
         }
-        let charge = transport.pool.charge(length)?;
+        let charge = match transport.pool.charge(length) {
+            Err(Error::ResourceExhausted)
+                if transport
+                    .idle_read
+                    .lock()
+                    .is_ok_and(|mut c| c.rolling.take().is_some()) =>
+            {
+                transport.pool.charge(length)?
+            }
+            other => other?,
+        };
         // Faulting every base page during GUP dominates a large, fresh direct
         // READ buffer. Only advise complete 2 MiB units of private scratch.
         // The kernel can always satisfy this hint with ordinary pages.

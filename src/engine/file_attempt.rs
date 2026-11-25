@@ -26,7 +26,7 @@ impl FileAttempts<'_> {
         self.progress
             .map_or(count, |(p, b)| p.begin_file_group(b + i, count))
     }
-    #[cfg(feature = "gds")]
+    #[cfg(any(feature = "io-uring", feature = "gds"))]
     pub(crate) fn cancel_requested(&self, i: usize) -> bool {
         self.progress
             .is_some_and(|(p, b)| p.cancel_requested(b + i))

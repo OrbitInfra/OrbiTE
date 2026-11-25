@@ -4,6 +4,7 @@ pub(crate) mod pool;
 pub use config::IoUringConfig;
 pub use pool::IoUringStats;
 mod ring;
+mod rolling;
 #[cfg(feature = "cuda")]
 mod staging;
 mod task;
@@ -115,6 +116,14 @@ impl IoUringTransport {
                     progress,
                 }
                 .execute(self, max_batch_requests, report)?;
+            }
+            if count == 1
+                && requests.len() == 1
+                && !staged
+                && operation == TransferOp::Read
+                && rolling::execute(self, &requests[0], deadline, progress, report)?
+            {
+                return Ok(());
             }
             if count != 0 && !staged {
                 *report = self

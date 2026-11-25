@@ -13,6 +13,9 @@ pub(super) trait Ring: Send {
     fn submit(&mut self, count: u32) -> io::Result<usize>;
     fn peek(&mut self) -> io::Result<Option<(u64, i32)>>;
     fn reap(&mut self, until: Instant) -> io::Result<(u64, i32)>;
+    fn register_private(&self, _ptr: std::ptr::NonNull<u8>, _bytes: usize) -> bool {
+        false
+    }
     // Only a plain native ring can be reused after every submitted operation drained.
     fn empty_after_drain(&mut self) -> bool {
         false
@@ -27,6 +30,7 @@ pub(super) trait Ring: Send {
 pub(super) struct IdleReadRing {
     ring: Option<Box<dyn Ring>>,
     closed: bool,
+    pub(super) rolling: Option<super::rolling::Window>,
 }
 
 impl IdleReadRing {
@@ -36,7 +40,8 @@ impl IdleReadRing {
     }
 
     pub(super) fn evict(&mut self) -> bool {
-        self.ring.take().is_some()
+        let large = self.rolling.take().is_some();
+        self.ring.take().is_some() || large
     }
 
     pub(super) fn put(&mut self, mut ring: Box<dyn Ring>) {
@@ -51,8 +56,15 @@ impl IdleReadRing {
         }
     }
 
+    pub(super) fn save_rolling(&mut self, ring: super::rolling::Window) {
+        if !self.closed && self.rolling.is_none() {
+            self.rolling = Some(ring);
+        }
+    }
+
     pub(super) fn close(&mut self) {
         self.closed = true;
+        self.rolling.take();
         self.ring.take();
     }
 }
@@ -67,6 +79,14 @@ pub(super) fn create(count: u32) -> io::Result<Box<dyn Ring>> {
 
 #[allow(unsafe_code)]
 impl Ring for IoUring {
+    fn register_private(&self, ptr: std::ptr::NonNull<u8>, bytes: usize) -> bool {
+        let iov = libc::iovec {
+            iov_base: ptr.as_ptr().cast(),
+            iov_len: bytes,
+        };
+        // SAFETY: Window owns this disjoint allocation until its ring is quiescent and closed.
+        unsafe { self.submitter().register_buffers(&[iov]) }.is_ok()
+    }
     fn empty_after_drain(&mut self) -> bool {
         self.submission().is_empty() && self.completion().is_empty()
     }
