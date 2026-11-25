@@ -318,10 +318,26 @@ impl Task {
                 let length = result as usize;
                 match memory {
                     HostMemory::One(memory) => {
+                        #[cfg(target_arch = "x86_64")]
+                        let streamed = length >= 2 << 20
+                            && source as usize % 32 == 0
+                            && memory.address().as_ptr() as usize % 32 == 0
+                            && std::is_x86_feature_detected!("avx2");
+                        #[cfg(not(target_arch = "x86_64"))]
+                        let streamed = false;
                         // SAFETY: this CQE initialized length disjoint scratch bytes.
                         // The exclusive destination loan covers the checked prefix.
                         unsafe {
-                            std::ptr::copy_nonoverlapping(source, memory.address().as_ptr(), length)
+                            if streamed {
+                                #[cfg(target_arch = "x86_64")]
+                                stream_prefix(source, memory.address().as_ptr(), length);
+                            } else {
+                                std::ptr::copy_nonoverlapping(
+                                    source,
+                                    memory.address().as_ptr(),
+                                    length,
+                                );
+                            }
                         };
                     }
                     HostMemory::Vector { iovecs, .. } => {
@@ -353,6 +369,28 @@ impl Task {
         self.bounce.take();
         self.memory.take();
         true
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[allow(unsafe_code)]
+#[target_feature(enable = "avx2")]
+unsafe fn stream_prefix(src: *const u8, dst: *mut u8, len: usize) {
+    use std::arch::x86_64::{__m256i, _mm_sfence, _mm256_load_si256, _mm256_stream_si256};
+    let bulk = len / 256 * 256;
+    // SAFETY: the caller checks AVX2, both alignments and the confirmed byte
+    // extent. The exclusive loan and private source are disjoint until publication.
+    unsafe {
+        for offset in (0..bulk).step_by(256) {
+            let from = src.add(offset).cast::<__m256i>();
+            let to = dst.add(offset).cast::<__m256i>();
+            let vectors: [__m256i; 8] = std::array::from_fn(|i| _mm256_load_si256(from.add(i)));
+            for (i, value) in vectors.into_iter().enumerate() {
+                _mm256_stream_si256(to.add(i), value);
+            }
+        }
+        std::ptr::copy_nonoverlapping(src.add(bulk), dst.add(bulk), len - bulk);
+        _mm_sfence();
     }
 }
 
