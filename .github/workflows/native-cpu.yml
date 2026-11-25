@@ -1,34 +1,38 @@
-name: Profile large direct READ owners
+name: Compare large direct READ confirmed copy
 on: workflow_dispatch
 permissions:
   contents: read
 jobs:
-  public-caller:
+  matched:
     runs-on: ubuntu-24.04
     timeout-minutes: 70
     steps:
       - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
-      - name: Build pristine and instrumented public callers on both toolchains
+      - name: Build plain fixed, PR and candidate engines on both compilers
+        shell: bash
         run: |
-          git worktree add --detach "$RUNNER_TEMP/plain" ea265fdecbea48e4f05dff32314f966251943f52
           git worktree add --detach "$RUNNER_TEMP/fixed" 12d1e83964a596d9b578e9d2879b5cd78e776da6
+          git worktree add --detach "$RUNNER_TEMP/head" ea265fdecbea48e4f05dff32314f966251943f52
+          git worktree add --detach "$RUNNER_TEMP/candidate" 9066bdd785645cad6118ca1fd74e4dc1bc3d607f
+          cmp "$RUNNER_TEMP/head/benches/transfer.rs" "$RUNNER_TEMP/candidate/benches/transfer.rs"
           for tc in stable 1.85.0; do
             rustup toolchain install "$tc" --profile minimal
-            for kind in plain fixed probe; do
-              src="$GITHUB_WORKSPACE"
+            for g in fixed head candidate candidate-slot; do
+              work="$RUNNER_TEMP/$g"
               wrapper=()
-              if [[ "$kind" != probe ]]; then src="$RUNNER_TEMP/$kind"; fi
-              if [[ "$kind" == fixed ]]; then wrapper=("RUSTC_WORKSPACE_WRAPPER=$RUNNER_TEMP/plain/benches/build_caller.py"); fi
-              (cd "$src" && env "${wrapper[@]}" CARGO_TARGET_DIR="$RUNNER_TEMP/build-$tc-$kind" cargo +"$tc" build --release --locked --features io-uring --bench transfer --message-format=json) > "$RUNNER_TEMP/build.jsonl"
-              jq -r 'select(.target.name=="transfer" and .executable!=null)|.executable' "$RUNNER_TEMP/build.jsonl" > "$RUNNER_TEMP/$tc-$kind.exe"
-              if [[ "$kind" == fixed ]]; then
-                PYTHONPATH=benches python3 -B -c 'from run import check_caller_dep_info; from pathlib import Path; import sys; exe=Path(Path(sys.argv[1]).read_text().strip()); check_caller_dep_info(exe.with_suffix(".d").read_text(),exe,Path(sys.argv[2]))' "$RUNNER_TEMP/$tc-$kind.exe" "$RUNNER_TEMP/plain/benches/transfer.rs"
+              if [[ "$g" == fixed ]]; then caller="$RUNNER_TEMP/head/benches"; wrapper=("RUSTC_WORKSPACE_WRAPPER=$caller/build_caller.py"); fi
+              if [[ "$g" == candidate-slot ]]; then work="$RUNNER_TEMP/candidate"; caller="$GITHUB_WORKSPACE/benches"; wrapper=("RUSTC_WORKSPACE_WRAPPER=$caller/build_caller.py"); fi
+              (cd "$work" && git diff --quiet HEAD && env "${wrapper[@]}" CARGO_TARGET_DIR="$RUNNER_TEMP/build-$tc-$g" cargo +"$tc" build --release --locked --features io-uring --bench transfer --message-format=json) > "$RUNNER_TEMP/build.jsonl"
+              jq -r 'select(.target.name=="transfer" and .executable!=null)|.executable' "$RUNNER_TEMP/build.jsonl" > "$RUNNER_TEMP/$tc-$g.exe"
+              if [[ "$g" == fixed || "$g" == candidate-slot ]]; then
+                PYTHONPATH=benches python3 -B -c 'from run import check_caller_dep_info; from pathlib import Path; import sys; exe=Path(Path(sys.argv[1]).read_text().strip()); check_caller_dep_info(exe.with_suffix(".d").read_text(),exe,Path(sys.argv[2]))' "$RUNNER_TEMP/$tc-$g.exe" "$caller/transfer.rs"
               fi
             done
           done
-      - name: Measure production owners on direct ext4
+      - name: Compare matched public READs on ext4
+        shell: bash
         run: |
           if test -e /proc/sys/kernel/io_uring_disabled; then sudo sysctl -w kernel.io_uring_disabled=0; fi
           dir="$RUNNER_TEMP/direct-ext4"
@@ -39,10 +43,10 @@ jobs:
             sudo mount -o loop "$RUNNER_TEMP/direct-ext4.img" "$dir"
             sudo chown "$(id -u):$(id -g)" "$dir"
           fi
-          python3 -B bench_probes/run.py "$dir" "$RUNNER_TEMP/owner-timings"
+          python3 -B bench_probes/matched_copy.py "$dir" "$RUNNER_TEMP/confirmed-copy"
       - uses: actions/upload-artifact@v7.0.2
         if: always()
         with:
-          name: large-owner-timings
-          path: ${{ runner.temp }}/owner-timings/
+          name: confirmed-copy
+          path: ${{ runner.temp }}/confirmed-copy/
           if-no-files-found: error
