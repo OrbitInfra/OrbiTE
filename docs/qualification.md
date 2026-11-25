@@ -742,6 +742,21 @@ caller wait. Cold descriptors, gaps, direct WRITEs and misaligned ranges
 exercise worker submission. Truncating the file after preparation produces
 full, short and zero-byte CQEs. The tests read back the entire destination,
 including bytes beyond EOF and the guards around vector elements and padding.
+A Linux 6.12.76 aarch64 control on `ea265fd` checked a 64 MiB public READ
+with a nonuniform destination and both guards. Truncating after preflight
+at entry to the submitting syscall delivered exactly 33,554,944 bytes.
+The same image, remounted read-only through a device-mapper error target,
+returned a block error at the middle 4 KiB.
+The public READ reported zero confirmed bytes and preserved the entire
+destination. A native READV into the destination on the same image reported
+`-EIO` after changing 67,104,768 bytes. [Fault control and performance handoff](https://github.com/OrbitInfra/OrbiTE/pull/226)
+
+The CI regression control lets a real aligned 64 MiB READ write to its native
+destination before replacing the completion that crosses 8 MiB with `-EIO`.
+It checks the public task and batch receipts, every original destination byte,
+both guards and the released staging and admission budgets.
+[Protected READ and rolling-window negative control](https://github.com/OrbitInfra/OrbiTE/actions/runs/45623648564)
+
 Scratch allocation failure must leave the ring untouched and return the
 pageable charge. A 2 MiB direct READ control rejects the optional huge-page
 alignment at allocation. It checks the complete destination after a full CQE

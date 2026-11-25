@@ -87,6 +87,10 @@ The [64 MiB TCP READ profile](benchmarks.md#process-memory-for-a-64-mib-read)
 attributes peak process RSS to the public caller and TCP reply buffers.
 The [64 MiB file READ profile](benchmarks.md#peak-memory-for-a-64-mib-file-read)
 separates the io_uring completion from the caller's file and registration checks.
+For [large direct READs](benchmarks.md#large-direct-reads), the completion
+owner copies only the CQE-confirmed prefix from private storage. A negative
+CQE publishes no bytes for that request. First-touch and copy costs keep the
+64 MiB workload outside its fixed-baseline limits on both Rust toolchains.
 [CPU benchmark and fault fixtures](benchmarks.md) cover verified size/batch
 sweeps and the software backend lifetime matrix. They add no hardware
 qualification; GPU/RDMA/GDS installed fault fixtures remain queued.

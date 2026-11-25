@@ -383,22 +383,49 @@ huge-page advice. [Matched public-engine trials](https://github.com/OrbitInfra/O
 | Stable | 6.24 / 2.01 / 2.52 | 0.145 / 0.471 / 0.341 | 11.64 / 32.49 / 28.44 | 323.4 / 323.5 / 323.5 |
 | 1.85 | 6.52 / 2.10 / 2.55 | 0.140 / 0.453 / 0.331 | 11.81 / 31.13 / 27.94 | 323.5 / 323.5 / 323.5 |
 
-Separate native READV controls measured about 16,385 minor faults per
-64 MiB read. Huge-page advice reduced that count to about 34. A full CQE
-still required one copy of the entire payload. The matched engine exceeded
-its CPU and p99 limits and missed its goodput floor on both toolchains.
-Peak RSS remained within its limit. [Page-fault and copy controls](https://github.com/OrbitInfra/OrbiTE/actions/runs/45128204113)
+The production allocator and completion owner were timed separately on one
+x86-64 Linux ext4 guest. Both toolchains used the public transfer caller,
+six rotated processes per instrumented case, three warmups and 20 measured
+reads. The following wall times are medians of per-process medians.
+[Owner timings and uninstrumented controls](https://github.com/OrbitInfra/OrbiTE/actions/runs/45615884927)
 
-A single 64 MiB direct READ needs 64 MiB of private storage through its
-CQE. A separate Linux aarch64 guest with 3 vCPUs measured the parent, the
-protected default and the protected engine with one reusable 64 MiB slot.
-Each of the six possible launch orders ran once, with a fresh process,
-three warmups and ten byte-checked reads per condition. Median process CPU
-per READ was 0.431, 3.320 and 2.428 ms, respectively. Reuse lowered CPU
-in all six pairs and raised the process peak from 323 to 387 MiB. It
-retains the slot between operations. This experiment measures the combined
-cost of allocation, copying and completion on that guest. The staging pool
-remains opt-in. [Review and measurement conditions](https://github.com/OrbitInfra/OrbiTE/pull/226)
+| Stage for one 64 MiB direct READ | Stable (ms) | Rust 1.85 (ms) |
+|---|---:|---:|
+| Acquire fresh, huge-page-advised private storage | 0.024 | 0.023 |
+| First write to fresh pages, when measured explicitly | 6.653 | 6.640 |
+| Prepared request to CQE, with default on-demand faults | 15.295 | 15.976 |
+| Prepared request to CQE, after explicit page population | 8.906 | 8.975 |
+| Copy the full confirmed prefix to the caller, default path | 7.930 | 7.941 |
+| Release private storage, default path | 0.211 | 0.214 |
+
+The default READ includes 32 minor faults between preparation and its CQE.
+Explicit population moved them to the first-write stage. These two rows
+measure the same page faults in different runs. Total CPU per READ was
+22.46 / 22.32 ms by default and 22.59 / 22.56 ms with explicit population.
+A native control verified cold and resident pages with `mincore` and measured
+the same touch loop on resident pages at 0.42 / 0.41 ms. [Page population controls](https://github.com/OrbitInfra/OrbiTE/actions/runs/45614854495)
+
+The public caller also ran three independent 100-batch trials per configuration
+without timing probes. From `12d1e83` to `ea265fd`, goodput fell from
+6.50 to 2.54 GiB/s on stable and from 6.48 to 2.58 GiB/s on Rust 1.85.
+One configured, reusable 64 MiB slot raised goodput to 3.43 / 3.42 GiB/s
+but retained the full allocation between operations. Peak RSS rose from
+about 323.5 to 387.5 MiB. All four limits still failed with that slot.
+[Public workload receipts](https://github.com/OrbitInfra/OrbiTE/actions/runs/45615884927)
+
+For comparison, the full uninstrumented CPU sweep ran the current implementation
+and frozen TENT on the same boot for each toolchain. On stable the 64 MiB
+direct READ measured 2.62 / 6.65 GiB/s, 0.330 / 0.129 CPU ns per byte and
+26.73 / 12.11 ms p99 (OrbiTE / TENT). Rust 1.85 measured 2.50 / 6.50 GiB/s,
+0.349 / 0.139 ns per byte and 30.90 / 10.94 ms p99. Peak RSS passed against
+both frozen references. [Paired CPU sweep](https://github.com/OrbitInfra/OrbiTE/actions/runs/45410952332)
+
+An experimental four-slot pipeline read into 2 MiB windows and copied each
+contiguous prefix as soon as its CQEs arrived. In a separate aarch64 ext4
+test with a bad 4 KiB block in the middle, it had published 32 MiB when the
+logical READ failed. On the same file the protected single READ reported
+zero bytes and preserved the destination. The windowed prototype is excluded
+from the production path. [Public window experiment](https://github.com/OrbitInfra/OrbiTE/actions/runs/45621030185)
 
 ### Singleton tmpfs tail latency
 

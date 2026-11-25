@@ -383,7 +383,9 @@ asynchronous kernel I/O and checks reaping on the worker without caller polling.
 The same preflight, partial-submit drain and prefix aggregation serve both paths.
 Aligned gapped and contiguous host batches keep one ring for the whole group.
 On an ext4 direct READ racing a truncate, Linux can write past the byte count
-in its CQE. Each direct host READ therefore targets private, byte-budgeted
+in its CQE. Even a size-stable, read-only file can deliver a negative CQE
+after other blocks of the same request have already modified its destination.
+Each direct host READ therefore targets private, byte-budgeted
 storage. Its CQE authorizes copying that prefix to the retained registration,
 including a vector in file order. Aligned WRITEs and aligned buffered READs
 can still use the registration directly. After trying the configured staging

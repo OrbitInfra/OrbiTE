@@ -217,11 +217,12 @@ Done:
   with an 80–82 µs p99. TENT reached 0.49 GiB/s at about 1.92 ns per byte.
   Guest block service still took about 36–37 µs against 21–22 µs for TENT.
   The [large direct READ controls](benchmarks.md#large-direct-reads)
-  traced much of the 64 MiB regression to populating private pages and
-  copying the completed prefix. Advising huge pages raised single-read
-  goodput to 2.52–2.55 GiB/s from 2.01–2.10 GiB/s. The fixed baseline
-  reached 6.24–6.52 GiB/s on the same boots. The performance step remains
-  open until a protected implementation meets the large-read guards.
+  measured about 0.024 ms to obtain 64 MiB of fresh private storage,
+  6.6 ms to populate its pages and 7.9 ms to copy the 64 MiB confirmed by
+  a full CQE. The default path pays the population cost during the READ.
+  Retaining a full-size slot pushed peak RSS from about 323.5 to 387.5 MiB.
+  The performance step remains open until a protected implementation meets
+  the large-read guards.
 
 - **S16 — reference fixtures.** Retain the CPU trace contract and three frozen
   request prefixes used by native-listener rejection. Compatibility inventories
