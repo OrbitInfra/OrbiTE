@@ -95,6 +95,7 @@ pub(super) fn registration() {
         rejected.publish(
             &owners,
             std::slice::from_ref(&memory),
+            true,
             Instant::now() + TIMEOUT
         ),
         Err(Error::ResourceExhausted)
@@ -106,6 +107,7 @@ pub(super) fn registration() {
         .publish(
             &owners,
             std::slice::from_ref(&memory),
+            true,
             Instant::now() + TIMEOUT,
         )
         .unwrap();

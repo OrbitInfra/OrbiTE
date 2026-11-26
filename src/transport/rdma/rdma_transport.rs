@@ -229,7 +229,8 @@ impl RdmaTransport {
             }
             devices
         };
-        self.registrations.publish(&devices, &memory, deadline)
+        self.registrations
+            .publish(&devices, &memory, self.config.host_source_reuse, deadline)
     }
 
     /// Submission readiness is sampled once; native dispatch rechecks its owners.

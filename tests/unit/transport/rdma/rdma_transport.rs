@@ -121,7 +121,13 @@ fn private_host_source_grants_retire_their_pd_and_preserve_adjacent_bytes() {
         ),
         (2, 2, 0)
     );
-    assert_eq!(stats.opened_persistent_mrs, 0);
+    // The shared PD keeps only the eagerly published local registration.
+    assert_eq!(stats.opened_persistent_mrs, 1);
+    assert_eq!(stats.opened_source_mrs, 0);
+    assert_eq!(
+        (stats.persistent_mrs, stats.retained_persistent_mrs),
+        (0, 0)
+    );
 }
 
 #[test]

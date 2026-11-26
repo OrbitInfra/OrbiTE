@@ -271,6 +271,7 @@ impl LocalBufferManager {
         self: &Arc<Self>,
         devices: &[Arc<RdmaContext>],
         memories: &[RegisteredMemory],
+        host_source_reuse: bool,
         deadline: Instant,
     ) -> Result<()> {
         let mut leases = Vec::new();
@@ -279,7 +280,8 @@ impl LocalBufferManager {
                 for device in devices {
                     for window_bind in [false, true] {
                         if window_bind
-                            && (memory.permission() == crate::Permission::LocalOnly
+                            && (!host_source_reuse
+                                || memory.permission() == crate::Permission::LocalOnly
                                 || memory.is_cuda())
                         {
                             continue;
