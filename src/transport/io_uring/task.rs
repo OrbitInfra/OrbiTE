@@ -322,9 +322,12 @@ impl Task {
             && READ_PREFIX_BYTES % staging_alignment == 0
         {
             let private = SplitRead::new(transport, request.length, staging_alignment)?;
-            // This descriptor is unused for the two-span path. The task owns the
-            // boxed descriptors that the single READV submits to the kernel.
-            let iov = private.iovecs[0];
+            // Mixed host/device batches advance by this logical host span.
+            // Task::entry submits the two private iovecs for the single READV.
+            let iov = libc::iovec {
+                iov_base: std::ptr::null_mut(),
+                iov_len: request.length,
+            };
             return Ok((
                 Self {
                     file,
