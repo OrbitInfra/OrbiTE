@@ -33,7 +33,7 @@ rustdoc-args = ["--cfg", "docsrs"]
 
 [features]
 default = []
-rdma = ["dep:cc", "dep:bindgen", "dep:libloading"]
+rdma = ["dep:cc", "dep:bindgen", "dep:libloading", "dep:orbit-rdma"]
 cuda = ["dep:cudarc", "dep:libloading", "dep:socket2"]
 io-uring = ["dep:io-uring"]
 gds = ["cuda"]
@@ -60,6 +60,7 @@ windows-sys = { version = "0.61.2", features = ["Win32_Networking_WinSock"] }
 libc = "0.2.191"
 
 [target.'cfg(target_os = "linux")'.dependencies]
+orbit-rdma = { version = "0.1.0", optional = true }
 # SQE/CQE layout and enter semantics are audited for this binding release.
 io-uring = { version = "=0.7.11", optional = true }
 # The MSRV lock uses 0.19.0. Consumers on newer Rust can unify later 0.19 releases.

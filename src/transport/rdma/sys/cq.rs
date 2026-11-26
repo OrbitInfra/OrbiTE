@@ -29,42 +29,51 @@ pub(super) unsafe extern "C" fn create_cq(
 }
 
 pub(super) unsafe extern "C" fn poll(h: *mut ConnectionHandles, result: *mut Completion) -> c_int {
-    // SAFETY: RdmaGrant retains the CQ; one initialized output receives one CQE.
+    // SAFETY: the progress lane has exclusive dispatch for this live CQ and retains its context.
+    let Some(cq) = std::ptr::NonNull::new(unsafe { (*h).cq }) else {
+        return -libc::EINVAL;
+    };
+    // SAFETY: the queue and provider outlive this serialized poll.
+    let completion = match unsafe { orbit_rdma::verbs::poll(cq) } {
+        Ok(Some(wc)) => wc,
+        Ok(None) => return 0,
+        Err(err) => return -provider_errno(err),
+    };
+    let value = match completion {
+        orbit_rdma::verbs::WorkCompletion::Success {
+            id,
+            qpn,
+            opcode,
+            bytes,
+            flags,
+            invalidated,
+        } => Completion {
+            id,
+            qpn,
+            opcode,
+            length: bytes,
+            flags,
+            invalidated_rkey: invalidated.unwrap_or(0),
+            ..Completion::default()
+        },
+        orbit_rdma::verbs::WorkCompletion::Error {
+            id,
+            qpn,
+            status,
+            vendor,
+        } => Completion {
+            id,
+            qpn,
+            status,
+            vendor_error: vendor,
+            ..Completion::default()
+        },
+    };
+    // SAFETY: the progress lane provides one writable completion result.
     unsafe {
-        let cq = (*h).cq.cast::<ffi::ibv_cq>();
-        let Some(poll_cq) = (*(*cq).context).ops.poll_cq else {
-            return -libc::EOPNOTSUPP;
-        };
-        // Preserve the previous binding's fail-closed CQ initialization; only
-        // a provider-written success status can become a completion receipt.
-        let mut completion = ffi::ibv_wc {
-            status: ffi::ibv_wc_status::IBV_WC_GENERAL_ERR,
-            opcode: ffi::ibv_wc_opcode::IBV_WC_LOCAL_INV,
-            ..ffi::ibv_wc::default()
-        };
-        let count = poll_cq(cq, 1, &mut completion);
-        if count == 1 {
-            let mut output = Completion {
-                id: completion.wr_id,
-                qpn: completion.qp_num,
-                ..Completion::default()
-            };
-            if completion.status != ffi::ibv_wc_status::IBV_WC_SUCCESS {
-                output.status = completion.status;
-                output.vendor_error = completion.vendor_err;
-            } else {
-                output.opcode = completion.opcode;
-                output.length = completion.byte_len;
-                output.flags = completion.wc_flags;
-                if output.flags & WITH_INVALIDATE != 0 {
-                    // The receive-with-invalidate union arm is host order.
-                    output.invalidated_rkey = completion.__bindgen_anon_1.invalidated_rkey;
-                }
-            }
-            *result = output;
-        }
-        count
+        *result = value;
     }
+    1
 }
 
 pub(super) unsafe extern "C" fn create_completion_channel(

@@ -289,6 +289,34 @@ pub(super) struct PostResult {
     pub uncertain: bool,
 }
 
+fn provider_errno(error: orbit_rdma::Error) -> c_int {
+    match error {
+        orbit_rdma::Error::Invalid(_) => libc::EINVAL,
+        orbit_rdma::Error::Exhausted(_) => libc::ENOMEM,
+        orbit_rdma::Error::Unsupported(_) => libc::EOPNOTSUPP,
+        orbit_rdma::Error::Native { code, .. } if code < 0 => {
+            code.checked_neg().unwrap_or(libc::EIO)
+        }
+        _ => libc::EPROTO,
+    }
+}
+
+impl PostResult {
+    fn record(
+        &mut self,
+        posted: std::result::Result<orbit_rdma::verbs::PostReceipt, orbit_rdma::Error>,
+    ) -> c_int {
+        match posted {
+            Ok(receipt) => {
+                self.accepted = receipt.accepted.unwrap_or(0);
+                self.uncertain = receipt.accepted.is_none();
+                receipt.code
+            }
+            Err(error) => provider_errno(error),
+        }
+    }
+}
+
 pub(super) struct AsyncEvent {
     pub kind: u32,
     pub port: u8,

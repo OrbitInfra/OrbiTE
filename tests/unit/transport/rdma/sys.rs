@@ -138,6 +138,8 @@ fn chained_posts_preserve_generated_abi_offsets_ids_and_accepted_prefix_without_
         for write in [0, 1] {
             for (code, bad_index, foreign_bad, bad_byte_offset, expected, uncertain) in [
                 (0, None, false, None, 3, false),
+                // A contradictory success cannot release any suffix.
+                (0, Some(1), false, None, 0, true),
                 (libc::ENOMEM, Some(0), false, None, 0, false),
                 (libc::ENOMEM, Some(1), false, None, 1, false),
                 (libc::ENOMEM, Some(2), false, None, 2, false),
@@ -174,7 +176,11 @@ fn chained_posts_preserve_generated_abi_offsets_ids_and_accepted_prefix_without_
                             &mut result,
                         )
                     },
-                    code
+                    if code == 0 && uncertain {
+                        libc::EPROTO
+                    } else {
+                        code
+                    }
                 );
                 assert_eq!((result.accepted, result.uncertain), (expected, uncertain));
                 assert_eq!(state.requests.len(), 3);
@@ -323,11 +329,11 @@ fn poll_dispatch_decodes_native_cqes_and_only_reads_error_valid_fields() {
         -libc::EOPNOTSUPP
     );
     context.ops.poll_cq = Some(capture_poll);
-    for count in [0, -libc::EIO] {
+    for (count, expected) in [(0, 0), (-libc::EIO, -libc::EIO), (2, -libc::EPROTO)] {
         state.count = count;
         // SAFETY: The test owns the CQ handles, its callback state and the writable completion
         // output.
-        assert_eq!(unsafe { poll(&mut handles, &mut output) }, count);
+        assert_eq!(unsafe { poll(&mut handles, &mut output) }, expected);
         assert_eq!(output.id, 0);
         assert!(state.sentinel);
     }

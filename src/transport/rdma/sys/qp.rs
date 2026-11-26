@@ -2,6 +2,7 @@
 
 use super::device::{endpoint_address, query_descriptor};
 use super::*;
+use orbit_rdma::verbs;
 
 // The protocol grants only READ/WRITE authority, including on atomic-capable hardware.
 pub(super) fn grant_access(permission: u32) -> u32 {
@@ -172,125 +173,105 @@ pub(super) unsafe extern "C" fn post(
     write: c_int,
     result: *mut PostResult,
 ) -> c_int {
-    // SAFETY: RdmaGrant owns the MR/QP and bytes until successful teardown. The
-    // provider consumes these WR/SGE descriptors synchronously during post.
-    unsafe {
-        *result = PostResult::default();
-        if count == 0 || count > 64 {
-            return libc::EINVAL;
-        }
-        let h = &*h;
-        let qp = h.qp.cast::<ffi::ibv_qp>();
-        let Some(post_send) = (*(*qp).context).ops.post_send else {
-            return libc::EOPNOTSUPP;
-        };
-        let mr = &*(*memory).mr.cast::<ffi::ibv_mr>();
-        let Some(local_offset) = local_address.checked_sub(mr.addr as u64) else {
-            return libc::EINVAL;
-        };
-        if local_length == 0
-            || local_address.checked_add(local_length as u64).is_none()
-            || local_offset
-                .checked_add(local_length as u64)
-                .is_none_or(|end| end > mr.length as u64)
-        {
-            return libc::EINVAL;
-        }
-        let requests = std::slice::from_raw_parts(requests, count);
-        let mut sges = Vec::new();
-        let mut wrs = Vec::new();
-        if sges.try_reserve_exact(count).is_err() || wrs.try_reserve_exact(count).is_err() {
-            return libc::ENOMEM;
-        }
-        for request in requests {
-            if request.length == 0
-                || (request.offset as usize)
-                    .checked_add(request.length as usize)
-                    .is_none_or(|end| end > local_length)
-            {
-                return libc::EINVAL;
-            }
-            let Some(local) = local_address.checked_add(u64::from(request.offset)) else {
-                return libc::EINVAL;
-            };
-            let Some(remote) = address.checked_add(u64::from(request.offset)) else {
-                return libc::EINVAL;
-            };
-            if remote.checked_add(u64::from(request.length)).is_none() {
-                return libc::EINVAL;
-            }
-            sges.push(ffi::ibv_sge {
-                addr: local,
-                length: request.length,
-                lkey: mr.lkey,
-            });
-            let mut wr: ffi::ibv_send_wr = std::mem::zeroed();
-            wr.wr_id = request.id;
-            wr.num_sge = 1;
-            wr.opcode = if write != 0 {
-                ffi::ibv_wr_opcode::IBV_WR_RDMA_WRITE
-            } else {
-                ffi::ibv_wr_opcode::IBV_WR_RDMA_READ
-            };
-            wr.send_flags = if request.signaled {
-                ffi::ibv_send_flags::IBV_SEND_SIGNALED.0
-            } else {
-                0
-            };
-            wr.wr.rdma.remote_addr = remote;
-            wr.wr.rdma.rkey = rkey;
-            wrs.push(wr);
-        }
-        let sges_ptr = sges.as_mut_ptr();
-        let wrs_ptr = wrs.as_mut_ptr();
-        for index in 0..count {
-            let wr = wrs_ptr.add(index);
-            (*wr).sg_list = sges_ptr.add(index);
-            (*wr).next = if index + 1 == count {
-                std::ptr::null_mut()
-            } else {
-                wrs_ptr.add(index + 1)
-            };
-        }
-        let mut bad = std::ptr::null_mut();
-        let code = post_send(qp, wrs_ptr, &mut bad);
-        if code == 0 {
-            (*result).accepted = count;
-        } else if let Some(index) = (0..count).find(|index| std::ptr::eq(wrs_ptr.add(*index), bad))
-        {
-            (*result).accepted = index;
-        } else {
-            // A missing/foreign bad_wr cannot prove an unposted suffix. Do not
-            // dereference it or subtract it from an unrelated allocation.
-            (*result).uncertain = true;
-        }
-        code
+    // SAFETY: the grant holds the QP, MR and full request slice; result is writable.
+    let (handles, memory, result) = unsafe { (&*h, &*memory, &mut *result) };
+    *result = PostResult::default();
+    let Some(qp) = std::ptr::NonNull::new(handles.qp) else {
+        return libc::EINVAL;
+    };
+    if !(1..=64).contains(&count) || local_length == 0 {
+        return libc::EINVAL;
     }
+    let lkey = match registered_key(memory, local_address, local_length) {
+        Ok(key) => key,
+        Err(error) => return error,
+    };
+    let mut chain = Vec::new();
+    if chain.try_reserve_exact(count).is_err() {
+        return libc::ENOMEM;
+    }
+    // SAFETY: the caller provided count initialized WorkRequests for this post.
+    for request in unsafe { std::slice::from_raw_parts(requests, count) } {
+        if request.length == 0
+            || (request.offset as usize)
+                .checked_add(request.length as usize)
+                .is_none_or(|end| end > local_length)
+        {
+            return libc::EINVAL;
+        }
+        let Some(remote) = address.checked_add(u64::from(request.offset)) else {
+            return libc::EINVAL;
+        };
+        let opcode = if write != 0 {
+            verbs::Opcode::Write {
+                address: remote,
+                rkey,
+            }
+        } else {
+            verbs::Opcode::Read {
+                address: remote,
+                rkey,
+            }
+        };
+        // The registered_key range check covered every local address in this batch.
+        chain.push(
+            verbs::WorkRequest::new(
+                request.id,
+                opcode,
+                local_address + u64::from(request.offset),
+                request.length,
+                lkey,
+            )
+            .signaled(request.signaled),
+        );
+    }
+    // SAFETY: OrbiTE's grant and CQ lane retain all possibly posted bytes and the QP until drain.
+    result.record(unsafe { verbs::post(qp, &mut chain) })
 }
 
-fn message_sge(
+fn registered_key(
     memory: &MemoryHandles,
     address: u64,
     length: usize,
-) -> std::result::Result<ffi::ibv_sge, c_int> {
-    if memory.mr.is_null() || length != crate::transport::rdma::COMPLETION_MESSAGE_SIZE {
-        return Err(libc::EINVAL);
-    }
-    // SAFETY: The caller's message registration retains this non-null ibv_mr and its backing
-    // through posting.
-    let mr = unsafe { &*memory.mr.cast::<ffi::ibv_mr>() };
+) -> std::result::Result<u32, c_int> {
+    let mr = std::ptr::NonNull::new(memory.mr.cast::<ffi::ibv_mr>()).ok_or(libc::EINVAL)?;
+    // SAFETY: the calling grant or completion owner retains the registered MR.
+    let mr = unsafe { mr.as_ref() };
     let offset = address.checked_sub(mr.addr as u64).ok_or(libc::EINVAL)?;
-    if offset
-        .checked_add(length as u64)
-        .is_none_or(|end| end > mr.length as u64)
+    if address.checked_add(length as u64).is_none()
+        || offset
+            .checked_add(length as u64)
+            .is_none_or(|end| end > mr.length as u64)
     {
         return Err(libc::EINVAL);
     }
-    Ok(ffi::ibv_sge {
-        addr: address,
-        length: length as u32,
-        lkey: mr.lkey,
-    })
+    Ok(mr.lkey)
+}
+
+fn post_message(
+    handles: &ConnectionHandles,
+    memory: &MemoryHandles,
+    id: u64,
+    address: u64,
+    length: usize,
+    opcode: verbs::Opcode,
+    result: &mut PostResult,
+) -> c_int {
+    *result = PostResult::default();
+    let Some(qp) = std::ptr::NonNull::new(handles.qp) else {
+        return libc::EINVAL;
+    };
+    if id == 0 || length != crate::transport::rdma::COMPLETION_MESSAGE_SIZE {
+        return libc::EINVAL;
+    }
+    let lkey = match registered_key(memory, address, length) {
+        Ok(key) => key,
+        Err(error) => return error,
+    };
+    let mut wr = verbs::WorkRequest::new(id, opcode, address, length as u32, lkey)
+        .fenced(opcode != verbs::Opcode::Receive);
+    // SAFETY: the completion slot retains QP, MR and buffer through its own CQ receipt or drain.
+    result.record(unsafe { verbs::post(qp, std::slice::from_mut(&mut wr)) })
 }
 
 pub(super) unsafe extern "C" fn post_receive(
@@ -301,33 +282,17 @@ pub(super) unsafe extern "C" fn post_receive(
     length: usize,
     result: *mut PostResult,
 ) -> c_int {
-    // SAFETY: The grant holds the QP and message MR through completion; result is writable and
-    // the WR/SGE live through post.
+    // SAFETY: the receive owner supplies live handles and a writable result during post.
     unsafe {
-        *result = PostResult::default();
-        if (*handles).qp.is_null() || id == 0 {
-            return libc::EINVAL;
-        }
-        let mut sge = match message_sge(&*memory, address, length) {
-            Ok(sge) => sge,
-            Err(code) => return code,
-        };
-        let qp = (*handles).qp.cast::<ffi::ibv_qp>();
-        let Some(post) = (*(*qp).context).ops.post_recv else {
-            return libc::EOPNOTSUPP;
-        };
-        let mut wr: ffi::ibv_recv_wr = std::mem::zeroed();
-        wr.wr_id = id;
-        wr.sg_list = &mut sge;
-        wr.num_sge = 1;
-        let mut bad = std::ptr::null_mut();
-        let code = post(qp, &mut wr, &mut bad);
-        if code == 0 {
-            (*result).accepted = 1;
-        } else if !std::ptr::eq(bad, &wr) {
-            (*result).uncertain = true;
-        }
-        code
+        post_message(
+            &*handles,
+            &*memory,
+            id,
+            address,
+            length,
+            verbs::Opcode::Receive,
+            &mut *result,
+        )
     }
 }
 
@@ -341,40 +306,21 @@ pub(super) unsafe extern "C" fn send_completion(
     invalidate: bool,
     result: *mut PostResult,
 ) -> c_int {
-    // SAFETY: The completion owner retains its QP and message MR through CQ completion; result
-    // and the stack WR are live during post.
+    let opcode = if invalidate {
+        verbs::Opcode::SendWithInvalidate { rkey }
+    } else {
+        verbs::Opcode::Send
+    };
+    // SAFETY: the send owner supplies live handles and a writable result during post.
     unsafe {
-        *result = PostResult::default();
-        if (*handles).qp.is_null() || id == 0 {
-            return libc::EINVAL;
-        }
-        let mut sge = match message_sge(&*memory, address, length) {
-            Ok(sge) => sge,
-            Err(code) => return code,
-        };
-        let qp = (*handles).qp.cast::<ffi::ibv_qp>();
-        let Some(post) = (*(*qp).context).ops.post_send else {
-            return libc::EOPNOTSUPP;
-        };
-        let mut wr: ffi::ibv_send_wr = std::mem::zeroed();
-        wr.wr_id = id;
-        wr.sg_list = &mut sge;
-        wr.num_sge = 1;
-        wr.opcode = if invalidate {
-            ffi::ibv_wr_opcode::IBV_WR_SEND_WITH_INV
-        } else {
-            ffi::ibv_wr_opcode::IBV_WR_SEND
-        };
-        wr.send_flags =
-            ffi::ibv_send_flags::IBV_SEND_FENCE.0 | ffi::ibv_send_flags::IBV_SEND_SIGNALED.0;
-        wr.__bindgen_anon_1.invalidate_rkey = if invalidate { rkey } else { 0 };
-        let mut bad = std::ptr::null_mut();
-        let code = post(qp, &mut wr, &mut bad);
-        if code == 0 {
-            (*result).accepted = 1;
-        } else if !std::ptr::eq(bad, &wr) {
-            (*result).uncertain = true;
-        }
-        code
+        post_message(
+            &*handles,
+            &*memory,
+            id,
+            address,
+            length,
+            opcode,
+            &mut *result,
+        )
     }
 }
