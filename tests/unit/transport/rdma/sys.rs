@@ -86,8 +86,11 @@ fn chained_posts_preserve_generated_abi_offsets_ids_and_accepted_prefix_without_
         ..ConnectionHandles::default()
     };
     let memory = MemoryHandles {
-        mr: (&mut mr as *mut ffi::ibv_mr).cast(),
-        ..MemoryHandles::default()
+        native: orbit_rdma::provider::Memory {
+            mr: (&mut mr as *mut ffi::ibv_mr).cast(),
+            ..Default::default()
+        },
+        ..Default::default()
     };
     let requests = [
         WorkRequest {
@@ -190,12 +193,12 @@ fn chained_posts_preserve_generated_abi_offsets_ids_and_accepted_prefix_without_
                         &SendRequest {
                             id: request.id,
                             opcode: if write == 0 {
-                                ffi::ibv_wr_opcode::IBV_WR_RDMA_READ
+                                ffi::IBV_WR_RDMA_READ
                             } else {
-                                ffi::ibv_wr_opcode::IBV_WR_RDMA_WRITE
+                                ffi::IBV_WR_RDMA_WRITE
                             },
                             flags: if request.signaled {
-                                ffi::ibv_send_flags::IBV_SEND_SIGNALED.0
+                                ffi::IBV_SEND_SIGNALED
                             } else {
                                 0
                             },
@@ -294,8 +297,8 @@ unsafe extern "C" fn capture_poll(
     // completion entries.
     unsafe {
         let state = &mut *(*cq).cq_context.cast::<NativeCq>();
-        state.sentinel = (*completion).status == ffi::ibv_wc_status::IBV_WC_GENERAL_ERR
-            && (*completion).opcode == ffi::ibv_wc_opcode::IBV_WC_LOCAL_INV;
+        state.sentinel = (*completion).status == ffi::IBV_WC_GENERAL_ERR
+            && (*completion).opcode == ffi::IBV_WC_LOCAL_INV;
         if state.count == 1 {
             std::ptr::copy_nonoverlapping(state.bytes.as_ptr(), completion.cast(), 48);
         }
@@ -339,30 +342,15 @@ fn poll_dispatch_decodes_native_cqes_and_only_reads_error_valid_fields() {
     }
     state.count = 1;
     for (status, opcode, length, vendor) in [
+        (ffi::IBV_WC_SUCCESS, ffi::IBV_WC_RDMA_READ, 16, 0),
+        (ffi::IBV_WC_SUCCESS, ffi::IBV_WC_RDMA_WRITE, 0, 0),
         (
-            ffi::ibv_wc_status::IBV_WC_SUCCESS,
-            ffi::ibv_wc_opcode::IBV_WC_RDMA_READ,
-            16,
-            0,
-        ),
-        (
-            ffi::ibv_wc_status::IBV_WC_SUCCESS,
-            ffi::ibv_wc_opcode::IBV_WC_RDMA_WRITE,
-            0,
-            0,
-        ),
-        (
-            ffi::ibv_wc_status::IBV_WC_SUCCESS,
-            ffi::ibv_wc_opcode::IBV_WC_RECV,
+            ffi::IBV_WC_SUCCESS,
+            ffi::IBV_WC_RECV,
             super::super::COMPLETION_MESSAGE_SIZE as u32,
             0,
         ),
-        (
-            ffi::ibv_wc_status::IBV_WC_REM_ACCESS_ERR,
-            u32::MAX,
-            u32::MAX,
-            0x83,
-        ),
+        (ffi::IBV_WC_REM_ACCESS_ERR, u32::MAX, u32::MAX, 0x83),
     ] {
         // libibverbs' native ibv_wc prefix: wr_id, status, opcode, vendor_err,
         // byte_len, plus the error-valid QP number used by shared CQ routing.
@@ -422,24 +410,21 @@ unsafe extern "C" fn capture_window(
         assert_eq!(w.wr_id, 65);
         assert_eq!(w.num_sge, 0);
         assert!(w.sg_list.is_null() && w.next.is_null());
-        assert_eq!(w.send_flags, ffi::ibv_send_flags::IBV_SEND_SIGNALED.0);
+        assert_eq!(w.send_flags, ffi::IBV_SEND_SIGNALED);
         if s.bind {
-            assert_eq!(w.opcode, ffi::ibv_wr_opcode::IBV_WR_BIND_MW);
+            assert_eq!(w.opcode, ffi::IBV_WR_BIND_MW);
             let b = w.__bindgen_anon_2.bind_mw;
             assert_eq!((b.mw, b.rkey, b.bind_info.mr), (s.mw, 0x123456ff, s.mr));
             assert_eq!(
                 (b.bind_info.addr, b.bind_info.length),
                 (s.address, s.length)
             );
-            assert_eq!(
-                b.bind_info.mw_access_flags,
-                ffi::ibv_access_flags::IBV_ACCESS_REMOTE_WRITE.0
-            );
+            assert_eq!(b.bind_info.mw_access_flags, ffi::IBV_ACCESS_REMOTE_WRITE);
         } else {
-            assert_eq!(w.opcode, ffi::ibv_wr_opcode::IBV_WR_LOCAL_INV);
+            assert_eq!(w.opcode, ffi::IBV_WR_LOCAL_INV);
             assert_eq!(w.__bindgen_anon_1.invalidate_rkey, 0x123456ff);
         }
-        if s.code != 0 {
+        if s.code != 0 || s.foreign {
             *bad = if s.foreign {
                 wr.cast::<u8>().add(1).cast()
             } else {
@@ -452,7 +437,7 @@ unsafe extern "C" fn capture_window(
 #[test]
 fn type2_window_posts_preserve_native_union_fields_and_unknown_post_debt() {
     for bind in [true, false] {
-        for (code, foreign) in [(0, false), (libc::EIO, false), (libc::EIO, true)] {
+        for (code, foreign) in [(0, false), (0, true), (libc::EIO, false), (libc::EIO, true)] {
             let mut context = Box::new(ffi::ibv_context::default());
             context.ops.post_send = Some(capture_window);
             let mut mr = ffi::ibv_mr::default();
@@ -476,10 +461,13 @@ fn type2_window_posts_preserve_native_union_fields_and_unknown_post_debt() {
                 ..Default::default()
             };
             let mut memory = MemoryHandles {
-                mr: (&mut mr as *mut ffi::ibv_mr).cast(),
-                mw: (&mut mw as *mut ffi::ibv_mw).cast(),
-                remote_mr: false,
-                window_key: 0x123456ff,
+                native: orbit_rdma::provider::Memory {
+                    mr: (&mut mr as *mut ffi::ibv_mr).cast(),
+                    mw: (&mut mw as *mut ffi::ibv_mw).cast(),
+                    remote_mr: false,
+                    window_key: 0x123456ff,
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             let mut result = PostResult::default();
@@ -498,11 +486,15 @@ fn type2_window_posts_preserve_native_union_fields_and_unknown_post_debt() {
                         &mut result,
                     )
                 },
-                code
+                if code == 0 && foreign {
+                    libc::EPROTO
+                } else {
+                    code
+                }
             );
             assert_eq!(
                 (result.accepted, result.uncertain),
-                (usize::from(code == 0), foreign)
+                (usize::from(code == 0 && !foreign), foreign)
             );
         }
     }
@@ -568,14 +560,14 @@ unsafe extern "C" fn capture_message(
         assert_eq!(
             request.opcode,
             if state.invalidate {
-                ffi::ibv_wr_opcode::IBV_WR_SEND_WITH_INV
+                ffi::IBV_WR_SEND_WITH_INV
             } else {
-                ffi::ibv_wr_opcode::IBV_WR_SEND
+                ffi::IBV_WR_SEND
             }
         );
         assert_eq!(
             request.send_flags,
-            ffi::ibv_send_flags::IBV_SEND_FENCE.0 | ffi::ibv_send_flags::IBV_SEND_SIGNALED.0
+            ffi::IBV_SEND_FENCE | ffi::IBV_SEND_SIGNALED
         );
         assert_eq!(
             request.__bindgen_anon_1.invalidate_rkey,
@@ -633,7 +625,10 @@ fn receive_and_fenced_invalidation_preserve_native_message_abi_and_unknown_post_
             ..Default::default()
         };
         let memory = MemoryHandles {
-            mr: (&mut mr as *mut ffi::ibv_mr).cast(),
+            native: orbit_rdma::provider::Memory {
+                mr: (&mut mr as *mut ffi::ibv_mr).cast(),
+                ..Default::default()
+            },
             ..Default::default()
         };
         for (code, foreign_bad) in [(0, false), (libc::ENOMEM, false), (libc::EIO, true)] {
@@ -729,10 +724,8 @@ fn native_gid_identity_checks_type_interface_port_index_and_bytes_independently(
         },
     };
     for field in 0..7 {
-        let mut entry = ffi::ibv_gid_entry {
-            gid: ffi::ibv_gid {
-                raw: address.descriptor.gid,
-            },
+        let mut entry = provider::GidEntry {
+            gid: address.descriptor.gid,
             gid_index: 3,
             port_num: 1,
             gid_type: ffi::IBV_GID_TYPE_ROCE_V2,
@@ -740,9 +733,7 @@ fn native_gid_identity_checks_type_interface_port_index_and_bytes_independently(
         };
         match field {
             0 => {}
-            // SAFETY: The fixture initialized all 16 raw GID bytes; the selected byte has no
-            // invalid bit patterns.
-            1 => unsafe { entry.gid.raw[15] ^= 1 },
+            1 => entry.gid[15] ^= 1,
             2 => entry.gid_type = ffi::IBV_GID_TYPE_ROCE_V1,
             3 => entry.ndev_ifindex += 1,
             4 => entry.port_num += 1,
@@ -765,10 +756,8 @@ fn native_gid_identity_checks_type_interface_port_index_and_bytes_independently(
         },
         ..address
     };
-    let entry = ffi::ibv_gid_entry {
-        gid: ffi::ibv_gid {
-            raw: ib.descriptor.gid,
-        },
+    let entry = provider::GidEntry {
+        gid: ib.descriptor.gid,
         gid_index: 3,
         port_num: 1,
         gid_type: ffi::IBV_GID_TYPE_IB,
@@ -796,7 +785,7 @@ fn endpoint_requery_errors_are_route_faults_even_when_the_old_tuple_returns() {
     );
 }
 
-type AddressRead = Result<(RdmaAddress, ffi::ibv_gid_entry)>;
+type AddressRead = Result<(RdmaAddress, provider::GidEntry)>;
 thread_local! {
     static ADDRESS_READ: std::cell::RefCell<Option<(usize, AddressRead)>> = const { std::cell::RefCell::new(None) };
 }
@@ -851,10 +840,8 @@ fn real_address_query_consumes_native_gid_proof_before_accepting_the_route() {
     };
     for field in 0..8 {
         let mut observed = address.clone();
-        let mut entry = ffi::ibv_gid_entry {
-            gid: ffi::ibv_gid {
-                raw: address.descriptor.gid,
-            },
+        let mut entry = provider::GidEntry {
+            gid: address.descriptor.gid,
             gid_index: 3,
             port_num: 1,
             gid_type: ffi::IBV_GID_TYPE_ROCE_V2,
@@ -862,9 +849,7 @@ fn real_address_query_consumes_native_gid_proof_before_accepting_the_route() {
         };
         match field {
             0 => {}
-            // SAFETY: The fixture initialized all 16 raw GID bytes; the selected byte has no
-            // invalid bit patterns.
-            1 => unsafe { entry.gid.raw[15] ^= 1 },
+            1 => entry.gid[15] ^= 1,
             2 => entry.gid_type = ffi::IBV_GID_TYPE_ROCE_V1,
             3 => entry.ndev_ifindex += 1,
             4 => entry.port_num += 1,
@@ -939,13 +924,47 @@ fn notification_dispatch_uses_generated_context_ops_and_all_completion_types() {
 
 #[test]
 fn r1b_no_qp_grant_authorizes_remote_atomics() {
-    let read = ffi::ibv_access_flags::IBV_ACCESS_REMOTE_READ.0;
-    let write = ffi::ibv_access_flags::IBV_ACCESS_REMOTE_WRITE.0;
+    let read = ffi::IBV_ACCESS_REMOTE_READ;
+    let write = ffi::IBV_ACCESS_REMOTE_WRITE;
     for (permission, allowed) in [(0, 0), (1, read), (2, write), (3, read | write)] {
-        assert_eq!(qp::grant_access(permission), allowed);
+        assert_eq!(provider::grant_access(permission), allowed);
         assert_eq!(
-            qp::grant_access(permission) & ffi::ibv_access_flags::IBV_ACCESS_REMOTE_ATOMIC.0,
+            provider::grant_access(permission) & ffi::IBV_ACCESS_REMOTE_ATOMIC,
             0
         );
+    }
+}
+
+#[test]
+fn real_install_is_lazy_and_reports_missing_libraries_in_an_isolated_process() {
+    const CHILD: &str = "ORBITE_TEST_NO_NATIVE_RUNTIME";
+    if std::env::var_os(CHILD).is_some() {
+        let engine = crate::TransferEngine::new(crate::EngineConfig::default()).unwrap();
+        let maps = std::fs::read_to_string("/proc/self/maps").unwrap();
+        assert!(!maps.contains("libibverbs.so"));
+        drop(engine);
+        let config = crate::EngineConfig {
+            rdma: Some(super::RdmaConfig::default()),
+            ..Default::default()
+        };
+        assert!(
+            matches!(crate::TransferEngine::new(config), Err(Error::Unavailable(message)) if message.starts_with("libibverbs.so.1:"))
+        );
+        return;
+    }
+    // The clean-container gate sets this explicit requirement. Other hosts
+    // exercise a missing library and every missing export with local fixtures.
+    if std::env::var_os("ORBITE_REQUIRE_NO_NATIVE_LIBRARIES").is_some() {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "transport::rdma::sys::tests::real_install_is_lazy_and_reports_missing_libraries_in_an_isolated_process", "--nocapture"])
+            .env(CHILD, "1")
+            .output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}\n{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
     }
 }

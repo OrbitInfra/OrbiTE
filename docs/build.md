@@ -25,8 +25,8 @@ CC=gcc CXX=g++ LIBCLANG_PATH=/usr/lib/llvm-18/lib \
   cargo build --locked --features rdma
 ```
 
-The RDMA build generates private layouts from the installed `infiniband/verbs.h`
-with bindgen. It no longer uses `ibverbs-sys`, whose build script unconditionally
+OrbitRDMA generates the verbs layouts from the installed `infiniband/verbs.h`
+with bindgen and builds the port bridge. OrbiTE uses the provider API. It no longer uses `ibverbs-sys`, whose build script unconditionally
 links libibverbs and builds a vendored header tree. No rdma-core library or provider
 is bundled. The small C port shim uses the same headers for provider-inline
 operations and receives its legacy callback from the runtime table. The build

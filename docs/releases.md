@@ -2,7 +2,8 @@
 
 ## Unreleased
 
-- RDMA data posting and CQ decoding use OrbitRDMA 0.1.0. Direct host sources
+- OrbitRDMA 0.1.1 supplies device and port queries, RC queues, host and GPU
+  registrations, events, data operations and native teardown. Direct host sources
   can set `host_source_reuse = false` to allocate a private PD, QP and
   exact-range MR for each grant. The existing MR-authority handshake governs
   cleanup. [Host RDMA profiles](rdma-cuda.md#build-and-select-a-path)

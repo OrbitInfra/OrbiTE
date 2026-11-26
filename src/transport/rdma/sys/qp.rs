@@ -1,21 +1,34 @@
 //! Native RC QP setup and payload or completion-message work requests.
 
-use super::device::{endpoint_address, query_descriptor};
+use super::device::endpoint_address;
 use super::*;
 use orbit_rdma::verbs;
 
-// The protocol grants only READ/WRITE authority, including on atomic-capable hardware.
-pub(super) fn grant_access(permission: u32) -> u32 {
-    let mut access = 0;
-    if permission & 1 != 0 {
-        access |= ffi::ibv_access_flags::IBV_ACCESS_REMOTE_READ.0;
+impl From<provider::Endpoint> for Descriptor {
+    fn from(x: provider::Endpoint) -> Self {
+        Self {
+            qpn: x.qpn,
+            psn: x.psn,
+            lid: x.lid,
+            mtu: x.mtu,
+            link_layer: x.link_layer,
+            gid: x.gid,
+            ..Default::default()
+        }
     }
-    if permission & 2 != 0 {
-        access |= ffi::ibv_access_flags::IBV_ACCESS_REMOTE_WRITE.0;
-    }
-    access
 }
-
+impl From<Descriptor> for provider::Endpoint {
+    fn from(x: Descriptor) -> Self {
+        Self {
+            qpn: x.qpn,
+            psn: x.psn,
+            lid: x.lid,
+            mtu: x.mtu,
+            link_layer: x.link_layer,
+            gid: x.gid,
+        }
+    }
+}
 pub(super) unsafe extern "C" fn open(
     handles: *mut ConnectionHandles,
     memory: *mut MemoryHandles,
@@ -35,11 +48,13 @@ pub(super) unsafe extern "C" fn open(
     unsafe {
         let h = &mut *handles;
         let memory = &mut *memory;
-        let descriptor =
-            match endpoint_address(query_descriptor(device, port, gid_index), &*expected) {
-                Ok(address) => address,
-                Err(code) => return code,
-            };
+        let descriptor = match endpoint_address(
+            provider::query_descriptor(device, port, gid_index).map(Descriptor::from),
+            &*expected,
+        ) {
+            Ok(address) => address,
+            Err(code) => return code,
+        };
         let device = &*device;
         if h.cq.is_null() || h.receive_cq.is_null() {
             return libc::EINVAL;
@@ -48,51 +63,23 @@ pub(super) unsafe extern "C" fn open(
         if code != 0 {
             return code;
         }
-        let mut init: ffi::ibv_qp_init_attr = std::mem::zeroed();
-        init.send_cq = h.cq.cast();
-        init.recv_cq = h.receive_cq.cast();
-        init.qp_type = ffi::ibv_qp_type::IBV_QPT_RC;
-        init.sq_sig_all = 0;
-        init.cap.max_send_wr = max_send_wr;
-        init.cap.max_recv_wr = max_recv_wr;
-        init.cap.max_send_sge = 1;
-        init.cap.max_recv_sge = 1;
         let pd = if h.private_pd.is_null() {
             device.pd
         } else {
             h.private_pd
         };
-        h.qp = ffi::ibv_create_qp(pd.cast(), &mut init).cast();
-        if h.qp.is_null() {
-            return failure();
-        }
-        if init.cap.max_send_wr < max_send_wr
-            || init.cap.max_send_sge < 1
-            || init.cap.max_recv_wr < max_recv_wr
-            || init.cap.max_recv_sge < 1
-        {
-            return libc::EOPNOTSUPP;
-        }
-        let mut qp_attr: ffi::ibv_qp_attr = std::mem::zeroed();
-        qp_attr.qp_state = ffi::ibv_qp_state::IBV_QPS_INIT;
-        qp_attr.port_num = port;
-        qp_attr.qp_access_flags = grant_access(permission);
-        let mask = ffi::ibv_qp_attr_mask::IBV_QP_STATE
-            | ffi::ibv_qp_attr_mask::IBV_QP_PKEY_INDEX
-            | ffi::ibv_qp_attr_mask::IBV_QP_PORT
-            | ffi::ibv_qp_attr_mask::IBV_QP_ACCESS_FLAGS;
-        let error = ffi::ibv_modify_qp(h.qp.cast(), &mut qp_attr, mask.0 as c_int);
-        if error != 0 {
-            return error;
-        }
+        let qpn = match provider::open_rc(h, pd, port, permission, max_send_wr, max_recv_wr) {
+            Ok(qpn) => qpn,
+            Err(code) => return code,
+        };
         *local = Descriptor {
             address: buffer as u64,
             rkey: if permission != 0 {
                 memory.window_key
             } else {
-                (*memory.mr.cast::<ffi::ibv_mr>()).rkey
+                provider::remote_key(&memory.native)
             },
-            qpn: (*h.qp.cast::<ffi::ibv_qp>()).qp_num,
+            qpn,
             psn,
             ..descriptor
         };
@@ -110,54 +97,18 @@ pub(super) unsafe extern "C" fn connect(
     traffic_class: u8,
     hop_limit: u8,
 ) -> c_int {
-    // SAFETY: RdmaGrant owns an initialized QP and validates both descriptors
-    // before this call. Each mask matches the initialized fields for its state.
+    // SAFETY: the grant retains this INIT QP; the handshake validated both endpoint descriptors.
     unsafe {
-        let h = &mut *handles;
-        let local = &*local;
-        let remote = &*remote;
-        let mut attr: ffi::ibv_qp_attr = std::mem::zeroed();
-        attr.qp_state = ffi::ibv_qp_state::IBV_QPS_RTR;
-        attr.path_mtu = u32::from(local.mtu.min(remote.mtu));
-        attr.dest_qp_num = remote.qpn;
-        attr.rq_psn = remote.psn;
-        attr.max_dest_rd_atomic = h.read_depth.responder;
-        attr.min_rnr_timer = 12;
-        attr.ah_attr.sl = service_level;
-        attr.ah_attr.dlid = remote.lid;
-        attr.ah_attr.port_num = port;
-        if local.link_layer == 2 || remote.gid != [0; 16] {
-            attr.ah_attr.is_global = 1;
-            attr.ah_attr.grh.dgid.raw = remote.gid;
-            attr.ah_attr.grh.sgid_index = gid_index;
-            attr.ah_attr.grh.hop_limit = hop_limit;
-            attr.ah_attr.grh.traffic_class = traffic_class;
-        }
-        let mask = ffi::ibv_qp_attr_mask::IBV_QP_STATE
-            | ffi::ibv_qp_attr_mask::IBV_QP_AV
-            | ffi::ibv_qp_attr_mask::IBV_QP_PATH_MTU
-            | ffi::ibv_qp_attr_mask::IBV_QP_DEST_QPN
-            | ffi::ibv_qp_attr_mask::IBV_QP_RQ_PSN
-            | ffi::ibv_qp_attr_mask::IBV_QP_MAX_DEST_RD_ATOMIC
-            | ffi::ibv_qp_attr_mask::IBV_QP_MIN_RNR_TIMER;
-        let error = ffi::ibv_modify_qp(h.qp.cast(), &mut attr, mask.0 as c_int);
-        if error != 0 {
-            return error;
-        }
-        let mut attr: ffi::ibv_qp_attr = std::mem::zeroed();
-        attr.qp_state = ffi::ibv_qp_state::IBV_QPS_RTS;
-        attr.timeout = 14;
-        attr.retry_cnt = 7;
-        attr.rnr_retry = 7;
-        attr.sq_psn = local.psn;
-        attr.max_rd_atomic = h.read_depth.initiator;
-        let mask = ffi::ibv_qp_attr_mask::IBV_QP_STATE
-            | ffi::ibv_qp_attr_mask::IBV_QP_TIMEOUT
-            | ffi::ibv_qp_attr_mask::IBV_QP_RETRY_CNT
-            | ffi::ibv_qp_attr_mask::IBV_QP_RNR_RETRY
-            | ffi::ibv_qp_attr_mask::IBV_QP_SQ_PSN
-            | ffi::ibv_qp_attr_mask::IBV_QP_MAX_QP_RD_ATOMIC;
-        ffi::ibv_modify_qp(h.qp.cast(), &mut attr, mask.0 as c_int)
+        provider::connect(
+            handles,
+            &(*local).into(),
+            &(*remote).into(),
+            port,
+            gid_index,
+            service_level,
+            traffic_class,
+            hop_limit,
+        )
     }
 }
 
@@ -182,7 +133,8 @@ pub(super) unsafe extern "C" fn post(
     if !(1..=64).contains(&count) || local_length == 0 {
         return libc::EINVAL;
     }
-    let lkey = match registered_key(memory, local_address, local_length) {
+    // SAFETY: the grant holds this real MR through submission and physical drain.
+    let lkey = match unsafe { provider::local_key(&memory.native, local_address, local_length) } {
         Ok(key) => key,
         Err(error) => return error,
     };
@@ -229,25 +181,6 @@ pub(super) unsafe extern "C" fn post(
     result.record(unsafe { verbs::post(qp, &mut chain) })
 }
 
-fn registered_key(
-    memory: &MemoryHandles,
-    address: u64,
-    length: usize,
-) -> std::result::Result<u32, c_int> {
-    let mr = std::ptr::NonNull::new(memory.mr.cast::<ffi::ibv_mr>()).ok_or(libc::EINVAL)?;
-    // SAFETY: the calling grant or completion owner retains the registered MR.
-    let mr = unsafe { mr.as_ref() };
-    let offset = address.checked_sub(mr.addr as u64).ok_or(libc::EINVAL)?;
-    if address.checked_add(length as u64).is_none()
-        || offset
-            .checked_add(length as u64)
-            .is_none_or(|end| end > mr.length as u64)
-    {
-        return Err(libc::EINVAL);
-    }
-    Ok(mr.lkey)
-}
-
 fn post_message(
     handles: &ConnectionHandles,
     memory: &MemoryHandles,
@@ -264,7 +197,8 @@ fn post_message(
     if id == 0 || length != crate::transport::rdma::COMPLETION_MESSAGE_SIZE {
         return libc::EINVAL;
     }
-    let lkey = match registered_key(memory, address, length) {
+    // SAFETY: the control slot owns its MR through the posted work and retirement.
+    let lkey = match unsafe { provider::local_key(&memory.native, address, length) } {
         Ok(key) => key,
         Err(error) => return error,
     };

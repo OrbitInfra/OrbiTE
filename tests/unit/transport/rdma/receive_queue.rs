@@ -195,7 +195,7 @@ fn receive_identity_flags_binding_and_key_never_pay_foreign_debt() {
             "extra_flags" => completion.flags |= 0x8000_0000,
             "grh" => completion.flags |= sys::GRH,
             "checksum_instead_of_invalidation" => {
-                completion.flags = sys::GRH | sys::ffi::ibv_wc_flags::IBV_WC_IP_CSUM_OK.0;
+                completion.flags = sys::GRH | sys::ffi::IBV_WC_IP_CSUM_OK;
             }
             "key" => completion.invalidated_rkey = first.rkey,
             "binding" => queue.slots[0].message.memory.bytes_mut()[0] ^= 1,
@@ -299,7 +299,7 @@ fn mr_authority_requires_plain_send_and_exact_binding_without_claiming_invalidat
         completion.invalidated_rkey = 0;
         match case {
             "grh" => completion.flags = sys::GRH,
-            "immediate" => completion.flags = sys::GRH | sys::ffi::ibv_wc_flags::IBV_WC_WITH_IMM.0,
+            "immediate" => completion.flags = sys::GRH | sys::ffi::IBV_WC_WITH_IMM,
             "invalidation" => {
                 completion.flags = sys::WITH_INVALIDATE;
                 completion.invalidated_rkey = receipt.rkey;

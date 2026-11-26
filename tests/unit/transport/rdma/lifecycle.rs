@@ -39,7 +39,7 @@ fn matches(context: *mut ffi::ibv_context, trace: &Trace) -> bool {
 unsafe extern "C" fn deregister(h: *mut sys::MemoryHandles) -> c_int {
     let mut trace = TRACE.get().unwrap().lock().unwrap();
     // SAFETY: The registration retains this native ibv_mr until the deregistration call returns.
-    let mr = unsafe { (*h).mr.cast::<ffi::ibv_mr>() };
+    let mr = unsafe { (*h).native.mr.cast::<ffi::ibv_mr>() };
     if trace.mode != "mr-cleanup-error" || !trace.target || mr.is_null() {
         // SAFETY: The registration owner retains the MR and backing through the deregistration
         // attempt.
@@ -73,7 +73,7 @@ unsafe extern "C" fn deregister(h: *mut sys::MemoryHandles) -> c_int {
     trace.error = unsafe { (sys::REAL.deregister)(h) };
     assert_eq!(trace.error, libc::EIO);
     // SAFETY: The registration owner keeps its MR handle slot valid through the callback.
-    assert_eq!(unsafe { (*h).mr } as usize, trace.mr);
+    assert_eq!(unsafe { (*h).native.mr } as usize, trace.mr);
     println!(
         "ORBITE_COMMAND_ERROR {{\"kind\":\"mr\",\"code\":{},\"attempts\":{},\"mr\":{},\"pd\":{},\"syscall_fault_injection\":true}}",
         trace.error, trace.attempts, trace.mr, trace.pd
@@ -84,7 +84,7 @@ unsafe extern "C" fn deregister(h: *mut sys::MemoryHandles) -> c_int {
 unsafe extern "C" fn dealloc_window(h: *mut sys::MemoryHandles) -> c_int {
     let mut trace = TRACE.get().unwrap().lock().unwrap();
     // SAFETY: The grant owns this window handle slot even during an injected teardown failure.
-    let mw = unsafe { (*h).mw.cast::<ffi::ibv_mw>() };
+    let mw = unsafe { (*h).native.mw.cast::<ffi::ibv_mw>() };
     if trace.mode != "mw-cleanup-error" || !trace.target || mw.is_null() {
         // SAFETY: The grant retains its window and protection domain through the deallocation
         // attempt.
@@ -102,7 +102,7 @@ unsafe extern "C" fn dealloc_window(h: *mut sys::MemoryHandles) -> c_int {
         return unsafe { (sys::REAL.dealloc_window)(h) };
     }
     // SAFETY: The registration owner keeps its MR handle slot valid through the callback.
-    trace.mr = unsafe { (*h).mr } as usize;
+    trace.mr = unsafe { (*h).native.mr } as usize;
     trace.mw = mw as usize;
     trace.pd = native.pd as usize;
     trace.context = native.context as usize;
@@ -116,7 +116,7 @@ unsafe extern "C" fn dealloc_window(h: *mut sys::MemoryHandles) -> c_int {
     trace.error = unsafe { (sys::REAL.dealloc_window)(h) };
     assert_eq!(trace.error, libc::EIO);
     // SAFETY: The grant owns this window handle slot even during an injected teardown failure.
-    assert_eq!(unsafe { (*h).mw } as usize, trace.mw);
+    assert_eq!(unsafe { (*h).native.mw } as usize, trace.mw);
     println!(
         "ORBITE_COMMAND_ERROR {{\"kind\":\"mw\",\"code\":{},\"attempts\":{},\"mr\":{},\"mw\":{},\"pd\":{},\"syscall_fault_injection\":true}}",
         trace.error, trace.attempts, trace.mr, trace.mw, trace.pd
@@ -149,19 +149,13 @@ unsafe extern "C" fn post(
         {
             trace.armed = false;
             let mut attr = ffi::ibv_qp_attr {
-                qp_state: ffi::ibv_qp_state::IBV_QPS_ERR,
+                qp_state: ffi::IBV_QPS_ERR,
                 ..Default::default()
             };
             assert_eq!(
                 // SAFETY: The connection retains the native QP and the fixture supplies
                 // initialized attribute storage for this call.
-                unsafe {
-                    ffi::ibv_modify_qp(
-                        qp,
-                        &mut attr,
-                        ffi::ibv_qp_attr_mask::IBV_QP_STATE.0 as c_int,
-                    )
-                },
+                unsafe { ffi::ibv_modify_qp(qp, &mut attr, ffi::IBV_QP_STATE as c_int,) },
                 0
             );
             trace.qp_errors += 1;

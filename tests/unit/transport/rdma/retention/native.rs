@@ -184,7 +184,7 @@ impl Retirement {
         let mut attributes = ffi::ibv_qp_init_attr {
             send_cq: cq as *mut ffi::ibv_cq,
             recv_cq: cq as *mut ffi::ibv_cq,
-            qp_type: ffi::ibv_qp_type::IBV_QPT_RC,
+            qp_type: ffi::IBV_QPT_RC,
             cap: ffi::ibv_qp_cap {
                 max_send_wr: 1,
                 max_recv_wr: 1,
@@ -296,14 +296,14 @@ impl Retirement {
                     ffi::ibv_query_qp(
                         qp,
                         &mut observed,
-                        ffi::ibv_qp_attr_mask::IBV_QP_STATE.0 as c_int,
+                        ffi::IBV_QP_STATE as c_int,
                         &mut attributes,
                     )
                 },
                 0
             );
             if self.kind == "cq" {
-                assert_eq!(observed.qp_state, ffi::ibv_qp_state::IBV_QPS_RESET);
+                assert_eq!(observed.qp_state, ffi::IBV_QPS_RESET);
             }
             // SAFETY: This fault fixture deliberately retains these native resources after failed
             // teardown, keeping their handles and dependencies live for inspection.

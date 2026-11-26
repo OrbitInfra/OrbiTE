@@ -77,7 +77,10 @@ impl Resources {
     pub(super) fn close_exhausted_windows(&mut self, verbs: &sys::Verbs) -> Result<()> {
         while let Some(window) = self.exhausted_windows.last() {
             let mut memory = sys::MemoryHandles {
-                mw: window.handle.as_ptr(),
+                native: orbit_rdma::provider::Memory {
+                    mw: window.handle.as_ptr(),
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             // SAFETY: this MW was never bound; only its retained PD is required.

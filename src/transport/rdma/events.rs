@@ -149,15 +149,7 @@ impl State {
     }
 }
 
-pub(super) fn port_event(kind: u32) -> bool {
-    matches!(
-        kind,
-        crate::transport::rdma::sys::ffi::IBV_EVENT_PORT_ERR
-            | crate::transport::rdma::sys::ffi::IBV_EVENT_PORT_ACTIVE
-            | crate::transport::rdma::sys::ffi::IBV_EVENT_GID_CHANGE
-            | crate::transport::rdma::sys::ffi::IBV_EVENT_LID_CHANGE
-    )
-}
+pub(super) use orbit_rdma::provider::port_event;
 
 #[cfg(test)]
 #[path = "../../../tests/unit/transport/rdma/events.rs"]

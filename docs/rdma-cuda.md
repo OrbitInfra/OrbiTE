@@ -21,6 +21,11 @@ the host provider and devices. All engine, protocol,
 progress and resource owners are Rust. A small C shim only queries port rates
 from the installed libibverbs headers.
 
+The `rdma` feature uses OrbitRDMA 0.1.1 for every native verbs operation. The
+combined `rdma,cuda` build also selects its dma-buf and mlx5 provider support.
+OrbiTE retains CUDA allocation/export lifetimes, peer grants, rail selection
+and progress scheduling.
+
 For a direct host source, `RdmaConfig.host_source_reuse` defaults to `true`.
 Each reused QP requires a per-grant memory window and an exact remote-invalidation
 receipt. Set it to `false` on a source whose provider cannot report that

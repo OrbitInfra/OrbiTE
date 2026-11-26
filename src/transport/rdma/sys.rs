@@ -4,8 +4,12 @@
 
 use std::ffi::{CStr, c_char, c_int, c_void};
 
-pub(in crate::transport::rdma) mod ffi;
-mod native;
+use orbit_rdma::provider;
+pub(in crate::transport::rdma) use orbit_rdma::provider::abi as ffi;
+pub(super) use provider::{
+    AsyncEvent, ChannelHandles, ConnectionHandles, CqHandles, DeviceHandles, GPU_PROBE_QPN,
+    PostResult, ReadDepth,
+};
 
 use super::{
     Descriptor, RdmaConfig,
@@ -17,124 +21,26 @@ use crate::{Error, Result};
 mod cq;
 mod device;
 #[cfg(feature = "cuda")]
-mod gpu_key;
-#[cfg(feature = "cuda")]
 mod gpu_registration;
 mod memory;
 #[cfg(feature = "cuda")]
 pub(crate) use gpu_registration::GpuRegistrationVerbs;
 #[cfg(all(test, feature = "cuda"))]
 pub(super) use gpu_registration::peermem_at;
-mod port;
 mod qp;
 
-use cq::{
-    ack_completion_event, arm_completion, create_completion_channel, create_cq,
-    get_completion_event, poll,
-};
+use cq::poll;
 pub(super) use device::devices;
-use device::{ack_async_event, get_async_event, open_device, query_address};
+use device::query_address;
 #[cfg(all(test, feature = "cuda"))]
 pub(super) use memory::register_on_pd;
 use memory::{allocate_window, dealloc_window, prepare_grant, register_memory, window};
+use provider::{
+    ack_async_event, ack_completion_event, arm_completion, close_completion_channel, close_device,
+    create_completion_channel, create_cq, dealloc_pd, destroy_cq, destroy_qp, get_async_event,
+    get_completion_event, open_device,
+};
 use qp::{connect, open, post, post_receive, send_completion};
-
-#[repr(C)]
-#[derive(Copy, Clone, Debug, Default, PartialEq, Eq)]
-pub(super) struct ReadDepth {
-    pub initiator: u8,
-    pub responder: u8,
-}
-impl ReadDepth {
-    pub(super) fn clamped(self, limits: Self) -> Self {
-        // TENT preserves a requested zero and uses one when the HCA reports no limit.
-        Self {
-            initiator: self.initiator.min(limits.initiator.max(1)),
-            responder: self.responder.min(limits.responder.max(1)),
-        }
-    }
-}
-
-#[repr(C)]
-pub(super) struct DeviceHandles {
-    pub context: *mut c_void,
-    pub pd: *mut c_void,
-    pub async_fd: c_int,
-    pub read_limits: ReadDepth,
-    pub supports_atomics: bool,
-    pub request_gpu_keys: bool,
-    pub gpu_keys: GpuKeyRange,
-}
-
-impl Default for DeviceHandles {
-    fn default() -> Self {
-        Self {
-            context: std::ptr::null_mut(),
-            pd: std::ptr::null_mut(),
-            async_fd: -1,
-            read_limits: ReadDepth::default(),
-            supports_atomics: false,
-            request_gpu_keys: false,
-            gpu_keys: Default::default(),
-        }
-    }
-}
-
-// SAFETY: libibverbs contexts and PDs support calls from multiple threads. RdmaContext owns
-// these handles behind a mutex and retains them through every child endpoint.
-unsafe impl Send for DeviceHandles {}
-
-#[repr(C)]
-pub(super) struct ConnectionHandles {
-    pub cq: *mut c_void,
-    pub receive_cq: *mut c_void,
-    pub qp: *mut c_void,
-    pub private_pd: *mut c_void,
-    pub read_depth: ReadDepth,
-}
-
-impl Default for ConnectionHandles {
-    fn default() -> Self {
-        Self {
-            cq: std::ptr::null_mut(),
-            receive_cq: std::ptr::null_mut(),
-            qp: std::ptr::null_mut(),
-            private_pd: std::ptr::null_mut(),
-            read_depth: ReadDepth::default(),
-        }
-    }
-}
-
-#[repr(C)]
-pub(super) struct CqHandles {
-    pub cq: *mut c_void,
-}
-
-impl Default for CqHandles {
-    fn default() -> Self {
-        Self {
-            cq: std::ptr::null_mut(),
-        }
-    }
-}
-
-#[repr(C)]
-pub(super) struct ChannelHandles {
-    pub channel: *mut c_void,
-    pub fd: c_int,
-}
-
-impl Default for ChannelHandles {
-    fn default() -> Self {
-        Self {
-            channel: std::ptr::null_mut(),
-            fd: -1,
-        }
-    }
-}
-
-// SAFETY: Access is serialized by the completion-channel owner; its consumer is joined first.
-unsafe impl Send for ChannelHandles {}
 
 #[derive(Clone, Copy)]
 pub(super) struct CqEventVerbs {
@@ -143,18 +49,6 @@ pub(super) struct CqEventVerbs {
     pub ack: unsafe extern "C" fn(*mut c_void),
     pub arm: unsafe extern "C" fn(*mut c_void) -> c_int,
     pub close: unsafe extern "C" fn(*mut ChannelHandles) -> c_int,
-}
-
-// General Services QP: never an RC data QP. Nonzero so a provider that
-// clears or ignores the requested QPN cannot pass the readback probe.
-pub(super) const GPU_PROBE_QPN: u32 = 1;
-
-#[derive(Clone, Copy, Default)]
-#[repr(C)]
-pub(super) struct GpuKeyRange {
-    pub pdn: u32,
-    pub base: u32,
-    pub count: u32,
 }
 
 #[derive(Clone, Copy)]
@@ -172,40 +66,28 @@ pub(super) struct GpuKeyVerbs {
     pub destroy: unsafe extern "C" fn(*mut c_void) -> c_int,
 }
 
+#[derive(Default)]
 #[repr(C)]
 pub(crate) struct MemoryHandles {
     #[cfg(feature = "cuda")]
     pub(crate) dmabuf: Option<crate::cuda::rdma::DmaBuf>,
     #[cfg(feature = "cuda")]
-    pub(crate) dmabuf_verb: Option<gpu_registration::DmabufVerb>,
+    pub(crate) dmabuf_verb: Option<gpu_registration::DmaBufVerb>,
     pub(crate) gpu_route: u8,
     pub(super) deregister_failure: c_int,
-    pub mr: *mut c_void,
-    pub mw: *mut c_void,
-    pub window_key: u32,
-    pub remote_mr: bool,
-    pub gpu_parent: bool,
-    pub gpu_key: *mut c_void,
+    pub(super) native: provider::Memory,
     pub gpu_key_failure: c_int,
 }
 
-impl Default for MemoryHandles {
-    fn default() -> Self {
-        Self {
-            #[cfg(feature = "cuda")]
-            dmabuf: None,
-            #[cfg(feature = "cuda")]
-            dmabuf_verb: None,
-            gpu_route: 0,
-            deregister_failure: 0,
-            mr: std::ptr::null_mut(),
-            mw: std::ptr::null_mut(),
-            window_key: 0,
-            remote_mr: false,
-            gpu_parent: false,
-            gpu_key: std::ptr::null_mut(),
-            gpu_key_failure: 0,
-        }
+impl std::ops::Deref for MemoryHandles {
+    type Target = provider::Memory;
+    fn deref(&self) -> &Self::Target {
+        &self.native
+    }
+}
+impl std::ops::DerefMut for MemoryHandles {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.native
     }
 }
 
@@ -269,10 +151,10 @@ pub(super) struct Completion {
     pub invalidated_rkey: u32,
 }
 
-pub(super) const FLUSHED: u32 = ffi::ibv_wc_status::IBV_WC_WR_FLUSH_ERR;
+pub(super) const FLUSHED: u32 = ffi::IBV_WC_WR_FLUSH_ERR;
 
-pub(super) const GRH: u32 = ffi::ibv_wc_flags::IBV_WC_GRH.0;
-pub(super) const WITH_INVALIDATE: u32 = ffi::ibv_wc_flags::IBV_WC_WITH_INV.0;
+pub(super) const GRH: u32 = ffi::IBV_WC_GRH;
+pub(super) const WITH_INVALIDATE: u32 = ffi::IBV_WC_WITH_INV;
 
 #[derive(Clone, Copy, Debug)]
 #[repr(C)]
@@ -281,57 +163,6 @@ pub(super) struct WorkRequest {
     pub offset: u32,
     pub length: u32,
     pub signaled: bool,
-}
-
-#[derive(Default)]
-#[repr(C)]
-pub(super) struct PostResult {
-    pub accepted: usize,
-    pub uncertain: bool,
-}
-
-fn provider_errno(error: orbit_rdma::Error) -> c_int {
-    match error {
-        orbit_rdma::Error::Invalid(_) => libc::EINVAL,
-        orbit_rdma::Error::Exhausted(_) => libc::ENOMEM,
-        orbit_rdma::Error::Unsupported(_) => libc::EOPNOTSUPP,
-        orbit_rdma::Error::Native { code, .. } if code < 0 => {
-            code.checked_neg().unwrap_or(libc::EIO)
-        }
-        _ => libc::EPROTO,
-    }
-}
-
-impl PostResult {
-    fn record(
-        &mut self,
-        posted: std::result::Result<orbit_rdma::verbs::PostReceipt, orbit_rdma::Error>,
-    ) -> c_int {
-        match posted {
-            Ok(receipt) => {
-                self.accepted = receipt.accepted.unwrap_or(0);
-                self.uncertain = receipt.accepted.is_none();
-                receipt.code
-            }
-            Err(error) => provider_errno(error),
-        }
-    }
-}
-
-pub(super) struct AsyncEvent {
-    pub kind: u32,
-    pub port: u8,
-    native: std::mem::MaybeUninit<ffi::ibv_async_event>,
-}
-
-impl Default for AsyncEvent {
-    fn default() -> Self {
-        Self {
-            kind: 0,
-            port: 0,
-            native: std::mem::MaybeUninit::uninit(),
-        }
-    }
 }
 
 #[derive(Clone, Copy)]
@@ -460,40 +291,21 @@ fn failure() -> c_int {
         .unwrap_or(libc::EIO)
 }
 
-macro_rules! destroy {
-    ($name:ident, $owner:ident, $field:ident, $verb:ident) => {
-        unsafe extern "C" fn $name(h: *mut $owner) -> c_int {
-            // SAFETY: Resources owns every handle; clearing follows native
-            // success only, and the caller stops before destroying dependencies.
-            unsafe {
-                let handle = &mut (*h).$field;
-                if handle.is_null() {
-                    return 0;
-                }
-                let error = ffi::$verb((*handle).cast());
-                if error == 0 {
-                    *handle = std::ptr::null_mut();
-                }
-                error
-            }
-        }
-    };
-}
-destroy!(destroy_qp, ConnectionHandles, qp, ibv_destroy_qp);
-destroy!(deregister, MemoryHandles, mr, ibv_dereg_mr);
-destroy!(destroy_cq, CqHandles, cq, ibv_destroy_cq);
-destroy!(
-    close_completion_channel,
-    ChannelHandles,
-    channel,
-    ibv_destroy_comp_channel
-);
-destroy!(dealloc_pd, DeviceHandles, pd, ibv_dealloc_pd);
-destroy!(close_device, DeviceHandles, context, ibv_close_device);
-
-// Called only when RDMA is configured; feature compilation never loads a provider.
 pub(super) fn install() -> Result<()> {
-    native::get().map(|_| ())
+    provider::install().map_err(|e| Error::Unavailable(provider::load_diagnostic(&e)))
+}
+
+fn provider_error(error: orbit_rdma::Error) -> Error {
+    match error {
+        orbit_rdma::Error::Load(e) => Error::Unavailable(provider::load_diagnostic(&e)),
+        orbit_rdma::Error::Native { operation, code } => Error::Backend { operation, code },
+        orbit_rdma::Error::DeviceList(e) => Error::Io(e),
+        _ => Error::Internal("unexpected RDMA provider error"),
+    }
+}
+unsafe fn query_port_speed(device: *const DeviceHandles, port: u8) -> Result<Option<u64>> {
+    // SAFETY: the context owner holds the device during this synchronous port query.
+    unsafe { provider::port::query_port_speed(device, port) }.map_err(provider_error)
 }
 
 pub(super) static REAL: Verbs = Verbs {
@@ -501,12 +313,12 @@ pub(super) static REAL: Verbs = Verbs {
     gpu_registration: gpu_registration::REAL,
     #[cfg(feature = "cuda")]
     gpu_keys: Some(GpuKeyVerbs {
-        create: gpu_key::create,
-        destroy: gpu_key::destroy,
+        create: memory::create_gpu_key,
+        destroy: provider::mlx5::destroy,
     }),
     #[cfg(not(feature = "cuda"))]
     gpu_keys: None,
-    query_port_speed: Some(port::query_port_speed),
+    query_port_speed: Some(query_port_speed),
     discover: discovery::discover,
     query_address,
     completion: Some(CqEventVerbs {
@@ -534,7 +346,7 @@ pub(super) static REAL: Verbs = Verbs {
     dealloc_window,
     poll,
     destroy_qp,
-    deregister,
+    deregister: memory::deregister,
     destroy_cq,
     dealloc_pd,
     close_device,

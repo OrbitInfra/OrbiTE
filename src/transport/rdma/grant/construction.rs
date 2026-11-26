@@ -124,8 +124,11 @@ impl GrantConstruction {
                 _worker: worker_lease,
                 device,
                 handles: sys::MemoryHandles {
-                    remote_mr,
-                    gpu_parent: gpu_source && !remote_mr,
+                    native: orbit_rdma::provider::Memory {
+                        remote_mr,
+                        gpu_parent: gpu_source && !remote_mr,
+                        ..Default::default()
+                    },
                     ..Default::default()
                 },
                 cached_mr: None,
