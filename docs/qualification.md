@@ -347,6 +347,10 @@ profile of the recorded S20 artifact. The unrun native profiles are now out of s
 
 ## Verification queue
 
+The [OrbitRDMA host control](rdma-cuda.md#build-and-select-a-path) runs two
+public engines over one Linux RXE port with private host source grants. It checks
+READ, WRITE, guard bytes and shutdown. Physical two-host runs remain queued.
+
 No GPU or RDMA machine has been available since 2026-11-03. The profiles below
 wait for one hardware pass. Each run uses fresh nodes with recorded host,
 provider, RNIC and GPU inventories and locks, a frozen packaged artifact and an

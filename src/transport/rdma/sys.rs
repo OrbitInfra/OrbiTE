@@ -271,6 +271,7 @@ pub(super) struct Completion {
 
 pub(super) const FLUSHED: u32 = ffi::ibv_wc_status::IBV_WC_WR_FLUSH_ERR;
 
+pub(super) const GRH: u32 = ffi::ibv_wc_flags::IBV_WC_GRH.0;
 pub(super) const WITH_INVALIDATE: u32 = ffi::ibv_wc_flags::IBV_WC_WITH_INV.0;
 
 #[derive(Clone, Copy, Debug)]

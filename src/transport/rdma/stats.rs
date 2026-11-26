@@ -36,11 +36,11 @@ pub struct RdmaStats {
     pub open_rails: usize,
     /// Rail pairs permitting only bounded recovery probes.
     pub half_open_rails: usize,
-    /// Isolated PeerDirect source PDs, owned through QP/MR/RQ cleanup.
+    /// Isolated host or GPU source PDs, owned through QP/MR/RQ cleanup.
     pub active_grant_pds: usize,
-    /// Cumulative isolated GPU source PD creations.
+    /// Cumulative isolated source PD creations.
     pub opened_grant_pds: u64,
-    /// Cumulative confirmed isolated GPU source PD retirements.
+    /// Cumulative confirmed isolated source PD retirements.
     pub closed_grant_pds: u64,
     /// Shared context/PD owners, including partially constructed retained ones.
     pub active_devices: usize,

@@ -585,7 +585,9 @@ through OrbitRDMA's `verbs::post`. The progress lane uses `verbs::poll` on the
 same CQ it already owns. A known accepted prefix charges exactly those WRs.
 A missing, foreign or contradictory first-failure pointer retains every possible
 WR until completion or QP drain. Grants retain their actual registrations,
-cross-transport DMA loans and protocol authority. [OrbitRDMA](https://github.com/OrbitInfra/OrbitRDMA)
+cross-transport DMA loans and protocol authority. A source configured with
+`host_source_reuse = false` isolates each direct host grant using the same
+private-PD lifetime as a non-reused direct GPU grant. [OrbitRDMA](https://github.com/OrbitInfra/OrbitRDMA)
 
 CUDA registration adds a deliberate extension to frozen TENT's XPU dma-buf
 exporter in `rdma/context.cpp`; TENT's NVIDIA availability check uses peermem.

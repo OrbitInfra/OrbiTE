@@ -321,7 +321,8 @@ Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
 
 The native post and CQ adapter uses OrbitRDMA 0.1.0 on the existing OrbiTE
 queue owners. CPU controls cover chained posts, fenced SEND with invalidation,
-RECV slots and CQ error fields. The installed profile for this dependency is
+RECV slots, private host grant retirement and CQ error fields. A single-VM
+RXE round trip checks the private-PD profile. The physical RNIC profile is
 unqualified. [RDMA resource owners](architecture.md#rdma-resource-owners)
 
 QP arrays, persistent multi-context MRs, concurrent grants, transport Workers,

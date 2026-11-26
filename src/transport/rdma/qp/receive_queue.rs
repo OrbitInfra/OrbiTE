@@ -204,9 +204,11 @@ impl ReceiveQueue {
                 code: completion.status as i32,
             });
         }
+        // GRH describes the network header. It conveys no information about remote invalidation.
+        let message_flags = completion.flags & !sys::GRH;
         if completion.opcode != 128
             || completion.length != COMPLETION_MESSAGE_SIZE as u32
-            || !matches!(completion.flags, 0 | sys::WITH_INVALIDATE)
+            || !matches!(message_flags, 0 | sys::WITH_INVALIDATE)
         {
             return Err(Error::Protocol("RDMA receive opcode/length/invalidation"));
         }
@@ -221,9 +223,9 @@ impl ReceiveQueue {
                     && if work.expected[COMPLETION_MESSAGE_SIZE - 1]
                         == super::super::protocol::MR_AUTHORITY
                     {
-                        completion.flags == 0
+                        message_flags == 0
                     } else {
-                        completion.flags == sys::WITH_INVALIDATE
+                        message_flags == sys::WITH_INVALIDATE
                             && work.rkey == completion.invalidated_rkey
                     }
                     && work.expected == slot.message.memory.bytes()

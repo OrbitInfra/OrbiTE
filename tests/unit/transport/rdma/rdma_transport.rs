@@ -62,6 +62,69 @@ fn send_frame(channel: &mut ControlChannel<'_>, phase: u8, bytes: &[u8; BINDING_
 }
 
 #[test]
+fn private_host_source_grants_retire_their_pd_and_preserve_adjacent_bytes() {
+    use crate::engine::tests::rdma_fixture_with_runtime;
+    let mut runtime = crate::transport::rdma::tests::runtime("direct:copy");
+    runtime.config.host_source_reuse = false;
+    let source = rdma_fixture_with_runtime(runtime);
+    let requester = rdma_fixture("direct:copy");
+    let exported = source
+        .register_memory(
+            vec![0xe1; 24].into_boxed_slice(),
+            Permission::RemoteReadWrite,
+        )
+        .unwrap();
+    let local = requester
+        .register_memory(vec![0x5a; 16].into_boxed_slice(), Permission::LocalOnly)
+        .unwrap();
+    let peer = requester
+        .open_segment(source.endpoint(), source.source_epoch(), TIMEOUT)
+        .unwrap();
+    for op in [TransferOp::Read, TransferOp::Write] {
+        if op == TransferOp::Write {
+            local.write(2, b"host").unwrap();
+        }
+        let request = TransferRequest::new(
+            Transport::Rdma,
+            local.base_address() + 2,
+            exported.base_address() + 7,
+            4,
+        );
+        let report = requester
+            .submit_and_wait(op, &peer, &[request], TIMEOUT)
+            .unwrap();
+        assert!(report.failure.is_none(), "{:?}", report.failure);
+        assert_eq!(report.transferred_bytes, 4);
+        let mut actual = [0; 16];
+        local.read(0, &mut actual).unwrap();
+        let mut expected = [0x5a; 16];
+        expected[2..6].copy_from_slice(if op == TransferOp::Read {
+            &[0xe1; 4]
+        } else {
+            b"host"
+        });
+        assert_eq!(actual, expected);
+    }
+    let mut actual = [0; 24];
+    exported.read(0, &mut actual).unwrap();
+    let mut expected = [0xe1; 24];
+    expected[7..11].copy_from_slice(b"host");
+    assert_eq!(actual, expected);
+    requester.close(TIMEOUT).unwrap();
+    source.close(TIMEOUT).unwrap();
+    let stats = source.stats().unwrap().rdma.unwrap();
+    assert_eq!(
+        (
+            stats.opened_grant_pds,
+            stats.closed_grant_pds,
+            stats.active_grant_pds
+        ),
+        (2, 2, 0)
+    );
+    assert_eq!(stats.opened_persistent_mrs, 0);
+}
+
+#[test]
 fn identical_requests_on_identical_connections_cannot_replay_an_old_grant_receipt() {
     let source = identity(1, 2, 3);
     let requester = identity(4, 5, 6);

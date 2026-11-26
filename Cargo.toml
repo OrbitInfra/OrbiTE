@@ -89,6 +89,11 @@ path = "examples/hardware_peer.rs"
 required-features = ["rdma", "cuda"]
 
 [[example]]
+name = "rdma_roundtrip"
+path = "examples/rdma_roundtrip.rs"
+required-features = ["rdma"]
+
+[[example]]
 name = "rdma_host"
 path = "tests/hardware/rdma_host.rs"
 required-features = ["rdma"]
