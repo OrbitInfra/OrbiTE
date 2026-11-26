@@ -116,7 +116,7 @@ impl Scratch {
 pub(super) const READ_PREFIX_BYTES: usize = 24 << 20;
 
 struct SplitRead {
-    iovecs: Box<[libc::iovec; 2]>,
+    iovecs: [libc::iovec; 2],
     _tail: Bounce,
     _charge: super::pool::Charge,
 }
@@ -130,7 +130,7 @@ impl SplitRead {
         };
         let remaining = length - READ_PREFIX_BYTES;
         let tail = Bounce::pageable(transport, remaining, alignment, true)?;
-        let iovecs = Box::new([
+        let iovecs = [
             libc::iovec {
                 iov_base: prefix.ptr.as_ptr().cast(),
                 iov_len: READ_PREFIX_BYTES,
@@ -139,7 +139,7 @@ impl SplitRead {
                 iov_base: tail.ptr.as_ptr().cast(),
                 iov_len: remaining,
             },
-        ]);
+        ];
         charge.prefix = Some(prefix);
         Ok(Self {
             iovecs,
@@ -174,7 +174,7 @@ enum HostMemory {
     One(DmaLease),
     SplitRead {
         memory: DmaLease,
-        private: SplitRead,
+        private: Box<SplitRead>,
     },
     Vector {
         _loans: Vec<DmaLease>,
@@ -321,7 +321,11 @@ impl Task {
             && request.length >= 2 * READ_PREFIX_BYTES
             && READ_PREFIX_BYTES % staging_alignment == 0
         {
-            let private = SplitRead::new(transport, request.length, staging_alignment)?;
+            let private = Box::new(SplitRead::new(
+                transport,
+                request.length,
+                staging_alignment,
+            )?);
             // Mixed host/device batches advance by this logical host span.
             // Task::entry submits the two private iovecs for the single READV.
             let iov = libc::iovec {
