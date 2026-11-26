@@ -24,6 +24,8 @@ pub struct IoUringStats {
     pub slot_misses: u64,
     /// Outstanding bytes charged for per-operation pageable fallback buffers.
     pub pageable_bytes: usize,
+    /// Pageable bytes retained for the next scalar direct file READ.
+    pub idle_read_bytes: usize,
 }
 
 pub(super) enum Access {
@@ -77,6 +79,7 @@ impl Slab {
 #[derive(Default)]
 struct State {
     slab: Option<Slab>,
+    read_prefix: Option<Bounce>,
     free: Vec<usize>,
     stats: IoUringStats,
     disabled: bool,
@@ -192,19 +195,47 @@ impl Pool {
         Ok(None)
     }
     pub(super) fn charge(self: &Arc<Self>, length: usize) -> Result<Charge> {
+        self.charge_read(length, None)
+    }
+
+    pub(super) fn charge_read(
+        self: &Arc<Self>,
+        length: usize,
+        alignment: Option<usize>,
+    ) -> Result<Charge> {
         let mut state = self
             .state
             .lock()
             .map_err(|_| Error::Internal("file staging lock poisoned"))?;
+        if state.closed {
+            return Err(Error::RequesterClosed);
+        }
         state.stats.pageable_bytes = state
             .stats
             .pageable_bytes
             .checked_add(length)
             .filter(|&n| n <= self.fallback_limit)
             .ok_or(Error::ResourceExhausted)?;
+        let take = alignment.is_some_and(|alignment| {
+            state
+                .read_prefix
+                .as_ref()
+                .is_some_and(|p| p.ptr.as_ptr() as usize % alignment == 0)
+        });
+        let prefix = if take {
+            state.stats.idle_read_bytes = 0;
+            state.read_prefix.take()
+        } else {
+            if state.stats.idle_read_bytes > self.fallback_limit - state.stats.pageable_bytes {
+                state.read_prefix.take();
+                state.stats.idle_read_bytes = 0;
+            }
+            None
+        };
         Ok(Charge {
             pool: self.clone(),
             length,
+            prefix,
         })
     }
     pub(super) fn close(&self) -> Result<()> {
@@ -216,6 +247,8 @@ impl Pool {
             return Err(e.for_report());
         }
         state.closed = true;
+        state.read_prefix.take();
+        state.stats.idle_read_bytes = 0;
         if state.building || state.stats.active_slots != 0 || state.stats.pageable_bytes != 0 {
             return Err(Error::Unquiesced {
                 operation: "file staging loans",
@@ -249,14 +282,20 @@ impl Drop for Slot {
 pub(super) struct Charge {
     pool: Arc<Pool>,
     length: usize,
+    pub(super) prefix: Option<Bounce>,
 }
 impl Drop for Charge {
     fn drop(&mut self) {
-        self.pool
-            .state
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .stats
-            .pageable_bytes -= self.length;
+        let mut state = self.pool.state.lock().unwrap_or_else(|p| p.into_inner());
+        state.stats.pageable_bytes -= self.length;
+        if !state.closed
+            && state.read_prefix.is_none()
+            && self.prefix.is_some()
+            && super::task::READ_PREFIX_BYTES
+                <= self.pool.fallback_limit - state.stats.pageable_bytes
+        {
+            state.read_prefix = self.prefix.take();
+            state.stats.idle_read_bytes = super::task::READ_PREFIX_BYTES;
+        }
     }
 }

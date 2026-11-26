@@ -102,6 +102,49 @@ fn large_direct_read_with_negative_cqe_preserves_the_entire_destination() -> Res
 }
 
 #[test]
+fn large_direct_read_reuses_only_one_private_prefix_and_publishes_exact_short_cqes() -> Result<()> {
+    let Some(dir) = directory("ORBITE_EXT4_DIR") else {
+        return Ok(());
+    };
+    if !kernel() {
+        return Ok(());
+    }
+    const SIZE: usize = 64 << 20;
+    const SPLIT: usize = task::READ_PREFIX_BYTES;
+    let image: Vec<_> = (0..SIZE).map(|i| ((i ^ (i >> 8)) & 127) as u8).collect();
+    let (f, trace, start) = direct_fixture(&dir, &image, true)?;
+    let sentinel = vec![0xa5; f.memory.len()];
+    let mut actual = vec![0; sentinel.len()];
+    for &prefix in &[SIZE, SPLIT + 17, SPLIT, SPLIT - 11] {
+        fs::write(&f.path, &image)?;
+        f.memory.write(0, &sentinel)?;
+        trace.lock().unwrap().truncate_to = Some(prefix as u64);
+        let mut batch = f.engine.submit_async(
+            TransferOp::Read,
+            &f.segment,
+            &[f.request(start, 0, SIZE)],
+            None,
+            TIMEOUT,
+        )?;
+        let status = batch.wait(TIMEOUT)?;
+        assert!(status.locally_drained);
+        assert_eq!(status.completed_tasks, usize::from(prefix == SIZE));
+        assert_eq!(status.transferred_bytes, prefix);
+        batch.free()?;
+        f.memory.read(0, &mut actual)?;
+        assert!(actual[..start] == sentinel[..start]);
+        assert!(actual[start..start + prefix] == image[..prefix]);
+        assert!(actual[start + prefix..] == sentinel[start + prefix..]);
+        let stats = f.engine.stats()?.io_uring.unwrap();
+        assert_eq!((stats.pageable_bytes, stats.idle_read_bytes), (0, SPLIT));
+    }
+    let pool = &f.engine.io_uring.as_ref().unwrap().pool;
+    let _competing = pool.charge(EngineConfig::default().max_inflight_bytes)?;
+    assert_eq!(pool.stats().idle_read_bytes, 0);
+    Ok(())
+}
+
+#[test]
 #[allow(unsafe_code)]
 fn idle_direct_read_ring_yields_its_fd_to_larger_and_scalar_submissions() -> Result<()> {
     let Some(dir) = directory("ORBITE_EXT4_DIR") else {

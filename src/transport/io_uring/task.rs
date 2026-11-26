@@ -27,6 +27,40 @@ impl Bounce {
         let ptr = NonNull::new(unsafe { alloc(layout) }).ok_or(Error::ResourceExhausted)?;
         Ok(Self { ptr, layout })
     }
+
+    fn pageable(
+        transport: &super::IoUringTransport,
+        length: usize,
+        alignment: usize,
+        direct_read: bool,
+    ) -> Result<Self> {
+        // Faulting every base page during GUP dominates a large, fresh direct
+        // READ buffer. Only advise complete 2 MiB units of private scratch.
+        // The kernel can always satisfy this hint with ordinary pages.
+        const HUGE: usize = 2 << 20;
+        let advise = direct_read && length >= HUGE;
+        let buffer = if advise && alignment < HUGE {
+            match (transport.allocate)(length, HUGE) {
+                Err(Error::ResourceExhausted) => (transport.allocate)(length, alignment)?,
+                result => result?,
+            }
+        } else {
+            (transport.allocate)(length, alignment)?
+        };
+        if advise && buffer.ptr.as_ptr() as usize % HUGE == 0 {
+            // SAFETY: the pointer is huge-page aligned and exclusively owned.
+            // The hinted extent only includes complete units inside the allocation.
+            #[allow(unsafe_code)]
+            unsafe {
+                libc::madvise(
+                    buffer.ptr.as_ptr().cast(),
+                    length / HUGE * HUGE,
+                    libc::MADV_HUGEPAGE,
+                );
+            }
+        }
+        Ok(buffer)
+    }
 }
 
 impl Drop for Bounce {
@@ -62,31 +96,7 @@ impl Scratch {
             return Ok(Self::Slot(slot));
         }
         let charge = transport.pool.charge(length)?;
-        // Faulting every base page during GUP dominates a large, fresh direct
-        // READ buffer. Only advise complete 2 MiB units of private scratch.
-        // The kernel can always satisfy this hint with ordinary pages.
-        const HUGE: usize = 2 << 20;
-        let advise = direct_read && length >= HUGE;
-        let buffer = if advise && alignment < HUGE {
-            match (transport.allocate)(length, HUGE) {
-                Err(Error::ResourceExhausted) => (transport.allocate)(length, alignment)?,
-                result => result?,
-            }
-        } else {
-            (transport.allocate)(length, alignment)?
-        };
-        if advise && buffer.ptr.as_ptr() as usize % HUGE == 0 {
-            // SAFETY: the pointer is huge-page aligned and exclusively owned.
-            // The hinted extent only includes complete units inside the allocation.
-            #[allow(unsafe_code)]
-            unsafe {
-                libc::madvise(
-                    buffer.ptr.as_ptr().cast(),
-                    length / HUGE * HUGE,
-                    libc::MADV_HUGEPAGE,
-                );
-            }
-        }
+        let buffer = Bounce::pageable(transport, length, alignment, direct_read)?;
         Ok(Self::Pageable {
             buffer,
             _charge: charge,
@@ -101,8 +111,71 @@ impl Scratch {
     }
 }
 
+// Keep at most one prefix per engine. The rest of a large scalar READ is
+// pageable and drops as soon as this request has its one CQE.
+pub(super) const READ_PREFIX_BYTES: usize = 24 << 20;
+
+struct SplitRead {
+    iovecs: Box<[libc::iovec; 2]>,
+    _tail: Bounce,
+    _charge: super::pool::Charge,
+}
+
+impl SplitRead {
+    fn new(transport: &super::IoUringTransport, length: usize, alignment: usize) -> Result<Self> {
+        let mut charge = transport.pool.charge_read(length, Some(alignment))?;
+        let prefix = match charge.prefix.take() {
+            Some(prefix) => prefix,
+            None => Bounce::pageable(transport, READ_PREFIX_BYTES, alignment, true)?,
+        };
+        let remaining = length - READ_PREFIX_BYTES;
+        let tail = Bounce::pageable(transport, remaining, alignment, true)?;
+        let iovecs = Box::new([
+            libc::iovec {
+                iov_base: prefix.ptr.as_ptr().cast(),
+                iov_len: READ_PREFIX_BYTES,
+            },
+            libc::iovec {
+                iov_base: tail.ptr.as_ptr().cast(),
+                iov_len: remaining,
+            },
+        ]);
+        charge.prefix = Some(prefix);
+        Ok(Self {
+            iovecs,
+            _tail: tail,
+            _charge: charge,
+        })
+    }
+
+    #[allow(unsafe_code)]
+    fn publish(&self, memory: &DmaLease, length: usize) {
+        let mut copied = 0;
+        for span in self.iovecs.iter() {
+            let n = span.iov_len.min(length - copied);
+            if n == 0 {
+                break;
+            }
+            // SAFETY: the single CQE covers this range of the private iovec.
+            // The exclusive destination loan covers the whole contiguous request.
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    span.iov_base.cast::<u8>(),
+                    memory.address().as_ptr().add(copied),
+                    n,
+                );
+            }
+            copied += n;
+        }
+    }
+}
+
 enum HostMemory {
     One(DmaLease),
+    SplitRead {
+        memory: DmaLease,
+        private: SplitRead,
+    },
     Vector {
         _loans: Vec<DmaLease>,
         iovecs: Box<[libc::iovec]>,
@@ -243,6 +316,28 @@ impl Task {
         // A direct READ racing truncate can zero the rest of the last block
         // even when its CQE reports a shorter prefix. Keep that write private.
         let protect = request.lease.is_direct_read(operation, &file);
+        if protect
+            && !transport.pool.enabled
+            && request.length >= 2 * READ_PREFIX_BYTES
+            && READ_PREFIX_BYTES % staging_alignment == 0
+        {
+            let private = SplitRead::new(transport, request.length, staging_alignment)?;
+            // This descriptor is unused for the two-span path. The task owns the
+            // boxed descriptors that the single READV submits to the kernel.
+            let iov = private.iovecs[0];
+            return Ok((
+                Self {
+                    file,
+                    memory: Some(HostMemory::SplitRead { memory, private }),
+                    length: request.length,
+                    bounce: None,
+                    offset: request.offset,
+                    result: None,
+                    late: false,
+                },
+                iov,
+            ));
+        }
         let bounce = if protect || memory.address().as_ptr() as usize % staging_alignment != 0 {
             let bounce = Scratch::acquire(transport, request.length, staging_alignment, protect)?;
             if operation == TransferOp::Write {
@@ -297,6 +392,7 @@ impl Task {
         index: usize,
     ) -> squeue::Entry {
         let iovecs = match (&self.memory, &self.bounce) {
+            (Some(HostMemory::SplitRead { private, .. }), _) => private.iovecs.as_slice(),
             (Some(HostMemory::Vector { iovecs, .. }), None) => &**iovecs,
             _ => std::slice::from_ref(iov),
         };
@@ -313,39 +409,42 @@ impl Task {
         self.result = Some(result);
         self.late = late;
         if operation == TransferOp::Read && result > 0 {
-            if let Some(bounce) = &self.bounce {
-                let source = bounce.address().as_ptr();
-                let length = result as usize;
-                match memory {
-                    HostMemory::One(memory) => {
-                        // SAFETY: this CQE initialized length disjoint scratch bytes.
-                        // The exclusive destination loan covers the checked prefix.
-                        unsafe {
-                            std::ptr::copy_nonoverlapping(source, memory.address().as_ptr(), length)
-                        };
-                    }
-                    HostMemory::Vector { iovecs, .. } => {
-                        let mut copied = 0;
-                        for iov in iovecs {
-                            let n = iov.iov_len.min(length - copied);
-                            if n == 0 {
-                                break;
-                            }
-                            if !iov.iov_base.is_null() {
-                                // SAFETY: the CQE covers this scratch prefix and the retained
-                                // loan covers this destination. Padding has a null address.
-                                unsafe {
-                                    std::ptr::copy_nonoverlapping(
-                                        source.add(copied),
-                                        iov.iov_base.cast(),
-                                        n,
-                                    )
-                                };
-                            }
-                            copied += n;
+            let length = result as usize;
+            match (memory, &self.bounce) {
+                (HostMemory::SplitRead { memory, private }, _) => private.publish(memory, length),
+                (HostMemory::One(memory), Some(bounce)) => {
+                    // SAFETY: this CQE initialized length disjoint scratch bytes.
+                    // The exclusive destination loan covers the checked prefix.
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(
+                            bounce.address().as_ptr(),
+                            memory.address().as_ptr(),
+                            length,
+                        )
+                    };
+                }
+                (HostMemory::Vector { iovecs, .. }, Some(bounce)) => {
+                    let mut copied = 0;
+                    for iov in iovecs {
+                        let n = iov.iov_len.min(length - copied);
+                        if n == 0 {
+                            break;
                         }
+                        if !iov.iov_base.is_null() {
+                            // SAFETY: the CQE covers this scratch prefix and the retained
+                            // loan covers this destination. Padding has a null address.
+                            unsafe {
+                                std::ptr::copy_nonoverlapping(
+                                    bounce.address().as_ptr().add(copied),
+                                    iov.iov_base.cast(),
+                                    n,
+                                )
+                            };
+                        }
+                        copied += n;
                     }
                 }
+                (_, None) => (),
             }
         }
         // Publish only after releasing this CQE's exclusive range. Another task
