@@ -174,8 +174,9 @@ impl IoUringTransport {
             .try_reserve_exact(count)
             .map_err(|_| preflight_failure(Error::ResourceExhausted))?;
         for request in requests {
+            let prepared = tasks.len();
             let (task, iov) = Task::new(operation, request, self)
-                .map_err(|e| rollback_unsubmitted(tasks.drain(..), e, progress))?;
+                .map_err(|e| rollback_unsubmitted(tasks.drain(..), e, Some(prepared), progress))?;
             tasks.push(task);
             iovecs.push(iov);
         }
@@ -197,12 +198,13 @@ impl IoUringTransport {
             Some(ring) => ring,
             None => self
                 .create_ring(size)
-                .map_err(|e| rollback_unsubmitted(tasks.drain(..), e.into(), progress))?,
+                .map_err(|e| rollback_unsubmitted(tasks.drain(..), e.into(), None, progress))?,
         };
         if ring.space() < count {
             return Err(rollback_unsubmitted(
                 tasks,
                 Error::ResourceExhausted,
+                None,
                 progress,
             ));
         }
@@ -215,7 +217,8 @@ impl IoUringTransport {
             .enumerate()
             .map(|(index, (task, iov))| task.entry(operation, iov, index))
             .collect();
-        remaining(deadline).map_err(|e| rollback_unsubmitted(tasks.drain(..), e, progress))?;
+        remaining(deadline)
+            .map_err(|e| rollback_unsubmitted(tasks.drain(..), e, None, progress))?;
         let batch = LiveBatch {
             ring,
             tasks,
@@ -229,6 +232,7 @@ impl IoUringTransport {
 fn rollback_unsubmitted(
     tasks: impl IntoIterator<Item = Task>,
     original: Error,
+    failed_task: Option<usize>,
     progress: Option<(&FileAttempts<'_>, usize)>,
 ) -> TransferFailure {
     let mut count = 0;
@@ -239,13 +243,24 @@ fn rollback_unsubmitted(
         }
         count += 1;
     }
-    if faults.is_empty() {
+    // Task preparation can fail before the new owner reaches the task list.
+    // Include its receipt after the already-prepared siblings in this case.
+    if let Some(index) = failed_task {
+        count += 1;
+        if matches!(original, Error::Unquiesced { .. }) {
+            faults.push((index, original.for_report()));
+        }
+    } else if faults.is_empty() {
         return failure(0, original, RemoteEffect::None);
     }
-    // Preserve each prepared sibling's own retirement receipt. A group
-    // failure alone cannot describe disjoint drained and quarantined ranges.
-    let (first_fault, error) = &faults[0];
-    let group = failure(*first_fault, error.for_report(), RemoteEffect::None);
+    let group = match faults.first() {
+        Some((index, error)) => failure(*index, error.for_report(), RemoteEffect::None),
+        None => failure(
+            failed_task.unwrap_or(0),
+            original.for_report(),
+            RemoteEffect::None,
+        ),
+    };
     if let Some((p, first)) = progress {
         let mut faults = faults.into_iter().peekable();
         for index in 0..count {
@@ -256,7 +271,11 @@ fn rollback_unsubmitted(
                 None => p.fail_file_task(
                     first + index,
                     0,
-                    original.for_report(),
+                    if failed_task.is_some_and(|failed| failed != index) {
+                        Error::Cancelled
+                    } else {
+                        original.for_report()
+                    },
                     RemoteEffect::None,
                     true,
                 ),
@@ -336,7 +355,12 @@ impl LiveBatch {
     ) -> std::result::Result<Submitted, TransferFailure> {
         if let Err(error) = self.ring.push(entries) {
             // push_multiple is all-or-nothing and no enter has taken place.
-            return Err(rollback_unsubmitted(self.tasks, error.into(), progress));
+            return Err(rollback_unsubmitted(
+                self.tasks,
+                error.into(),
+                None,
+                progress,
+            ));
         }
         let mut live = ManuallyDrop::new(self);
         let count = live.tasks.len();

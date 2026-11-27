@@ -271,11 +271,42 @@ struct SplitRead {
 impl SplitRead {
     fn new(
         transport: &super::IoUringTransport,
+        memory: DmaLease,
+        file: Arc<File>,
+        length: usize,
+        alignment: usize,
+    ) -> Result<(Self, DmaLease, Arc<File>)> {
+        let mut charge = transport.pool.charge_read(length, Some(alignment))?;
+        match Self::prepare(transport, &memory, length, alignment, &mut charge) {
+            Ok((iovecs, move_pages)) => Ok((
+                Self {
+                    iovecs,
+                    move_pages,
+                    charge,
+                },
+                memory,
+                file,
+            )),
+            Err(error) => {
+                if let Err(cleanup) = charge.finish() {
+                    // No SQE exists. This request nevertheless owns the taken
+                    // mapping and its failed native retirement. Keep this exact
+                    // charge, the file and the destination's exclusive range.
+                    std::mem::forget((charge, memory, file));
+                    return Err(cleanup);
+                }
+                Err(error)
+            }
+        }
+    }
+
+    fn prepare(
+        transport: &super::IoUringTransport,
         memory: &DmaLease,
         length: usize,
         alignment: usize,
-    ) -> Result<Self> {
-        let mut charge = transport.pool.charge_read(length, Some(alignment))?;
+        charge: &mut super::pool::Charge,
+    ) -> Result<([libc::iovec; 2], bool)> {
         let destination = memory.address().as_ptr() as usize;
         // Mapped scratch only guarantees congruence modulo a huge page.
         let move_pages = alignment <= HUGE_PAGE
@@ -304,13 +335,7 @@ impl SplitRead {
         }
         let remaining = length - READ_PREFIX_BYTES;
         if remaining != 0 {
-            match allocate(remaining, READ_PREFIX_BYTES) {
-                Ok(tail) => charge.tail = Some(tail),
-                Err(error) => {
-                    charge.finish()?;
-                    return Err(error);
-                }
-            }
+            charge.tail = Some(allocate(remaining, READ_PREFIX_BYTES)?);
         }
         let prefix = charge
             .prefix
@@ -342,11 +367,7 @@ impl SplitRead {
                 iov_len: remaining,
             },
         ];
-        Ok(Self {
-            iovecs,
-            charge,
-            move_pages,
-        })
+        Ok((iovecs, move_pages))
     }
 
     #[allow(unsafe_code)]
@@ -519,12 +540,9 @@ impl Task {
             && request.length >= READ_PREFIX_BYTES
             && READ_PREFIX_BYTES % staging_alignment == 0
         {
-            let private = Box::new(SplitRead::new(
-                transport,
-                &memory,
-                request.length,
-                staging_alignment,
-            )?);
+            let (private, memory, file) =
+                SplitRead::new(transport, memory, file, request.length, staging_alignment)?;
+            let private = Box::new(private);
             // Mixed host/device batches advance by this logical host span.
             // Task::entry submits the two private iovecs for the single READV.
             let iov = libc::iovec {
