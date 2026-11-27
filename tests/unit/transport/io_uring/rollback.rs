@@ -205,3 +205,92 @@ fn run(case: &str) -> Result<()> {
     }
     Ok(())
 }
+
+#[test]
+fn mismatched_cached_mapping_failure_identifies_its_preflight_owner() -> Result<()> {
+    use std::sync::atomic::AtomicBool;
+    // The warm-up retires its spare normally. Only eviction of the cached
+    // mapping on the second batch fails. A failed unmap keeps that mapping.
+    static ARMED: AtomicBool = AtomicBool::new(false);
+    static FAILS: AtomicUsize = AtomicUsize::new(0);
+    static GATED: Numa = Numa {
+        unmap: |address, length| {
+            if ARMED.load(Ordering::SeqCst) {
+                FAILS.fetch_add(1, Ordering::SeqCst);
+                Err(Error::Io(io::Error::from_raw_os_error(libc::EIO)))
+            } else {
+                (NATIVE.unmap)(address, length)
+            }
+        },
+        ..NATIVE
+    };
+    let Some(dir) = directory("ORBITE_EXT4_DIR") else {
+        return Ok(());
+    };
+    if !kernel() {
+        return Ok(());
+    }
+    let (mut f, trace, start) = direct_fixture(&dir, &vec![0x39; SIZE + 4 * PAGE], true)?;
+    Arc::get_mut(&mut f.engine)
+        .unwrap()
+        .io_uring
+        .as_mut()
+        .unwrap()
+        .mappings = &GATED;
+    assert!(
+        f.run(TransferOp::Read, &[f.request(start, 0, SIZE)])?
+            .is_complete()
+    );
+    assert_eq!(f.engine.stats()?.io_uring.unwrap().idle_read_bytes, SIZE);
+    *trace.lock().unwrap() = Trace::default();
+    ARMED.store(true, Ordering::SeqCst);
+    let requests = [
+        f.request(start - PAGE, 0, PAGE),
+        f.request(start + PAGE, (2 * PAGE) as u64, SIZE),
+    ];
+    let batch = f
+        .engine
+        .submit_async(TransferOp::Read, &f.segment, &requests, None, TIMEOUT)?;
+    let group = batch.wait(TIMEOUT)?;
+    let first = batch.task_status(0)?;
+    let second = batch.task_status(1)?;
+    assert_eq!(FAILS.load(Ordering::SeqCst), 1);
+    {
+        let observed = trace.lock().unwrap();
+        assert_eq!(
+            (observed.setups, observed.submits, observed.reaps),
+            (0, 0, 0)
+        );
+    }
+    assert!(!group.locally_drained);
+    assert!(
+        first.locally_drained,
+        "unsubmitted small sibling has no uncertain work: {first:?}"
+    );
+    let mut check = [0; 1];
+    f.memory.read(start - PAGE, &mut check)?;
+    assert_eq!(check, [0x9a]);
+    assert!(
+        !second.locally_drained,
+        "uncertain retirement belongs to the large requester: {second:?}"
+    );
+    let fault = second
+        .failure
+        .as_ref()
+        .expect("mapping fault on the large request");
+    assert_eq!(fault.request_index, 1);
+    assert!(matches!(
+        fault.error,
+        Error::Unquiesced {
+            code: libc::EIO,
+            ..
+        }
+    ));
+    assert!(
+        f.memory.read(start + PAGE, &mut check).is_err(),
+        "retain the uncertain owner's destination lease"
+    );
+    assert_eq!(f.engine.stats()?.io_uring.unwrap().pageable_bytes, SIZE);
+    assert_eq!(FAILS.load(Ordering::SeqCst), 1);
+    Ok(())
+}
