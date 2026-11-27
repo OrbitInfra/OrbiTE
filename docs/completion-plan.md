@@ -228,9 +228,11 @@ Done:
   file verification buffers. Discarding 36 MiB after drain left 28 MiB
   resident. [Phase measurements](benchmarks.md#preparing-reclaimed-pages) place
   the extra process CPU in page preparation (2.06 / 3.76 ms on the stable /
-  1.85 hosts). Splitting at the reclaimed boundary improved throughput over a
-  single demand-paged READ but missed the CPU limit against frozen TENT on
-  both hosts. The step remains open until a
+  1.85 hosts). A same-binary comparison on two x86 hosts running both compilers
+  found that splitting saved 3.05–3.23 ms of elapsed time per READ but added
+  0.52–1.09 ms of process CPU. Moving 12 MiB of cold pages to the first extent
+  met the RSS target and increased CPU per byte and p99 on all four pairs.
+  The step remains open until a
   protected implementation meets all four limits against both frozen references.
   The [external-vector controls](qualification.md#local-file-segments) cover
   a separate consumer shape with independent registrations and a readable tail.

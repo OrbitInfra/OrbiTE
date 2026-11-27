@@ -809,7 +809,10 @@ its 64 file descriptors after warming a two-entry ring and verifies a larger
 group and a scalar READ, including payloads, guards and submit counts.
 The [direct READ profile](benchmarks.md#eight-contiguous-direct-reads)
 matches the direct descriptor and block events to all eight CQEs, including
-when the ring was created in a warmup.
+when the ring was created in a warmup. For the 64 MiB scalar experiment,
+the [paired ext4 controls](benchmarks.md#preparing-reclaimed-pages) check
+the destination and guards after truncation and late errors, and measure
+the four performance limits separately against fixed OrbiTE and frozen TENT.
 
 `cargo test --locked --lib segment::file::tests` uses real temporary files.
 It checks shared and stale handles, cached size and refresh after resize,

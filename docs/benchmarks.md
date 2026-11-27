@@ -564,6 +564,49 @@ byte exceeded the TENT limit. On 1.85, goodput and CPU per byte missed both
 frozen references, and p99 missed the fixed OrbiTE reference. The candidate
 remains experimental.
 
+A follow-up used the same executable, private buffer, two-entry ring and
+first warmup for one native READ and two native READs. The two-extent case
+submitted the retained prefix asynchronously, then the tail. Each of two
+x86-64 hosts ran both Rust toolchains in opposite order. With instrumentation
+disabled, splitting saved 3.05–3.23 ms of elapsed time per 64 MiB READ and
+cost 0.52–1.09 ms more process CPU across the four host/compiler pairs.
+In separate instrumented trials the two submission intervals together used
+0.66–1.00 ms more process CPU. The time to harvest completions, publish the
+result and retire the buffer changed by less than 0.05 ms of process CPU per
+stage. Putting both requests in one submission did not clear the CPU limit.
+[Same-binary comparison and raw samples](https://github.com/OrbitInfra/OrbiTE/actions/runs/46015619248)
+
+A second pair of hosts compared a single submission of both extents at the
+hot/cold boundary (A) with moving 12 MiB of cold pages into the asynchronous
+first extent (C). Each issued at most two reads and reclaimed the same 36 MiB.
+Both passed the prefix, late-error, partial-submit and failed-cleanup controls.
+The table shows the uninstrumented Rust 1.85 process medians. Each limit uses
+the stricter of fixed OrbiTE and frozen TENT on that host.
+
+| Rust 1.85 host | Goodput GiB/s, A / C / minimum | p99 ms, A / C / maximum | CPU ns/byte, A / C / maximum |
+| --- | ---: | ---: | ---: |
+| Ran 1.85 first | 6.069 / 6.099 / 6.177 | 11.90 / 13.62 / 11.05 | 0.1826 / 0.2063 / 0.1488 |
+| Ran 1.85 second | 6.187 / 6.332 / 6.381 | 10.81 / 13.27 / 10.85 | 0.1859 / 0.2008 / 0.1451 |
+
+Across both hosts and both toolchains, C reduced peak RSS by 34.09–37.97 MiB
+against full reuse. Relative to A, C used 8.0–13.0% more CPU per byte and
+increased p99 by 9.1–22.7%. Neither variant passed all four limits in any
+host/compiler pair. A separate same-binary diagnostic read the clocks for the
+whole process, the issuing thread and the public caller. Across both submission
+intervals, splitting added 0.70–0.82 ms of process CPU per read. The issuer
+used 2.32–2.38 ms less and the caller used 0.081–0.086 ms more. The remaining
+threads together used 2.97–3.11 ms more. These clocks do not distinguish those
+threads. [Matched candidate trials and thread clocks](https://github.com/OrbitInfra/OrbiTE/actions/runs/46021369203)
+
+On another Rust 1.85 host, fixed OrbiTE reached 6.50 and 6.47 GiB/s before
+and after thread sampling. A distinct Linux `iou-wrk-<issuer tid>` was visible
+in all 180 split reads and in none of the 180 single reads. Between successful
+clock reads strictly inside the public call, those workers accumulated 2.66 ms
+CPU per split READ. This samples part of each worker's lifetime and cannot
+assign time to individual kernel functions. A slower host measured 2.53 ms
+per split READ over the same intervals, with workers visible in 179 of 180
+reads. [Fast host and per-thread receipts](https://github.com/OrbitInfra/OrbiTE/actions/runs/46028818524) · [Independent repeat on a slower host](https://github.com/OrbitInfra/OrbiTE/actions/runs/46028135735)
+
 #### Consumer file vectors
 
 An x86-64 ext4 comparison on `ad18ae1` used the public
