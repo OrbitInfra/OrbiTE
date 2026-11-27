@@ -227,3 +227,7 @@ impl FileLease {
         Ok(raw)
     }
 }
+
+#[cfg(all(test, feature = "io-uring"))]
+#[path = "../../../tests/unit/segment/file/direct.rs"]
+mod tests;
