@@ -587,7 +587,7 @@ OrbiTE gapped WRITE trace still has a slowest-1% median of 31.8 ms, including
 31.3 ms block waits, despite zero extra writes/flushes/FUA/discards in the
 case. Stable uses EPYC 9V74 and has different tails. These traced times are
 diagnostic, not benchmark p99s. Both implementations use one ring and one
-submitting enter per group; aligned gaps need no bounce allocation, and the
+submitting enter per group. The measured gapped WRITEs needed no bounce allocation, and the
 drain worker does not sleep with backoff. The [subsequent block-layer comparison](benchmarks.md#direct-io-issue-paths-and-verification-load)
 finds a verification/load-dependent tail below driver issue, reproduced in
 unchanged TENT by bulk verification reads. Normal verification is now bulk in
@@ -750,9 +750,69 @@ after a short submission, a short READ, EOF and a later successful READ in
 the same batch. After a two-of-three submission, worker loss or an invalid CQE
 retains the two consumed ranges and their bytes. The third range accepts a
 new write and returns its new value. An invalid SQ head keeps all three
-inaccessible and charged. Cold file routes, direct-capable files and oversized
-groups exercise worker submission. The [eight-block profile](benchmarks.md#eight-contiguous-buffered-reads)
+inaccessible and charged. Cold file routes and oversized groups exercise
+worker submission. The [eight-block profile](benchmarks.md#eight-contiguous-buffered-reads)
 measures both completion paths on tmpfs.
+
+On ext4, real-ring controls cover a warmed, consecutive group of eight
+direct 4 KiB READs, reversed CQEs, partial submission and handoff after the
+caller wait. Cold descriptors, gaps, direct WRITEs and misaligned ranges
+exercise worker submission. Truncating the file after preparation produces
+full, short and zero-byte CQEs. The tests read back the entire destination,
+including bytes beyond EOF and the guards around vector elements and padding.
+A Linux 6.12.76 aarch64 control on `ea265fd` checked a 64 MiB public READ
+with a nonuniform destination and both guards. Truncating after preflight
+at entry to the submitting syscall delivered exactly 33,554,944 bytes.
+The same image, remounted read-only through a device-mapper error target,
+returned a block error at the middle 4 KiB.
+The public READ reported zero confirmed bytes and preserved the entire
+destination. A native READV into the destination on the same image reported
+`-EIO` after changing 67,104,768 bytes. [Fault control and performance handoff](https://github.com/OrbitInfra/OrbiTE/pull/226)
+
+The CI regression control lets a real aligned 64 MiB READ write to its native
+destination before replacing the completion that crosses 8 MiB with `-EIO`.
+It checks the public task and batch receipts, every original destination byte,
+both guards and the released staging and admission budgets.
+[Protected READ and rolling-window negative control](https://github.com/OrbitInfra/OrbiTE/actions/runs/45623648564)
+The companion 64 MiB READ truncates after admission at 16 MiB minus one byte,
+16 MiB plus 511 bytes and 64 MiB minus one byte. It compares the reported
+prefix with the file and every remaining byte with the original destination.
+The [two-extent experiment](benchmarks.md#preparing-reclaimed-pages) also
+checked out-of-order completion on x86 ext4. A successful tail followed by
+a head error preserved the entire destination. A missing drain receipt kept
+the single 64 MiB charge and its backing.
+For external registrations, the 64 MiB vector control holds a real CQE
+after the kernel writes and unregisters each destination. Its ranges stay
+inaccessible and the batch retains its byte charge until completion. It checks
+full reads, truncation 13 bytes past the first 32 MiB and an injected late
+error on aligned direct layouts. The separate 128-byte tail is a registered
+range whose contents the caller verifies. That layout covers a full read and
+EOF seven bytes before the end of the tail on the buffered descriptor.
+
+The padding-slot control enables a one-slot pool and reads a range, a gap and
+a second range. The full extent exceeds the slot capacity. The ext4 direct
+READ acquires zero slots. The buffered tmpfs READ and each WRITE acquire one.
+The test checks the reported byte count, the entire destination including guards,
+the zero-filled gap on disk after WRITE, and the released byte and slot charges.
+A separate selector test supplies 8 KiB memory alignment and 4 KiB file
+alignment. Two consecutive 4 KiB gaps let the direct READ use its aligned
+aggregate buffer, while the WRITE requires the buffered descriptor for its
+packed padding addresses. Tagged file contents identify the submitted fd.
+
+Scratch allocation failure must leave the ring untouched and return the
+pageable charge. A 2 MiB direct READ control rejects the optional huge-page
+alignment at allocation. It checks the complete destination after a full CQE
+and after a truncate between preflight and ring submission. Two fully drained
+eight-page READs can use the same ring. A short CQE retires that ring and
+preserves the unconfirmed destination suffix. An isolated process exhausts
+its 64 file descriptors after warming a two-entry ring and verifies a larger
+group and a scalar READ, including payloads, guards and submit counts.
+The [direct READ profile](benchmarks.md#eight-contiguous-direct-reads)
+matches the direct descriptor and block events to all eight CQEs, including
+when the ring was created in a warmup. For the 64 MiB scalar experiment,
+the [paired ext4 controls](benchmarks.md#preparing-reclaimed-pages) check
+the destination and guards after truncation and late errors, and measure
+the four performance limits separately against fixed OrbiTE and frozen TENT.
 
 `cargo test --locked --lib segment::file::tests` uses real temporary files.
 It checks shared and stale handles, cached size and refresh after resize,

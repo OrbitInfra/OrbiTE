@@ -30,7 +30,7 @@ records the source alignment. The [design-reference map](tent-parity.md) identif
 | Remote CUDA staging | Accepted (H20, serial and pipeline) | Pin/Delegate/Unpin with up to 16 slots. Source control isolation and later nonblocking progress are implemented; their installed profiles are unqualified. See [remote pipeline](staging.md#bounded-remote-pipeline) |
 | Local CUDA ↔ pinned DRAM on a caller stream | Implemented; installed profile unqualified | Coalesced 1D/2D and batched DMA, intent-aware Auto, capped mapped-host kernel and event-owned range loans. CTA/threshold calibration and compute interference await PCIe Hopper and Grace C2C runs. [Local copies](local-copy.md) |
 | Mixed GPU Direct and staged batches | Implemented; installed profile unqualified | GPU Direct and local or remote staged legs keep public order. Compatible aliases within a leg share one dispatch and release receipt. See [batch contract](async-batches.md#mixed-gpu-direct-and-staged-submissions) |
-| DRAM ↔ local file (io_uring) | Qualified on Linux CI | Direct ext4 and buffered tmpfs I/O with ordered host gather/scatter and padding. Small host requests and buffered groups of up to eight READs or WRITEs totaling at most 64 KiB can complete on the caller. A lost drain worker retains native owners and charges as `Unquiesced`. [File ownership tests](qualification.md#local-file-segments) · [Virtual-disk measurements](benchmarks.md#direct-io-issue-paths-and-verification-load) |
+| DRAM ↔ local file (io_uring) | Qualified on Linux CI | Direct ext4 and buffered tmpfs I/O with ordered host gather/scatter and padding. Small buffered groups and consecutive aligned direct READs can complete on the caller, up to eight requests and 64 KiB. Direct READ groups can reuse one drained ring per engine and copy only the kernel-confirmed prefix into registered destinations. A lost drain worker retains native owners and charges as `Unquiesced`. [File ownership tests](qualification.md#local-file-segments) · [Direct READ measurements](benchmarks.md#eight-contiguous-direct-reads) · [64 MiB READ CPU and memory limits](benchmarks.md#preparing-reclaimed-pages) |
 | CUDA ↔ local file (io_uring) | Implemented; installed profile unqualified | CUDA shim and real files exercise multi-registration gather/scatter, bounded proxy chunks and optional pinned slots. See [file staging](storage.md#cuda-transfers-through-pinned-host-memory) |
 | GDS / cuFile | Implemented, installed native gate unrun | Lazy, runtime-disablable cuFile, aligned vector I/O, terminal cookies and quarantine. See [GDS](storage.md#gds-with-cufile) |
 | [HP-TCP](hp-tcp.md) | Qualified on Linux loopback | Least-loaded single-operation lanes, striped READs and joined-session close controls on loopback IPv4 rails. Physical rail gate unrun |
@@ -87,6 +87,14 @@ The [64 MiB TCP READ profile](benchmarks.md#process-memory-for-a-64-mib-read)
 attributes peak process RSS to the public caller and TCP reply buffers.
 The [64 MiB file READ profile](benchmarks.md#peak-memory-for-a-64-mib-file-read)
 separates the io_uring completion from the caller's file and registration checks.
+For [large direct READs](benchmarks.md#large-direct-reads), the completion
+owner copies only the CQE-confirmed prefix from private storage. A negative
+CQE publishes no bytes for that request. The [external-vector controls](qualification.md#local-file-segments)
+exercise this rule across independent registrations, including unregistration
+while a real completion is held. For explicit padding, a direct host READ
+advances over the gap in its private buffer. The public 64 MiB direct READ
+still misses its performance limits. The [single- and two-extent measurements](benchmarks.md#preparing-reclaimed-pages)
+report the separate submission and publication costs.
 [CPU benchmark and fault fixtures](benchmarks.md) cover verified size/batch
 sweeps and the software backend lifetime matrix. They add no hardware
 qualification; GPU/RDMA/GDS installed fault fixtures remain queued.

@@ -11,9 +11,90 @@ LINE = re.compile(r'^\s*(.*?)\s+(-?\d+)/(-?\d+)\s+\[\d+\]\s+(\d+)\.(\d+):\s+(\S+
 SWITCH = re.compile(r'.+:(\d+) \[\d+\] (\S+) ==> .+:(\d+) \[\d+\]')
 WAKE = re.compile(r'.+:(\d+) \[\d+\] CPU:\d+')
 BLOCK = re.compile(r'(\d+,\d+) (\S+) .*?\(\) (\d+) \+ (\d+) .*')
+READ_BIO = re.compile(r'(\d+,\d+) (?:R|RS) (\d+) \+ (\d+)\b')
 REQUEST_ID = r'\breq (0x[0-9a-fA-F]+), user_data (0x[0-9a-fA-F]+), '
 READ_SUBMIT = re.compile(REQUEST_ID + r'opcode READV,')
 FULL_PAGE_CQE = re.compile(REQUEST_ID + r'result 4096,')
+SUBMITS = ('io_uring:io_uring_submit_req', 'io_uring:io_uring_submit_sqe')
+RING_CTX = re.compile(r'\bring (\S+),')
+RING_OPEN = re.compile(r'\bring (\S+), fd (\d+)\b')
+RING_ENTER = re.compile(r'\bfd: (0x[0-9a-fA-F]+), to_submit: (0x[0-9a-fA-F]+),')
+
+
+def ring_lifetimes(events, pid):
+    """Join the creator's setup entry, create and returned fd to its close."""
+    setups, by_fd, live, history = {}, {}, {}, collections.defaultdict(list)
+    for at, proc, tid, name, detail in events:
+        if proc != pid:
+            continue
+        if name == 'syscalls:sys_enter_io_uring_setup':
+            if tid in setups:
+                raise ValueError('missing io_uring_setup return')
+            setups[tid] = None
+        elif name == 'io_uring:io_uring_create':
+            match = RING_OPEN.search(detail)
+            if tid not in setups or setups[tid] is not None or not match:
+                raise ValueError('unmatched io_uring_create')
+            setups[tid] = match[1], int(match[2])
+        elif name == 'syscalls:sys_exit_io_uring_setup':
+            if tid not in setups:
+                raise ValueError('missing io_uring_setup entry')
+            opened = setups.pop(tid)
+            fd = int(detail.strip(), 0)
+            if not 0 <= fd < 2**31:
+                continue
+            if not opened or opened[1] != fd:
+                raise ValueError('successful io_uring_setup lacks its matching create')
+            ctx = opened[0]
+            if fd in by_fd or ctx in live:
+                raise ValueError('ring generation reused without an observed close')
+            record = [at, None, fd]
+            live[ctx] = record
+            by_fd[fd] = ctx
+            history[ctx].append(record)
+        elif name == 'syscalls:sys_enter_close':
+            # A close can release the descriptor before the syscall returns.
+            # Even an interrupted close ends its eligibility for reuse evidence.
+            fd = int(detail.split('fd: ', 1)[1], 0)
+            ctx = by_fd.pop(fd, None)
+            if ctx is not None:
+                live.pop(ctx)[1] = at
+    if setups:
+        raise ValueError('unfinished io_uring_setup')
+    return history
+
+
+def direct_read_contexts(events, times, windows):
+    """Bind each submit and CQE set to one live setup, including the warmups."""
+    pid = windows[0]['pid']
+    history = ring_lifetimes(events, pid)
+    prior_groups, contexts = set(), {}
+    for w in windows:
+        begin, end = w['begin_ns'], w['end_ns']
+        es = events[bisect.bisect_left(times, begin):bisect.bisect_right(times, end)]
+        own = [e for e in es if e[1] == pid]
+        sq = [e for e in own if e[3] in SUBMITS]
+        rings = {RING_CTX.search(e[4])[1] for e in sq}
+        if len(rings) != 1:
+            raise ValueError('expected exactly one submitting READ ring')
+        ctx, = rings
+        cq = [e for e in es if e[3] == 'io_uring:io_uring_complete' and RING_CTX.search(e[4])[1] == ctx]
+        check_read_completions(sq, cq)
+        records = history.get(ctx, [])
+        i = bisect.bisect_right(records, sq[0][0], key=lambda rec: rec[0]) - 1
+        if i < 0:
+            raise ValueError('no successful setup for the submitting READ ring')
+        born, closed, fd = records[i]
+        if closed is not None and closed <= cq[-1][0]:
+            raise ValueError('READ receipts outlived their ring generation')
+        entries = [RING_ENTER.search(e[4]) for e in own if e[3] == 'syscalls:sys_enter_io_uring_enter']
+        if not entries or not all(entries) or {int(e[1], 16) for e in entries if int(e[2], 16)} != {fd}:
+            raise ValueError('READ submission used a different descriptor')
+        if born < begin and (ctx, born) not in prior_groups:
+            raise ValueError('cached ring lacks an earlier verified READ group')
+        prior_groups.add((ctx, born))
+        contexts[w['sample']] = ctx
+    return contexts
 
 
 def block_requests(events):
@@ -42,12 +123,12 @@ def block_requests(events):
     return requests
 
 
-def window_io(requests, begin, end, submit, pid, op, payload):
+def window_io(requests, begin, end, submit, pid, op, payload, *, direct_read_group=False):
     # Direct candidates are synchronous data issued by this process after its
     # first SQE. Validate their total; never classify an extra write as payload.
     def direct(r):
         return (r['pid'] == pid and submit <= r['issue_ns'] <= end
-                and r['flags'] == op + 'S')
+                and r['flags'] in (('R', 'RS') if direct_read_group else (op + 'S',)))
     candidates = [r for r in requests if direct(r)]
     # Depth of this sample's data at the driver issue boundary, separately for
     # each device. This is not device-wide depth or the number of queued SQEs.
@@ -156,6 +237,43 @@ def check_read_completions(submits, completions):
             raise ValueError('unmatched or short 4 KiB READ completion')
 
 
+def direct_read_phases(requests, first_sqe, last_cqe, events, pid):
+    # Merging or splitting at the block layer is independent of the eight
+    # io_uring request identities. Use elapsed intervals, not summed waits.
+    if not requests or any(r['complete_ns'] is None or
+                           not first_sqe <= r['issue_ns'] <= r['complete_ns'] <= last_cqe
+                           for r in requests):
+        raise ValueError('missing or out-of-window direct READ completion')
+    # REQ_SYNC is independent of O_DIRECT. Both R and RS must map to the
+    # queued READ bios, even when the driver merges them into one request.
+    bios = []
+    for at, process, _, event, body in events:
+        if process == pid and first_sqe <= at <= last_cqe and event == 'block:block_bio_queue':
+            match = READ_BIO.match(body)
+            if match:
+                bios.append((match[1], int(match[2]), int(match[3])))
+    issued = [(r['device'], r['sector'], r['bytes'] // 512) for r in requests]
+    def sectors(ranges, device):
+        covered = []
+        for dev, start, count in ranges:
+            if dev == device:
+                if not 1 <= count <= 64:
+                    raise ValueError('invalid block extent for eight 4 KiB READs')
+                covered.extend(range(start, start + count))
+        if len(covered) != 64 or len(set(covered)) != 64:
+            raise ValueError('incomplete or overlapping ext4 READ sectors')
+        return set(covered)
+    for device in {r['device'] for r in requests}:
+        if sectors(bios, device) != sectors(issued, device):
+            raise ValueError('direct READ block requests differ from queued bio sectors')
+    first = min(r['issue_ns'] for r in requests)
+    last = max(r['complete_ns'] for r in requests)
+    return dict(sqe_to_first_block_us=(first - first_sqe) / 1000,
+                direct_block_span_us=(last - first) / 1000,
+                max_direct_block_us=max(r['complete_ns'] - r['issue_ns'] for r in requests) / 1000,
+                direct_block_to_last_cqe_us=(last_cqe - last) / 1000)
+
+
 def batch_read_phases(window, events, issuer, last_cqe):
     caller = window['pid']
     begin, end = window['poll_begin_ns'], window['poll_end_ns']
@@ -224,6 +342,8 @@ def analyze(root):
         duplicate_records = len(events) - len(set(events))
         events = sorted(set(events))
         times = [e[0] for e in events]
+        direct_contexts = (direct_read_contexts(events, times, windows)
+                           if name == 'orbite-ext4-read-8-contiguous' else {})
         requests = iter(block_requests(events))
         next_request = next(requests, None)
         active = []
@@ -241,16 +361,18 @@ def analyze(root):
             es = events[bisect.bisect_left(times, begin):bisect.bisect_right(times, end)]
             own = [e for e in es if e[1] == pid]
             rings = [e for e in own if e[3] == 'io_uring:io_uring_create']
-            contexts = {re.search(r'ring (\S+),', e[4])[1] for e in rings}
+            contexts = {RING_CTX.search(e[4])[1] for e in rings}
+            if not rings and w['sample'] in direct_contexts:
+                contexts.add(direct_contexts[w['sample']])
             io = [e for e in es if e[3].startswith('io_uring:') and any('ring ' + ctx + ',' in e[4] for ctx in contexts)]
-            sq = [e for e in io if e[3] in ('io_uring:io_uring_submit_req', 'io_uring:io_uring_submit_sqe')]
+            sq = [e for e in io if e[3] in SUBMITS]
             cq = [e for e in io if e[3] == 'io_uring:io_uring_complete']
-            if len(rings) != 1 or not sq or len(sq) != len(cq):
+            if len(contexts) != 1 or len(rings) > 1 or not sq or len(sq) != len(cq):
                 raise ValueError(f'{name}/{w["sample"]}: incomplete ring/SQE/CQE timeline')
             issuer = sq[0][2]
             enters = [e for e in own if e[3] == 'syscalls:sys_enter_io_uring_enter']
             row = dict(sample=w['sample'], begin_ns=begin, end_ns=end, caller=pid, issuer=issuer,
-                       latency_us=(end - begin) / 1000, rings=len(rings), sqes=len(sq), cqes=len(cq),
+                       latency_us=(end - begin) / 1000, rings=len(contexts), ring_creates=len(rings), sqes=len(sq), cqes=len(cq),
                        enters=len(enters), submitting_enters=sum('to_submit: 0x00000000,' not in e[4] for e in enters),
                        submit_ns=sq[0][0], first_cqe_ns=cq[0][0], last_cqe_ns=cq[-1][0],
                        before_submit_us=(sq[0][0] - begin) / 1000,
@@ -266,10 +388,14 @@ def analyze(root):
                 row.update(batch_read_phases(w, es, issuer, cq[-1][0]))
             row.update(blocks(es, pid))
             _, filesystem, direction, count, _ = name.removesuffix('-settled').removesuffix('-bulk').removesuffix('-legacy').split('-')
+            direct_group = filesystem == 'ext4' and 'poll_begin_ns' in w
             row.update(window_io(active, begin, end, sq[0][0], pid,
-                                 'R' if direction == 'read' else 'W', 4096 * int(count)))
+                                 'R' if direction == 'read' else 'W', 4096 * int(count),
+                                 direct_read_group=direct_group))
             if filesystem == 'ext4' and not row['window_direct_blocks']:
                 raise ValueError('missing ext4 direct block evidence')
+            if direct_group:
+                row.update(direct_read_phases(row['direct_io_timeline'], sq[0][0], cq[-1][0], es, pid))
             row['last_block_to_cqe_us'] = ((cq[-1][0] - row['last_block_complete_ns']) / 1000
                                          if row['last_block_complete_ns'] else 0)
             # Preserve the exact kernel fields alongside per-sample correlation.
@@ -331,6 +457,19 @@ def main():
 
 
 def controls():
+    open_events = [(0, 31, 32, 'syscalls:sys_enter_io_uring_setup', ''),
+                   (1, 31, 32, 'io_uring:io_uring_create', 'ring 0xabc, fd 21 sq size 8,'),
+                   (2, 31, 32, 'syscalls:sys_exit_io_uring_setup', '0x15')]
+    close = (30, 31, 32, 'syscalls:sys_enter_close', 'fd: 0x15')
+    if ring_lifetimes(open_events + [close],31)['0xabc'] != [[2,30,21]]:
+        raise ValueError('READ ring lifetime escaped its descriptor')
+    for bad in (open_events[1:], open_events[::2], open_events[:-1], open_events * 2,
+                open_events[:2] + [(2,31,32,'syscalls:sys_exit_io_uring_setup','0x16')]):
+        try:
+            ring_lifetimes(bad,31)
+        except ValueError:
+            continue
+        raise ValueError('unproven ring generation was accepted')
     ids = [f'req 0x{i:x}, user_data 0x{i:x}, ' for i in range(8)]
     sq = [(i, 10, 10, '', ident + 'opcode READV,') for i, ident in enumerate(ids)]
     cq = [(20, 10, 10, '', ident + 'result 4096,') for ident in reversed(ids)]
@@ -409,6 +548,25 @@ def controls():
     if [(r['sector'], r['bytes'], r['tid'], r['batch_depth_at_issue'])
         for r in depth['direct_io_timeline']] != [(8, 4096, 2, 1), (24, 4096, 3, 2), (40, 4096, 4, 2)]:
         raise ValueError('block geometry or per-batch issue depth was misattributed')
+    bios = [(1500, 1, 1, 'block:block_bio_queue', f'8,0 R {128+i*8} + 8 [caller]') for i in range(8)]
+    issued = block_requests([
+        (2000, 1, 1, 'block:block_rq_issue', '8,0 R 16384 () 128 + 32 be,0,4 [caller]'),
+        (3000, 1, 1, 'block:block_rq_issue', '8,0 RS 16384 () 160 + 32 0x0 [caller]'),
+        (5000, 0, 0, 'block:block_rq_complete', '8,0 RS () 160 + 32 0x0 [0]'),
+        (6000, 0, 0, 'block:block_rq_complete', '8,0 R () 128 + 32 be,0,4 [0]')])
+    timeline = window_io(issued, 0, 9000, 1000, 1, 'R', 32768, direct_read_group=True)['direct_io_timeline']
+    if direct_read_phases(timeline, 1000, 8000, bios, 1) != dict(sqe_to_first_block_us=1, direct_block_span_us=4,
+                                                                max_direct_block_us=4, direct_block_to_last_cqe_us=2):
+        raise ValueError('merged or overlapping direct READs were misattributed')
+    for bad, queues in (([], bios), ([issued[0] | dict(complete_ns=None)], bios),
+                        ([issued[0] | dict(complete_ns=8100)], bios), (issued, bios[:-1]),
+                        (issued, bios[:-1] + [bios[0]]), (issued, [(t, 2, i, e, b) for t, _, i, e, b in bios]),
+                        ([issued[0], issued[1] | dict(sector=192)], bios)):
+        try:
+            direct_read_phases(bad, 1000, 8000, queues, 1)
+        except ValueError:
+            continue
+        raise ValueError('invalid direct READ completion accepted')
     try:
         window_io(block_requests(es), 10, 60, 20, 1, 'R', 2048)
     except ValueError:

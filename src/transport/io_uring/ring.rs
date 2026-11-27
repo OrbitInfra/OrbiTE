@@ -13,9 +13,47 @@ pub(super) trait Ring: Send {
     fn submit(&mut self, count: u32) -> io::Result<usize>;
     fn peek(&mut self) -> io::Result<Option<(u64, i32)>>;
     fn reap(&mut self, until: Instant) -> io::Result<(u64, i32)>;
+    // Only a plain native ring can be reused after every submitted operation drained.
+    fn empty_after_drain(&mut self) -> bool {
+        false
+    }
     // Adapters without a non-consuming CQ count defer the group to the worker.
     fn batch_ready(&mut self, _count: u32, _until: Instant) -> bool {
         false
+    }
+}
+
+#[derive(Default)]
+pub(super) struct IdleReadRing {
+    ring: Option<Box<dyn Ring>>,
+    closed: bool,
+}
+
+impl IdleReadRing {
+    pub(super) fn take(&mut self, count: usize) -> Option<Box<dyn Ring>> {
+        let mut ring = self.ring.take()?;
+        (ring.space() >= count).then_some(ring)
+    }
+
+    pub(super) fn evict(&mut self) -> bool {
+        self.ring.take().is_some()
+    }
+
+    pub(super) fn put(&mut self, mut ring: Box<dyn Ring>) {
+        if !self.closed
+            && ring.empty_after_drain()
+            && self
+                .ring
+                .as_mut()
+                .is_none_or(|idle| idle.space() < ring.space())
+        {
+            self.ring = Some(ring);
+        }
+    }
+
+    pub(super) fn close(&mut self) {
+        self.closed = true;
+        self.ring.take();
     }
 }
 
@@ -29,6 +67,10 @@ pub(super) fn create(count: u32) -> io::Result<Box<dyn Ring>> {
 
 #[allow(unsafe_code)]
 impl Ring for IoUring {
+    fn empty_after_drain(&mut self) -> bool {
+        self.submission().is_empty() && self.completion().is_empty()
+    }
+
     fn space(&mut self) -> usize {
         let sq = self.submission();
         sq.capacity() - sq.len()

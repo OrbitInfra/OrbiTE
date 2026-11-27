@@ -74,6 +74,45 @@ pub(crate) fn kernel() -> bool {
     }
 }
 
+#[test]
+fn ring_setup_retries_only_after_reclaiming_idle_resources() -> Result<()> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    if !kernel() {
+        return Ok(());
+    }
+    for (idle, error, fail_again, calls, remains) in [
+        (true, libc::ENOMEM, false, 2, false),
+        (true, libc::ENFILE, false, 2, false),
+        (true, libc::ENOMEM, true, 2, false),
+        (false, libc::ENOMEM, false, 1, false),
+        (true, libc::EIO, false, 1, true),
+    ] {
+        let mut transport = IoUringTransport::probe(&EngineConfig::default())?.unwrap();
+        if idle {
+            transport.idle_read.lock().unwrap().put(ring::create(2)?);
+        }
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let counter = attempts.clone();
+        transport.create = Arc::new(move |size| {
+            if counter.fetch_add(1, Ordering::Relaxed) == 0 || fail_again {
+                return Err(io::Error::from_raw_os_error(error));
+            }
+            ring::create(size)
+        });
+        let err = transport
+            .create_ring(2)
+            .err()
+            .and_then(|e| e.raw_os_error());
+        assert_eq!(err, (calls == 1 || fail_again).then_some(error));
+        assert_eq!(attempts.load(Ordering::Relaxed), calls);
+        assert_eq!(
+            transport.idle_read.lock().unwrap().take(2).is_some(),
+            remains
+        );
+    }
+    Ok(())
+}
+
 pub(crate) struct Fixture {
     pub(crate) engine: Arc<TransferEngine>,
     pub(crate) segment: FileSegment,
@@ -118,6 +157,7 @@ impl Fixture {
         let observed = Arc::clone(&trace);
         let pool = self.engine.io_uring.as_ref().unwrap().pool.clone();
         Arc::get_mut(&mut self.engine).unwrap().io_uring = Some(IoUringTransport {
+            idle_read: Arc::default(),
             available: Arc::new(true.into()),
             pool,
             allocate: task::Bounce::new,
@@ -247,7 +287,7 @@ fn real_files_move_full_bytes_on_ext4_and_tmpfs() -> Result<()> {
 }
 
 #[test]
-fn aligned_file_batches_use_one_ring_without_bounce_for_gaps_or_contiguous_ranges() -> Result<()> {
+fn aligned_file_batches_use_one_ring_and_only_direct_reads_require_scratch() -> Result<()> {
     if !kernel() {
         return Ok(());
     }
@@ -303,6 +343,26 @@ fn aligned_file_batches_use_one_ring_without_bounce_for_gaps_or_contiguous_range
                     } else {
                         f.memory.write(0, &memory)?;
                     }
+                    let (lease, _) = f.engine.files.admit(&f.segment, op, 4096, 4096)?;
+                    let (fd, _) = lease.io_file(4096, 4096)?;
+                    let direct_read = lease.is_direct_read(op, &fd);
+                    drop(lease);
+                    if direct_read {
+                        let denied = f.run(op, &requests)?;
+                        assert!(denied.locally_drained);
+                        assert!(matches!(
+                            denied.failure.unwrap().error,
+                            Error::ResourceExhausted
+                        ));
+                        assert!(widths.lock().unwrap().is_empty());
+                        assert_eq!(f.engine.stats()?.io_uring.unwrap().pageable_bytes, 0);
+                        Arc::get_mut(&mut f.engine)
+                            .unwrap()
+                            .io_uring
+                            .as_mut()
+                            .unwrap()
+                            .allocate = task::Bounce::new;
+                    }
                     let mut batch = f.engine.submit_async(
                         op,
                         &f.segment,
@@ -339,6 +399,7 @@ fn truncate_on_ring_creation(depth: u32) -> Result<Fixture> {
     )?;
     let path = f.path.clone();
     Arc::get_mut(&mut f.engine).unwrap().io_uring = Some(IoUringTransport {
+        idle_read: Arc::default(),
         available: Arc::new(true.into()),
         pool: pool::Pool::new(Default::default(), 1 << 30).unwrap(),
         allocate: task::Bounce::new,
@@ -608,6 +669,7 @@ impl FaultRing {
 fn fault_fixture(fault: Fault) -> Result<Fixture> {
     let mut engine = TransferEngine::new(EngineConfig::default())?;
     engine.io_uring = Some(IoUringTransport {
+        idle_read: Arc::default(),
         available: Arc::new(true.into()),
         pool: pool::Pool::new(Default::default(), 1 << 30).unwrap(),
         allocate: task::Bounce::new,
@@ -771,6 +833,7 @@ fn held_file(
         .pool
         .clone();
     engine.io_uring = Some(IoUringTransport {
+        idle_read: Arc::default(),
         available: Arc::new(true.into()),
         pool,
         allocate: task::Bounce::new,
@@ -1081,6 +1144,7 @@ fn file_selection_and_preflight_have_no_effects_on_rejection() -> Result<()> {
 fn failed_second_bounce_releases_first_loan_before_any_ring_is_created() -> Result<()> {
     let mut engine = TransferEngine::new(EngineConfig::default())?;
     engine.io_uring = Some(IoUringTransport {
+        idle_read: Arc::default(),
         available: Arc::new(true.into()),
         pool: pool::Pool::new(Default::default(), 1 << 30).unwrap(),
         create: Arc::new(|_| panic!("incomplete preflight touched the ring")),

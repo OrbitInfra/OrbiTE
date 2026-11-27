@@ -30,7 +30,8 @@ docker build -t orbite-no-native-runtime "$out/image"
 ext="$out/ext4"
 mkdir -p "$ext"
 if test "$(findmnt -n -o FSTYPE -T "$ext")" != ext4; then
-  truncate -s 128M "$out/ext4.img"
+  # The full libtest binary can exercise several 64 MiB file images at once.
+  truncate -s 512M "$out/ext4.img"
   mkfs.ext4 -q -F "$out/ext4.img"
   sudo mount -o loop "$out/ext4.img" "$ext"
   trap 'sudo umount "$ext"' EXIT

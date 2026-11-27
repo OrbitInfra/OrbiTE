@@ -327,7 +327,14 @@ change the file an admitted operation uses. A lease keeps the fd until its I/O
 finishes; close fences all aliases before waiting, and a timeout keeps the entry
 charged until close is retried. See [file segments](storage.md).
 
-An idle engine retains no storage thread or ring after the setup probe.
+The setup probe drops its ring. A warmed engine can retain one idle ring
+of at most eight entries for consecutive, aligned direct host READ groups.
+Frozen TENT allocates and frees a ring per sub-batch. OrbiTE returns only
+the plain ring to the idle slot, after every SQE has a full, successful CQE
+and both queues are empty. The submitting owner releases the file leases,
+buffers and registrations independently. Concurrent batches take exclusive
+rings. A short or failed operation retires its ring through the usual drain.
+Closing the engine also closes the idle slot.
 For DRAM/file payloads the caller or existing batch worker owns the io_uring,
 iovecs, host range loans and bounce storage through CQE drain. File and peer
 targets share admission and batch progress. One small contiguous host-file
@@ -338,8 +345,10 @@ this brief wait can finish a late CQE without a thread handoff. A timeout or
 enter error transfers the unchanged ring to the batch worker.
 The [singleton tmpfs measurements](benchmarks.md#singleton-tmpfs-tail-latency)
 time the public batch lifecycle, including this handoff when it occurs.
-For a known buffered file, a group of at most eight plain host READs or WRITEs totaling
-64 KiB or less may use the caller under the same policy and deadline. One
+Groups of at most eight plain host requests totaling 64 KiB or less may use the
+caller under the same policy and deadline. A previously probed buffered file
+admits READ or WRITE. A direct descriptor admits consecutive READ extents
+with aligned host destinations. One
 deadline-capped timed enter can wait for the consumed SQ prefix. The single
 CQ owner leaves all completions visible for the worker if the set is incomplete.
 Each READ has its own destination loan. After a short submission the SQ head
@@ -372,9 +381,29 @@ it does not defer completion work to the submitting thread's next ring call.
 `pending_native_io_completes_on_worker_while_caller_only_computes` forces
 asynchronous kernel I/O and checks reaping on the worker without caller polling.
 The same preflight, partial-submit drain and prefix aggregation serve both paths.
-Aligned gapped and contiguous host batches keep one ring for the whole group,
-without bounce allocation, as checked by
-`aligned_file_batches_use_one_ring_without_bounce_for_gaps_or_contiguous_ranges`.
+Aligned gapped and contiguous host batches keep one ring for the whole group.
+On an ext4 direct READ racing a truncate, Linux can write past the byte count
+in its CQE. Even a size-stable, read-only file can deliver a negative CQE
+after other blocks of the same request have already modified its destination.
+Each direct host READ therefore targets private, byte-budgeted
+storage. Its CQE authorizes copying that prefix to the retained registration,
+including a vector in file order. A one-range file vector retains the vector
+submission path. Descriptor selection checks the offset and every range, so
+a sub-sector tail can select buffered I/O for the entire vector even when
+the aggregate is aligned. Aligned WRITEs and aligned buffered READs
+can still use the registration directly. After trying the configured staging
+slots, a direct READ of at least 2 MiB can request 2 MiB-aligned pageable
+scratch and advise transparent huge pages on complete units. If the larger
+alignment exhausts resources, preflight retries with the descriptor's
+required alignment. Both attempts share one outstanding byte charge.
+In the [scalar READ experiment](benchmarks.md#preparing-reclaimed-pages),
+one logical READ issues one or two native reads into the same private
+allocation. Publication waits for every submitted extent to drain. A short
+read publishes only the contiguous confirmed prefix, and a negative result
+preserves the entire destination.
+The real-ring control
+`aligned_file_batches_use_one_ring_and_only_direct_reads_require_scratch`
+checks allocation failure before submission, bytes, guards and ring count.
 For an aligned [64 MiB buffered file READ](benchmarks.md#peak-memory-for-a-64-mib-file-read),
 the observed CQE completed the full payload without a bounce buffer. The
 process reached peak RSS in the benchmark's subsequent byte checks.
@@ -393,8 +422,11 @@ The whole GPU range stays loaned through file receipts and CUDA copy events.
 A file vector has one file lease, admission owner and logical receipt. Overlapping
 spans share an exclusive loan within their registration. The issuer retains
 the original fragment order for kernel iovecs, staged copies and cuFile cookies.
-Explicit file padding extends TENT's contiguous buffer contract. Host vectors
-lease private charged scratch, and CUDA vectors use their pinned staging chunks.
+Explicit file padding extends TENT's contiguous buffer contract. On a direct
+host READ the native iovec covers one private buffer. Its scatter list records
+the length of each gap. Buffered host READs and host WRITEs bind their gaps
+to a shared scratch lease before submission. WRITE checks the actual padding
+addresses when selecting the descriptor. CUDA vectors use their pinned staging chunks.
 Each lease stays exclusive until its completion receipt, so a READ that dirties
 scratch cannot race a WRITE that needs zeros. Padding makes cuFile ineligible.
 GDS discovery and CUDA buffer registration start at first eligible file use.

@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Small aligned groups of consecutive direct file READs can complete on the
+  caller. Direct io_uring READs now reserve private storage until the CQE
+  protects the returned prefix. Concurrent file truncation preserves the
+  remaining registered bytes for both scalar and vectored reads. [File transfers](storage.md#dram-transfers-with-io_uring)
+
 - OrbitRDMA 0.1.2 supplies shared host windows with owner-local revocation.
   Both peers must run the same build. Reusable host grants encode the new
   release profile in the existing binding. The requester sends a plain SEND

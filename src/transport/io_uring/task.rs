@@ -51,6 +51,7 @@ impl Scratch {
         transport: &super::IoUringTransport,
         length: usize,
         alignment: usize,
+        direct_read: bool,
     ) -> Result<Self> {
         if let Some(slot) = transport.pool.acquire(
             length,
@@ -61,10 +62,66 @@ impl Scratch {
             return Ok(Self::Slot(slot));
         }
         let charge = transport.pool.charge(length)?;
+        // Faulting every base page during GUP dominates a large, fresh direct
+        // READ buffer. Only advise complete 2 MiB units of private scratch.
+        // The kernel can always satisfy this hint with ordinary pages.
+        const HUGE: usize = 2 << 20;
+        let advise = direct_read && length >= HUGE;
+        let buffer = if advise && alignment < HUGE {
+            match (transport.allocate)(length, HUGE) {
+                Err(Error::ResourceExhausted) => (transport.allocate)(length, alignment)?,
+                result => result?,
+            }
+        } else {
+            (transport.allocate)(length, alignment)?
+        };
+        if advise && buffer.ptr.as_ptr() as usize % HUGE == 0 {
+            // SAFETY: the pointer is huge-page aligned and exclusively owned.
+            // The hinted extent only includes complete units inside the allocation.
+            #[allow(unsafe_code)]
+            unsafe {
+                libc::madvise(
+                    buffer.ptr.as_ptr().cast(),
+                    length / HUGE * HUGE,
+                    libc::MADV_HUGEPAGE,
+                );
+            }
+        }
         Ok(Self::Pageable {
-            buffer: (transport.allocate)(length, alignment)?,
+            buffer,
             _charge: charge,
         })
+    }
+
+    /// Give each padding element a slice of one scratch lease before submitting
+    /// the vector to the kernel. A protected READ submits its own contiguous buffer.
+    #[allow(unsafe_code)]
+    fn bind_padding(
+        transport: &super::IoUringTransport,
+        iovecs: &mut [libc::iovec],
+        operation: TransferOp,
+    ) -> Result<Option<Self>> {
+        let length = iovecs
+            .iter()
+            .filter(|v| v.iov_base.is_null())
+            .map(|v| v.iov_len)
+            .sum();
+        if length == 0 {
+            return Ok(None);
+        }
+        let scratch = Self::acquire(transport, length, 4096, false)?;
+        let base = scratch.address().as_ptr();
+        if operation == TransferOp::Write {
+            // SAFETY: this exclusive lease covers every padding byte. An idle
+            // slot may contain data from a previous READ.
+            unsafe { base.write_bytes(0, length) };
+        }
+        let mut offset = 0;
+        for iov in iovecs.iter_mut().filter(|v| v.iov_base.is_null()) {
+            iov.iov_base = base.wrapping_add(offset).cast();
+            offset += iov.iov_len;
+        }
+        Ok(Some(scratch))
     }
 
     fn address(&self) -> NonNull<u8> {
@@ -80,11 +137,12 @@ enum HostMemory {
     Vector {
         _loans: Vec<DmaLease>,
         iovecs: Box<[libc::iovec]>,
+        _padding: Option<Scratch>,
     },
 }
 
 pub(super) struct Task {
-    file: Arc<File>,
+    pub(super) file: Arc<File>,
     memory: Option<HostMemory>,
     length: usize,
     bounce: Option<Scratch>,
@@ -102,50 +160,46 @@ impl Task {
     ) -> Result<(Self, libc::iovec)> {
         if request.parts.vectored() {
             let (loans, spans) = request.parts.borrow_ranges(|m, o, n| m.dma_lease(o, n))?;
-            let padding_bytes = request
+            let mut iovecs: Vec<_> = request
                 .parts
                 .iter()
-                .filter(|part| part.local.is_none())
-                .map(|part| part.length)
-                .sum::<usize>();
-            let padding = if padding_bytes == 0 {
-                None
-            } else {
-                let scratch = Scratch::acquire(transport, padding_bytes, 4096)?;
-                if operation == TransferOp::Write {
-                    // SAFETY: this exclusive scratch lease covers all padding bytes.
-                    // A reused slot may contain bytes from an earlier READ.
-                    unsafe {
-                        scratch.address().as_ptr().write_bytes(0, padding_bytes);
-                    }
-                }
-                Some(scratch)
-            };
-            let mut scratch_offset = 0;
-            let mut iovecs = Vec::with_capacity(spans.len());
-            for (part, span) in request.parts.iter().zip(spans) {
-                let address = if let Some(span) = span {
-                    loans[span.loan]
-                        .address()
-                        .as_ptr()
-                        .wrapping_add(span.offset)
-                } else {
-                    let scratch = padding
-                        .as_ref()
-                        .ok_or(Error::Internal("missing file padding scratch"))?;
-                    let address = scratch.address().as_ptr().wrapping_add(scratch_offset);
-                    scratch_offset += part.length;
-                    address
-                };
-                iovecs.push(libc::iovec {
-                    iov_base: address.cast(),
+                .zip(spans)
+                .map(|(part, span)| libc::iovec {
+                    iov_base: span.map_or(std::ptr::null_mut(), |span| {
+                        loans[span.loan]
+                            .address()
+                            .as_ptr()
+                            .wrapping_add(span.offset)
+                            .cast()
+                    }),
                     iov_len: part.length,
-                });
+                })
+                .collect();
+            let mut padding = None;
+            if operation == TransferOp::Write {
+                // WRITE submits these addresses, so check the actual padding alignment.
+                padding = Scratch::bind_padding(transport, &mut iovecs, operation)?;
             }
-            let file = request.lease.file_for_iovecs(request.offset, &iovecs)?;
-            // Round planning needs one length per SQE. entry() supplies the actual iovec array.
+            let (file, alignment) = request.lease.file_for_iovecs(request.offset, &iovecs)?;
+            let bounce = if request.lease.is_direct_read(operation, &file) {
+                // The kernel sees one aligned buffer. A null destination in the
+                // scatter list advances the file position without publishing bytes.
+                Some(Scratch::acquire(
+                    transport,
+                    request.length,
+                    alignment,
+                    true,
+                )?)
+            } else {
+                if operation == TransferOp::Read {
+                    padding = Scratch::bind_padding(transport, &mut iovecs, operation)?;
+                }
+                None
+            };
             let span = libc::iovec {
-                iov_base: std::ptr::null_mut(),
+                iov_base: bounce
+                    .as_ref()
+                    .map_or(std::ptr::null_mut(), |b| b.address().as_ptr().cast()),
                 iov_len: request.length,
             };
             return Ok((
@@ -154,9 +208,10 @@ impl Task {
                     memory: Some(HostMemory::Vector {
                         _loans: loans,
                         iovecs: iovecs.into_boxed_slice(),
+                        _padding: padding,
                     }),
                     length: request.length,
-                    bounce: padding,
+                    bounce,
                     offset: request.offset,
                     result: None,
                     late: false,
@@ -171,14 +226,11 @@ impl Task {
         // its producer event. Use buffered I/O for an unaligned view, without a copy.
         #[cfg(feature = "cuda")]
         let direct_host = if local.is_cuda_pinned_host() {
-            Some((
-                request.lease.file_for_buffer(
-                    request.offset,
-                    request.length,
-                    memory.address().as_ptr() as usize,
-                )?,
-                1,
-            ))
+            Some(request.lease.file_for_buffer(
+                request.offset,
+                request.length,
+                memory.address().as_ptr() as usize,
+            )?)
         } else {
             None
         };
@@ -194,8 +246,11 @@ impl Task {
         } else {
             alignment
         };
-        let bounce = if memory.address().as_ptr() as usize % staging_alignment != 0 {
-            let bounce = Scratch::acquire(transport, request.length, staging_alignment)?;
+        // A direct READ racing truncate can zero the rest of the last block
+        // even when its CQE reports a shorter prefix. Keep that write private.
+        let protect = request.lease.is_direct_read(operation, &file);
+        let bounce = if protect || memory.address().as_ptr() as usize % staging_alignment != 0 {
+            let bounce = Scratch::acquire(transport, request.length, staging_alignment, protect)?;
             if operation == TransferOp::Write {
                 // SAFETY: the exclusive loan covers all initialized WRITE bytes.
                 // The fresh bounce is disjoint and has exactly that capacity.
@@ -247,8 +302,8 @@ impl Task {
         iov: &libc::iovec,
         index: usize,
     ) -> squeue::Entry {
-        let iovecs = match &self.memory {
-            Some(HostMemory::Vector { iovecs, .. }) => &**iovecs,
+        let iovecs = match (&self.memory, &self.bounce) {
+            (Some(HostMemory::Vector { iovecs, .. }), None) => &**iovecs,
             _ => std::slice::from_ref(iov),
         };
         entry(&self.file, self.offset, operation, iovecs, index)
@@ -264,15 +319,38 @@ impl Task {
         self.result = Some(result);
         self.late = late;
         if operation == TransferOp::Read && result > 0 {
-            if let (Some(bounce), HostMemory::One(memory)) = (&self.bounce, memory) {
-                // SAFETY: this CQE proves the kernel wrote this prefix and stopped using
-                // the iovec. The bound above and the exclusive loan protect both ranges.
-                unsafe {
-                    std::ptr::copy_nonoverlapping(
-                        bounce.address().as_ptr(),
-                        memory.address().as_ptr(),
-                        result as usize,
-                    );
+            if let Some(bounce) = &self.bounce {
+                let source = bounce.address().as_ptr();
+                let length = result as usize;
+                match memory {
+                    HostMemory::One(memory) => {
+                        // SAFETY: this CQE initialized length disjoint scratch bytes.
+                        // The exclusive destination loan covers the checked prefix.
+                        unsafe {
+                            std::ptr::copy_nonoverlapping(source, memory.address().as_ptr(), length)
+                        };
+                    }
+                    HostMemory::Vector { iovecs, .. } => {
+                        let mut copied = 0;
+                        for iov in iovecs {
+                            let n = iov.iov_len.min(length - copied);
+                            if n == 0 {
+                                break;
+                            }
+                            if !iov.iov_base.is_null() {
+                                // SAFETY: the CQE covers this scratch prefix and the retained
+                                // loan covers this destination. Padding has a null address.
+                                unsafe {
+                                    std::ptr::copy_nonoverlapping(
+                                        source.add(copied),
+                                        iov.iov_base.cast(),
+                                        n,
+                                    )
+                                };
+                            }
+                            copied += n;
+                        }
+                    }
                 }
             }
         }

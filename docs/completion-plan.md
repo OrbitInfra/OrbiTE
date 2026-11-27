@@ -144,9 +144,8 @@ after each:
 
 The [direct-I/O comparison](benchmarks.md#direct-io-issue-paths-and-verification-load)
 is complete. Its remaining Rust 1.85 gapped WRITE p99 (16.26 ms versus TENT
-3.59 ms, overlapping three-trial ranges) is a P11 limit, not a tuning target
-on the CI virtual disk. Do no more virtual-disk tail work; measure physical
-NVMe tails in the hardware batch.
+3.59 ms, overlapping three-trial ranges) is a P11 limit. Measure the tails
+of that 64-block gapped WRITE on physical NVMe in the hardware batch.
 
 The [release ladder](#release-ladder) retains the beta API decisions,
 test-consolidation and installed acceptance gates. Publication remains the
@@ -208,9 +207,35 @@ Done:
   while each batch started a worker. Known buffered host READs now use the
   same bounded caller path as WRITEs. Same-boot untraced p99 fell from
   212 to 175 µs on stable and from 171 to 50 µs on Rust 1.85.
-  Next, measure the corresponding direct ext4 READ. Separate block completion
-  from worker scheduling and caller polling before changing direct-file
-  admission. The buffered tmpfs measurements cover a different route.
+  For [eight contiguous direct ext4 READs](benchmarks.md#eight-contiguous-direct-reads),
+  the parent slept another 55 µs after the last CQE on both toolchains.
+  Warmed, aligned host READ groups now use the bounded caller wait. They
+  retain independent CQEs and publish only each direct READ's completed
+  prefix, even across a concurrent truncate. Removing the handoff raised
+  goodput from 0.19 to 0.39 GiB/s. A separate paired run reused a single
+  fully drained ring and reached 0.48–0.49 GiB/s at 0.88–0.91 ns per byte,
+  with an 80–82 µs p99. TENT reached 0.49 GiB/s at about 1.92 ns per byte.
+  Guest block service still took about 36–37 µs against 21–22 µs for TENT.
+  The [large direct READ controls](benchmarks.md#large-direct-reads)
+  measured about 0.024 ms to obtain 64 MiB of fresh private storage,
+  6.6 ms to populate its pages and 7.9 ms to copy the 64 MiB confirmed by
+  a full CQE. The default path pays the population cost during the READ.
+  Retaining a full-size slot pushed peak RSS from about 323.5 to 387.5 MiB.
+  In a separate paired test, moving confirmed pages into the destination and
+  reusing 64 MiB restored throughput, p99 and CPU per byte on both toolchains.
+  Peak RSS exceeded the fixed OrbiTE baseline by about 20%, against a 10% limit.
+  At the peak, 64 MiB of retired destination pages overlapped the caller's
+  file verification buffers. Discarding 36 MiB after drain left 28 MiB
+  resident. [Phase measurements](benchmarks.md#preparing-reclaimed-pages) place
+  the extra process CPU in page preparation (2.06 / 3.76 ms on the stable /
+  1.85 hosts). A same-binary comparison on two x86 hosts running both compilers
+  found that splitting saved 3.05–3.23 ms of elapsed time per READ but added
+  0.52–1.09 ms of process CPU. Moving 12 MiB of cold pages to the first extent
+  met the RSS target and increased CPU per byte and p99 on all four pairs.
+  The step remains open until a
+  protected implementation meets all four limits against both frozen references.
+  The [external-vector controls](qualification.md#local-file-segments) cover
+  a separate consumer shape with independent registrations and a readable tail.
 
 - **S16 — reference fixtures.** Retain the CPU trace contract and three frozen
   request prefixes used by native-listener rejection. Compatibility inventories
@@ -458,11 +483,12 @@ OrbitKV keeps extents, placement, eviction and recovery policy.
 - [x] **P7.1 — local file segments (Implemented).** Engine-local `file://`
   segments with cached size and refresh, permissions, checked byte offsets and
   close that drains pending fd users. See [file segments](storage.md).
-- [x] **P7.2 — DRAM/file io_uring (Qualified on Linux CI).** One ring per submission,
+- [x] **P7.2 — DRAM/file io_uring (Qualified on Linux CI).** Exclusive ring ownership per submission,
   exact short/error byte counts, partial submission, queued cancellation and
   CQE drain before releasing registered memory or file leases. Small host
   submissions can consume a ready CQE on the caller; pending work hands the
-  existing ring to the batch worker without resubmission.
+  existing ring to the batch worker without resubmission. Consecutive
+  direct READ groups can reuse one empty ring after all successful CQEs.
 - [x] **P7.3 — CUDA/file staging (Implemented).** An optional file pool supplies whole-request pinned slots. Larger requests and pool misses use caller-driven rounds of
   charged pinned chunks, device-range loans and event-confirmed copyback.
   The installed GPU/NVMe profile is unqualified.
@@ -471,6 +497,7 @@ OrbitKV keeps extents, placement, eviction and recovery policy.
   native-route profile is unqualified.
 - [x] **P7.5 — build isolation and BufIo audit (Implemented).** File handles
   stay core. File vectors share a logical receipt across registered ranges and padding.
+  A direct host READ needs only its whole-vector buffer, including explicit padding.
   Runtime-disabled GDS skips cuFile discovery. CI checks the dependency graph, unavailable hints and idle
   storage resources. BufIo is unreachable through the frozen loader.
 

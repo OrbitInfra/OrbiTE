@@ -2,6 +2,9 @@ use super::*;
 
 #[derive(Default)]
 struct Trace {
+    allow_reuse: bool,
+    setups: usize,
+    truncate_before_push: Option<(PathBuf, u64)>,
     submitter: Option<std::thread::ThreadId>,
     submits: usize,
     peeks: usize,
@@ -12,6 +15,9 @@ struct Trace {
     submit_limit: Option<u32>,
     invalid_sq_head: bool,
     invalid_cqe: bool,
+    read_bytes_before_eio: Option<usize>,
+    hold_read_receipt: Option<(mpsc::SyncSender<usize>, mpsc::Receiver<()>)>,
+    truncate_to: Option<u64>,
     errors: std::collections::VecDeque<i32>,
     alive: std::sync::Weak<()>,
 }
@@ -24,6 +30,11 @@ struct Observed {
     no_space: bool,
 }
 impl Ring for Observed {
+    fn empty_after_drain(&mut self) -> bool {
+        self.trace.lock().unwrap().allow_reuse
+            && self.receipts.is_empty()
+            && self.ring.empty_after_drain()
+    }
     fn space(&mut self) -> usize {
         if self.no_space { 0 } else { self.ring.space() }
     }
@@ -35,6 +46,12 @@ impl Ring for Observed {
         }
     }
     fn push(&mut self, entries: &[squeue::Entry]) -> io::Result<()> {
+        if let Some((path, size)) = self.trace.lock().unwrap().truncate_before_push.take() {
+            std::fs::OpenOptions::new()
+                .write(true)
+                .open(path)?
+                .set_len(size)?;
+        }
         self.ring.push(entries)
     }
     fn submit(&mut self, count: u32) -> io::Result<usize> {
@@ -55,7 +72,23 @@ impl Ring for Observed {
         for _ in 0..n {
             // Hold real CQEs and expose them in reverse order, so independent
             // task publication and handoff do not depend on kernel timing.
-            let (id, result) = self.ring.reap(Instant::now() + EVENTUAL_PROGRESS)?;
+            let (id, mut result) = self.ring.reap(Instant::now() + EVENTUAL_PROGRESS)?;
+            if let Ok(bytes) = usize::try_from(result) {
+                let mut trace = self.trace.lock().unwrap();
+                if let Some(left) = trace.read_bytes_before_eio {
+                    trace.read_bytes_before_eio = left.checked_sub(bytes);
+                    if trace.read_bytes_before_eio.is_none() {
+                        // Replace a real, completed READ receipt after its DMA writes.
+                        result = -libc::EIO;
+                    }
+                }
+                let hold = trace.hold_read_receipt.take();
+                drop(trace);
+                if let Some((observed, resume)) = hold {
+                    observed.send(bytes).unwrap();
+                    resume.recv_timeout(EVENTUAL_PROGRESS).unwrap();
+                }
+            }
             self.receipts
                 .push_front((if invalid_cqe { u64::MAX } else { id }, result));
         }
@@ -108,7 +141,9 @@ fn observed_at(
     truncate: bool,
     no_space: bool,
 ) -> Result<(Fixture, Arc<Mutex<Trace>>)> {
-    let mut f = Fixture::new(directory, image, TransferEngine::new(Default::default())?)?;
+    let mut config = EngineConfig::default();
+    config.max_transfer_bytes = config.max_transfer_bytes.max(image.len());
+    let mut f = Fixture::new(directory, image, TransferEngine::new(config)?)?;
     let path = f.path.clone();
     let trace = Arc::new(Mutex::new(Trace::default()));
     let copy = trace.clone();
@@ -119,8 +154,18 @@ fn observed_at(
         .unwrap();
     io.available = Arc::new(true.into());
     io.create = Arc::new(move |count| {
-        if truncate {
-            fs::OpenOptions::new().write(true).open(&path)?.set_len(3)?;
+        copy.lock().unwrap().setups += 1;
+        let length = copy
+            .lock()
+            .unwrap()
+            .truncate_to
+            .take()
+            .or(truncate.then_some(3));
+        if let Some(length) = length {
+            fs::OpenOptions::new()
+                .write(true)
+                .open(&path)?
+                .set_len(length)?;
         }
         let alive = Arc::new(());
         copy.lock().unwrap().alive = Arc::downgrade(&alive);
@@ -135,6 +180,9 @@ fn observed_at(
     });
     Ok((f, trace))
 }
+
+#[path = "external_vector.rs"]
+mod external_vector;
 
 #[path = "inline_group.rs"]
 mod group;
@@ -497,11 +545,14 @@ fn caller_preflight_rejects_full_sq_before_any_file_io() -> Result<()> {
 }
 
 #[test]
-fn aligned_small_file_requests_need_no_bounce_allocation() -> Result<()> {
+fn aligned_small_buffered_read_needs_no_bounce_allocation() -> Result<()> {
     if !kernel() {
         return Ok(());
     }
-    let (mut f, trace) = observed(true, false, false)?;
+    let Some(dir) = group::directory("ORBITE_TMPFS_DIR") else {
+        return Ok(());
+    };
+    let (mut f, trace) = observed_at(&dir, b"abcdefgh", true, false, false)?;
     let image: Vec<_> = (0..8192).map(|i| (i % 251) as u8).collect();
     fs::write(&f.path, &image)?;
     let io = Arc::get_mut(&mut f.engine)

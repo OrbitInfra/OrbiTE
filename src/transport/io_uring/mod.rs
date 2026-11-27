@@ -14,7 +14,7 @@ pub(crate) mod tests;
 
 use std::io;
 use std::mem::ManuallyDrop;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex, Weak};
 use std::time::Instant;
 
 use io_uring::squeue;
@@ -31,6 +31,7 @@ use crate::segment::file::FileRequest;
 #[derive(Clone)]
 pub(crate) struct IoUringTransport {
     available: Arc<std::sync::OnceLock<bool>>,
+    idle_read: Arc<Mutex<ring::IdleReadRing>>,
     pool: Arc<pool::Pool>,
     allocate: fn(usize, usize) -> Result<task::Bounce>,
     create: Arc<dyn Fn(u32) -> io::Result<Box<dyn Ring>> + Send + Sync>,
@@ -40,6 +41,7 @@ impl IoUringTransport {
     pub(crate) fn probe(config: &crate::EngineConfig) -> Result<Option<Self>> {
         Ok(Some(Self {
             available: Arc::default(),
+            idle_read: Arc::default(),
             pool: pool::Pool::new(config.io_uring, config.max_inflight_bytes)?,
             create: Arc::new(ring::create),
             allocate: task::Bounce::new,
@@ -51,7 +53,30 @@ impl IoUringTransport {
     pub(crate) fn stats(&self) -> IoUringStats {
         self.pool.stats()
     }
+    fn create_ring(&self, size: u32) -> io::Result<Box<dyn Ring>> {
+        match (self.create)(size) {
+            Err(e)
+                if matches!(
+                    e.raw_os_error(),
+                    Some(libc::EMFILE | libc::ENFILE | libc::ENOMEM)
+                ) =>
+            {
+                // Only setup failed. Release the idle fd and mappings before retrying, while
+                // there are no published SQEs or active owners to replay.
+                if self.idle_read.lock().is_ok_and(|mut slot| slot.evict()) {
+                    (self.create)(size)
+                } else {
+                    Err(e)
+                }
+            }
+            result => result,
+        }
+    }
     pub(crate) fn close(&self) -> Result<()> {
+        self.idle_read
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .close();
         self.pool.close()
     }
 
@@ -93,7 +118,13 @@ impl IoUringTransport {
             }
             if count != 0 && !staged {
                 *report = self
-                    .start_host(operation, &requests[..count], requests.len(), deadline)?
+                    .start_host(
+                        operation,
+                        &requests[..count],
+                        requests.len(),
+                        deadline,
+                        false,
+                    )?
                     .finish(operation, progress);
             }
             if report.failure.is_none() && count != requests.len() {
@@ -113,6 +144,7 @@ impl IoUringTransport {
         requests: &[FileRequest],
         capacity: usize,
         deadline: Instant,
+        on_caller: bool,
     ) -> Result<Submitted> {
         let count = requests.len();
         let mut tasks = Vec::new();
@@ -129,12 +161,30 @@ impl IoUringTransport {
             iovecs.push(iov);
         }
         let size = u32::try_from(capacity).map_err(|_| Error::ResourceExhausted)?;
-        let mut ring = (self.create)(size)?;
+        // Only a caller-admitted group can populate the one idle ring. The
+        // existing caller admission caps its depth and validates all extents.
+        let reusable = on_caller
+            && count > 1
+            && capacity == count
+            && requests[0].lease.is_direct_read(operation, &tasks[0].file);
+        let idle = if reusable {
+            self.idle_read
+                .lock()
+                .ok()
+                .and_then(|mut slot| slot.take(count))
+        } else {
+            None
+        };
+        let mut ring = match idle {
+            Some(ring) => ring,
+            None => self.create_ring(size)?,
+        };
         if ring.space() < count {
             return Err(Error::ResourceExhausted);
         }
         // The iovec array is immutable after this point, separate from
         // task state the worker mutates as receipts arrive.
+        let iovecs = iovecs.into_boxed_slice();
         let entries: Vec<_> = tasks
             .iter()
             .zip(&iovecs)
@@ -146,6 +196,7 @@ impl IoUringTransport {
             ring,
             tasks,
             iovecs,
+            idle_read: reusable.then(|| Arc::downgrade(&self.idle_read)),
         };
         batch.start(&entries, deadline)
     }
@@ -163,7 +214,8 @@ fn failure(index: usize, error: Error, effect: RemoteEffect) -> TransferFailure 
 struct LiveBatch {
     ring: Box<dyn Ring>,
     tasks: Vec<Task>,
-    iovecs: Vec<libc::iovec>,
+    iovecs: Box<[libc::iovec]>,
+    idle_read: Option<Weak<Mutex<ring::IdleReadRing>>>,
 }
 
 struct Drain {
@@ -415,7 +467,14 @@ impl Submitted {
             ));
         }
         if report.locally_drained {
-            drop(ManuallyDrop::into_inner(live));
+            let batch = ManuallyDrop::into_inner(live);
+            if report.failure.is_none() && drain.consumed == batch.iovecs.len() {
+                if let Some(slot) = batch.idle_read.as_ref().and_then(Weak::upgrade) {
+                    if let Ok(mut slot) = slot.lock() {
+                        slot.put(batch.ring);
+                    }
+                }
+            }
         }
         // Otherwise the ring, pointed-to iovecs, exclusive loans, fds and bounce buffers
         // remain live. The shared submission owner also retains admission and file leases.

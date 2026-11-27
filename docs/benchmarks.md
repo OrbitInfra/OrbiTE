@@ -270,6 +270,376 @@ use the standard 100-sample trials, compare with the fixed OrbiTE regression
 baseline and retain all TENT workload verdicts. The results above apply to
 one caller reading a warmed tmpfs file.
 
+### Eight contiguous direct READs
+
+This workload reads eight adjacent 4 KiB blocks from a preallocated ext4
+file through a direct descriptor. The [same-boot comparison](https://github.com/OrbitInfra/OrbiTE/actions/runs/45118467752)
+used parent `e4a12a2`, candidate `27bfe46` and frozen Mooncake TENT
+`e1ea5d31`. Each toolchain ran on its own x86-64 Linux guest. Both phases
+used the same caller, kernel, mounts and TENT binary on that guest.
+Run `benches/run.py --tail-profile-only ext4-read-batch` with the reference,
+output and mount arguments from the [CPU sweeps](#cpu-sweeps). Each of six
+fresh processes per implementation and phase ran three warmups and 1,000
+measured batches, alternating implementation order. File reset and
+`fdatasync` preceded timing. Both callers checked each batch's byte count,
+payload and guards. The separate traces matched eight READVs to eight
+independent completions in every measured batch.
+
+The table gives the median of the **untraced** process trials. Goodput counts
+32 KiB per batch. CPU time includes all threads in the process and p99 covers
+the full batch. The TENT columns use its candidate-phase trials.
+
+| Rust | OrbiTE GiB/s, before → after | TENT GiB/s | OrbiTE CPU ns/byte, before → after | TENT CPU ns/byte | OrbiTE p99 µs, before → after | TENT p99 µs |
+|---|---:|---:|---:|---:|---:|---:|
+| Stable | 0.189 → 0.393 | 0.513 | 3.248 → 1.355 | 1.833 | 202.90 → 132.99 | 122.51 |
+| Rust 1.85 | 0.190 → 0.389 | 0.509 | 3.246 → 1.379 | 1.847 | 204.16 → 136.71 | 115.80 |
+
+Separate captures verify a successful `O_DIRECT` open on the payload and
+match every READV to its full 4 KiB CQE. For each issuing block device the
+analyzer matches the queued data sectors to issued requests and completions,
+including requests merged or split by the kernel. The span runs from first
+issue to last completion on the guest. Worker handoff runs from fork to
+first scheduled execution. Caller polling runs from the first public status
+call to the terminal observation. These intervals overlap. Recompute the
+distributions with `python3 benches/analyze_io_tail.py /path/to/tail`.
+
+| Trace median, µs | Stable OrbiTE, before → after | Stable TENT | Rust 1.85 OrbiTE, before → after | Rust 1.85 TENT |
+|---|---:|---:|---:|---:|
+| Batch start to first SQE | 49.97 → 18.62 | 23.89 | 49.27 → 19.35 | 23.94 |
+| Guest block issue to completion | 32.93 → 35.62 | 21.82 | 32.74 → 36.15 | 21.87 |
+| Worker handoff | 9.18 → 0 | 0 | 9.32 → 0 | 0 |
+| Caller polling | 143.63 → 0.10 | 26.41 | 143.10 → 0.09 | 26.47 |
+| Last CQE to terminal observation | 56.51 → 15.76 | 1.38 | 56.82 → 16.17 | 1.43 |
+
+The parent started a worker and entered polling backoff in every measured
+batch. Even after the last CQE it spent a median 55.21 / 55.42 µs asleep
+on stable / Rust 1.85. The bounded caller path completed all 1,000 groups
+per toolchain before the first status call. It retained eight independent
+SQEs, CQEs and byte counts. On the stable candidate, a gap in the underlying
+sector mapping split each group into 4 KiB and 28 KiB requests on one
+guest device. The other seven captures issued one 32 KiB request per group.
+The candidate protected each destination against a concurrent
+truncate by copying only its CQE prefix from private storage.
+
+On these hosts OrbiTE reached 77% of TENT goodput, used 25–26% less CPU
+per byte and took 9–18% longer at p99. Both the guest block span and the
+time between the final CQE and the public receipt still exceeded TENT.
+Part of the receipt gap reflects when each implementation closes the ring.
+OrbiTE's caller performed two unmaps and one close before reporting terminal
+status. TENT performed them during batch free. From the last CQE to the
+end marker recorded after free, the medians were 17.32 / 17.91 µs for
+OrbiTE and 11.31 / 11.24 µs for TENT. This includes the intervening harness
+work. The untraced latency and goodput above include free for both.
+The [CQ polling experiment](https://github.com/OrbitInfra/OrbiTE/actions/runs/45119467264)
+added up to 16 µs of active polling before the bounded sleeping wait on the
+same protected implementation. Goodput moved from 0.378 to 0.351 GiB/s
+on stable and from 0.374 to 0.468 on Rust 1.85. P99 moved from 150.68 to
+152.52 µs and from 138.50 to 136.03 µs, respectively. Process CPU per
+byte rose 45% and 41%, exceeding the 10% allowance on both hosts, so the
+caller keeps the sleeping wait. The [full CPU sweeps](https://github.com/OrbitInfra/OrbiTE/actions/runs/45118496460)
+compare all shapes, including single 64 MiB direct READs, with the fixed
+OrbiTE baseline and frozen TENT using three 100-batch trials per shape.
+Guest storage varied between hosts. In the [original Azure capture](https://github.com/OrbitInfra/OrbiTE/actions/runs/45116563186)
+the ten slowest Rust 1.85 parent batches spent a median 13.07 ms of their
+13.42 ms at the block device. Physical NVMe latency remains a separate
+qualification.
+
+With the caller path and private destinations fixed, a native control changed
+only the ring lifetime. Setup and retirement together cost 12–13 µs per batch
+with fresh rings and about 1.3 µs with a drained ring. Each ring still issued
+eight separate READVs. [Ring creation and retirement measurements](https://github.com/OrbitInfra/OrbiTE/actions/runs/45395500236)
+
+The public engine comparison below measures `d54910b` (fresh) and `bbb05cc`
+(reused) on each guest, using the same six-process protocol. During all
+1,000 traced batches, the OrbiTE ring had been created in warmup. All eight
+READVs and CQEs matched the same still-open ring descriptor. Frozen TENT
+opened a fresh ring per batch. [Paired public-engine trials and traces](https://github.com/OrbitInfra/OrbiTE/actions/runs/45407741022)
+
+| Rust | GiB/s, fresh / reused / TENT | CPU ns/byte, fresh / reused / TENT | p99 µs, fresh / reused / TENT |
+|---|---:|---:|---:|
+| Stable | 0.384 / 0.487 / 0.488 | 1.415 / 0.883 / 1.913 | 143.58 / 79.57 / 122.81 |
+| 1.85 | 0.378 / 0.479 / 0.486 | 1.435 / 0.906 / 1.925 | 142.78 / 82.38 / 137.49 |
+
+Ring reuse cut batch start to first SQE from 18.84 to 8.22 µs on stable
+and from 19.36 to 8.55 µs on Rust 1.85. Last CQE to return after batch free
+fell from 17.58 to 11.16 µs and from 17.70 to 11.41 µs. TENT measured
+11.16 and 10.97 µs on that boundary. The remaining guest block span was
+36.73 / 36.38 µs for OrbiTE against 22.02 / 21.45 µs for TENT.
+
+### Large direct READs
+
+A buffered reset and `fdatasync` precede each measured 64 MiB single READ
+on ext4. The public caller checks the payload, destination guards, byte
+count and direct descriptor. Six fresh processes per engine version cover
+every run order, with three warmups and 30 samples each. Each row gives the
+median of the six untraced process trials. The fixed baseline is
+`12d1e839`. The protected engine receives the direct READ into private
+storage, then copies the CQE-confirmed prefix to the caller. The last
+entry in each group uses 2 MiB-aligned private storage with transparent
+huge-page advice. [Matched public-engine trials](https://github.com/OrbitInfra/OrbiTE/actions/runs/45130293237)
+
+| Rust | GiB/s, baseline / protected / advised | CPU ns/byte, baseline / protected / advised | p99 ms, baseline / protected / advised | peak RSS MiB, baseline / protected / advised |
+|---|---:|---:|---:|---:|
+| Stable | 6.24 / 2.01 / 2.52 | 0.145 / 0.471 / 0.341 | 11.64 / 32.49 / 28.44 | 323.4 / 323.5 / 323.5 |
+| 1.85 | 6.52 / 2.10 / 2.55 | 0.140 / 0.453 / 0.331 | 11.81 / 31.13 / 27.94 | 323.5 / 323.5 / 323.5 |
+
+The production allocator and completion owner were timed separately on one
+x86-64 Linux ext4 guest. Both toolchains used the public transfer caller,
+six rotated processes per instrumented case, three warmups and 20 measured
+reads. The following wall times are medians of per-process medians.
+[Owner timings and uninstrumented controls](https://github.com/OrbitInfra/OrbiTE/actions/runs/45615884927)
+
+| Stage for one 64 MiB direct READ | Stable (ms) | Rust 1.85 (ms) |
+|---|---:|---:|
+| Acquire fresh, huge-page-advised private storage | 0.024 | 0.023 |
+| First write to fresh pages, when measured explicitly | 6.653 | 6.640 |
+| Prepared request to CQE, with default on-demand faults | 15.295 | 15.976 |
+| Prepared request to CQE, after explicit page population | 8.906 | 8.975 |
+| Copy the full confirmed prefix to the caller, default path | 7.930 | 7.941 |
+| Release private storage, default path | 0.211 | 0.214 |
+
+The default READ includes 32 minor faults between preparation and its CQE.
+Explicit population moved them to the first-write stage. These two rows
+measure the same page faults in different runs. Total CPU per READ was
+22.46 / 22.32 ms by default and 22.59 / 22.56 ms with explicit population.
+A native control verified cold and resident pages with `mincore` and measured
+the same touch loop on resident pages at 0.42 / 0.41 ms. [Page population controls](https://github.com/OrbitInfra/OrbiTE/actions/runs/45614854495)
+
+The public caller also ran three independent 100-batch trials per configuration
+without timing probes. From `12d1e83` to `ea265fd`, goodput fell from
+6.50 to 2.54 GiB/s on stable and from 6.48 to 2.58 GiB/s on Rust 1.85.
+One configured, reusable 64 MiB slot raised goodput to 3.43 / 3.42 GiB/s
+but retained the full allocation between operations. Peak RSS rose from
+about 323.5 to 387.5 MiB. All four limits still failed with that slot.
+[Public workload receipts](https://github.com/OrbitInfra/OrbiTE/actions/runs/45615884927)
+
+For comparison, the full uninstrumented CPU sweep ran the current implementation
+and frozen TENT on the same boot for each toolchain. On stable the 64 MiB
+direct READ measured 2.62 / 6.65 GiB/s, 0.330 / 0.129 CPU ns per byte and
+26.73 / 12.11 ms p99 (OrbiTE / TENT). Rust 1.85 measured 2.50 / 6.50 GiB/s,
+0.349 / 0.139 ns per byte and 30.90 / 10.94 ms p99. Peak RSS passed against
+both frozen references. [Paired CPU sweep](https://github.com/OrbitInfra/OrbiTE/actions/runs/45410952332)
+
+An experimental four-slot pipeline read into 2 MiB windows and copied each
+contiguous prefix as soon as its CQEs arrived. In a separate aarch64 ext4
+test with a bad 4 KiB block in the middle, it had published 32 MiB when the
+logical READ failed. On the same file the protected single READ reported
+zero bytes and preserved the destination. The windowed prototype is excluded
+from the production path. [Public window experiment](https://github.com/OrbitInfra/OrbiTE/actions/runs/45621030185)
+
+A second experiment submitted eight disjoint 8 MiB reads into one private
+allocation. The public request waited for every native completion before any
+bytes became visible. Both toolchains passed the post-I/O error and truncation
+controls. On x86-64 ext4, three fresh processes each measured 100 batches per
+implementation and toolchain. Stable reached 2.64 GiB/s against 2.61 for the
+protected scalar path, 6.44 for the fixed OrbiTE baseline and 6.70 for TENT.
+Rust 1.85 reached 2.63 against 2.61, 6.29 and 6.53 GiB/s, respectively.
+CPU time per byte grew on both compilers. Only peak RSS passed both comparisons.
+[Concurrent private reads and fault receipts](https://github.com/OrbitInfra/OrbiTE/actions/runs/45946952377)
+
+A single-`READV` experiment used separate private mappings for large,
+engine-owned `LocalOnly` destinations in the Linux CPU build. A positive
+CQE allowed whole pages to move into the registered address and a byte copy
+published the remaining tail.
+It retained up to 24 MiB of old destination pages for the next read. Both
+compilers exercised the page moves and passed the nonuniform short-read and
+late-error controls. Stable reached 4.47 GiB/s against 2.71 for the protected
+PR, 6.64 for the fixed engine and 6.67 for TENT. Rust 1.85 reached 4.54
+against 2.76, 6.53 and 6.55 GiB/s. Peak RSS was 347.5 MiB on both and met
+the limit. CPU time per byte was 37% above the fixed engine on both compilers.
+The dedicated mapping also required an initial copy at registration. In a
+separate aarch64 test, registering 64 MiB plus guards took 2.42 ms on stable
+and 2.18 ms on Rust 1.85, up from 0.005 and 0.008 ms. The paired READ
+timings exclude registration.
+[Single-completion page publication and matched results](https://github.com/OrbitInfra/OrbiTE/actions/runs/45948500929)
+
+The same public workload compared two reuse limits on a single x86-64 ext4
+boot. Each row is the median of three processes with 100 timed READs each.
+Both toolchains verified that a full READ recycled the configured number of
+bytes and that short and negative completions preserved the destination contract.
+[Page movement controls and paired capacity trials](https://github.com/OrbitInfra/OrbiTE/actions/runs/45951160596)
+
+| Engine or reuse limit | GiB/s (stable / 1.85) | p99 ms (stable / 1.85) | CPU ns/byte (stable / 1.85) | Peak RSS MiB (stable / 1.85) |
+|---|---:|---:|---:|---:|
+| Fixed OrbiTE | 6.58 / 6.58 | 10.51 / 10.83 | 0.142 / 0.142 | 323.42 / 323.32 |
+| Frozen TENT | 6.84 / 6.80 | 10.84 / 9.61 | 0.134 / 0.136 | 336.95 / 336.98 |
+| 32 MiB of resident scratch | 4.83 / 4.84 | 13.39 / 13.32 | 0.183 / 0.181 | 355.58 / 355.47 |
+| 64 MiB of resident scratch | 6.62 / 6.63 | 10.19 / 9.93 | 0.112 / 0.111 | 389.36 / 387.67 |
+
+At 32 MiB only peak RSS passed. It was already 9.94% above the fixed
+engine on both toolchains. At 64 MiB the throughput, p99 and CPU limits
+passed against both references. Peak RSS exceeded the fixed engine by
+20.39% on stable and 19.90% on Rust 1.85, above the 10% limit.
+The production path continues to use fresh private storage and copy the
+confirmed prefix.
+
+On x86-64 ext4 the 64 MiB reuse experiment reached its peak after the
+batch had drained. Across three fresh processes per compiler, current
+RSS on stable / Rust 1.85 was 259.68 / 259.70 MiB at the terminal CQE,
+259.67 / 259.69 MiB after freeing the batch, and 387.69 / 387.71 MiB
+while comparing the file. Six buffers of about 64 MiB each were resident
+together. They held the local and remote registrations, generated input,
+expected file, file readback and the engine's recycled destination pages.
+The subsequent remote check replaced the readback with a registration
+snapshot while the expected file was still live. Closing the engine
+released the recycled pages. The same caller with fixed OrbiTE peaked at
+323.66 / 323.71 MiB in the remote check. These instrumented readings
+locate the overlap. The performance limits use uninstrumented GNU time
+process peaks. [Stage and live-buffer measurements](https://github.com/OrbitInfra/OrbiTE/actions/runs/45956869132)
+
+Returning 36 MiB of old destination pages to Linux after drain left 28 MiB
+resident in one 64 MiB private mapping. Both x86-64 compilers confirmed
+the reduction with `mincore` and passed the exact-prefix and late-error
+controls. A second implementation moved only the retained prefix into an
+empty mapping. A third used four independent direct reads into one private
+mapping and waited for all four results before changing the logical target.
+[Native correctness and residency controls](https://github.com/OrbitInfra/OrbiTE/actions/runs/45958855686)
+
+In separate instrumented runs, retiring the scratch slot, including the
+discard, took 0.10 / 0.12 ms on stable / Rust 1.85. After moving the old
+pages aside, publishing a full result took 0.038 / 0.037 ms. On the next READ,
+from prepared request to result, the process incurred 18 additional minor
+faults. That interval grew from 8.85 to 12.45 ms on stable and from 8.85
+to 12.50 ms on Rust 1.85. Its process CPU time rose from 6.97 to 10.65 ms
+and from 7.06 to 10.76 ms, respectively.
+[Owner timings and minor faults](https://github.com/OrbitInfra/OrbiTE/actions/runs/45959535285)
+
+The following uninstrumented trials used the original common caller. Values
+in each cell are stable / Rust 1.85. Each implementation ran as three fresh
+processes with 100 measured batches each per compiler.
+[Public workload and raw trial samples](https://github.com/OrbitInfra/OrbiTE/actions/runs/45958282248)
+
+| Implementation | GiB/s | p99 ms | CPU ns/byte | Peak RSS MiB |
+|---|---:|---:|---:|---:|
+| Fixed OrbiTE | 0.55 / 6.18 | 126.90 / 11.61 | 0.097 / 0.145 | 323.43 / 323.49 |
+| Frozen TENT | 0.56 / 6.50 | 115.53 / 11.49 | 0.090 / 0.139 | 337.87 / 336.97 |
+| Full reuse | 0.54 / 6.56 | 129.30 / 11.22 | 0.058 / 0.112 | 387.62 / 387.50 |
+| Discard 36 MiB | 0.54 / 4.52 | 222.39 / 16.94 | 0.080 / 0.171 | 351.39 / 351.45 |
+| Recycle only the prefix | 0.55 / 4.41 | 124.13 / 16.93 | 0.086 / 0.177 | 349.54 / 349.59 |
+| Four extents, discard 36 MiB | 0.55 / 4.77 | 116.57 / 15.16 | 0.083 / 0.186 | 351.48 / 353.33 |
+
+The stable runner's frozen engines measured 0.55–0.56 GiB/s. The four-extent
+variant met the relative limits there. The Rust 1.85 runner's references
+measured 6.18–6.50 GiB/s. On that runner all three bounded variants met
+the RSS limit and missed throughput, p99 and CPU against both references.
+The timed workflow's log matcher rejected a multiline test result. The
+ratio verdicts above come from the archived samples. The separate
+[correctness run](https://github.com/OrbitInfra/OrbiTE/actions/runs/45958855686)
+checked the same engine commits and all four native cases per configuration.
+
+One independent stable repeat used identical executables. Fixed OrbiTE and
+TENT reached 6.51 and 6.65 GiB/s on that runner. Discarding 36 MiB,
+recycling only the prefix and using four extents reached 4.74, 4.57 and
+4.86 GiB/s at 351.52, 351.41 and 353.21 MiB peak RSS. All three passed RSS
+and missed throughput, p99 and CPU against both references. The four-extent
+read, the fastest bounded candidate, took 13.41 ms p99 and 0.184 ns/byte.
+Full reuse reached 6.44 GiB/s at 387.57 MiB. Its 11.28 ms p99 also
+exceeded the limit against fixed OrbiTE on this runner.
+[Independent stable repeat](https://github.com/OrbitInfra/OrbiTE/actions/runs/45962090941)
+
+#### Preparing reclaimed pages
+
+A paired x86-64 experiment used the same executable for both 64 MiB scalar
+READ configurations. One kept all private pages resident between requests. The other
+released 36 MiB after drain. Both prepared the same address range before
+one `READV`. Independent residency checks found 36 MiB present before and
+after preparation in the hot case, and 0 then 36 MiB in the reclaimed case.
+The table gives process CPU milliseconds per READ, as the median of three
+process means with 100 timed reads each. The second interval starts just
+before native submission and ends when the owner observes the CQE. The process clock includes polling and worker handoff. Each compiler
+ran on its own host. [Measurements and native controls](https://github.com/OrbitInfra/OrbiTE/actions/runs/46004984057)
+
+| Rust | Prepare, hot / reclaimed (ms) | Submit to CQE, hot / reclaimed (ms) |
+| --- | ---: | ---: |
+| stable | 0.012 / 2.071 | 0.835 / 0.808 |
+| 1.85 | 0.015 / 3.775 | 6.820 / 6.811 |
+
+A separate candidate issued the retained prefix first and let direct I/O
+fault in the remaining pages. Both extents drained before publication.
+Compared with one `READV` using demand paging, candidate goodput increased
+12.5% on stable and 32.9% on 1.85. CPU per byte also rose by 1.6% and 8.4%.
+These are implementation-level comparisons across two experimental revisions.
+Peak RSS fell by 36.00 and 34.30 MiB against full reuse. On stable, CPU per
+byte exceeded the TENT limit. On 1.85, goodput and CPU per byte missed both
+frozen references, and p99 missed the fixed OrbiTE reference. The candidate
+remains experimental.
+
+A follow-up used the same executable, private buffer, two-entry ring and
+first warmup for one native READ and two native READs. The two-extent case
+submitted the retained prefix asynchronously, then the tail. Each of two
+x86-64 hosts ran both Rust toolchains in opposite order. With instrumentation
+disabled, splitting saved 3.05–3.23 ms of elapsed time per 64 MiB READ and
+cost 0.52–1.09 ms more process CPU across the four host/compiler pairs.
+In separate instrumented trials the two submission intervals together used
+0.66–1.00 ms more process CPU. The time to harvest completions, publish the
+result and retire the buffer changed by less than 0.05 ms of process CPU per
+stage. Putting both requests in one submission did not clear the CPU limit.
+[Same-binary comparison and raw samples](https://github.com/OrbitInfra/OrbiTE/actions/runs/46015619248)
+
+A second pair of hosts compared a single submission of both extents at the
+hot/cold boundary (A) with moving 12 MiB of cold pages into the asynchronous
+first extent (C). Each issued at most two reads and reclaimed the same 36 MiB.
+Both passed the prefix, late-error, partial-submit and failed-cleanup controls.
+The table shows the uninstrumented Rust 1.85 process medians. Each limit uses
+the stricter of fixed OrbiTE and frozen TENT on that host.
+
+| Rust 1.85 host | Goodput GiB/s, A / C / minimum | p99 ms, A / C / maximum | CPU ns/byte, A / C / maximum |
+| --- | ---: | ---: | ---: |
+| Ran 1.85 first | 6.069 / 6.099 / 6.177 | 11.90 / 13.62 / 11.05 | 0.1826 / 0.2063 / 0.1488 |
+| Ran 1.85 second | 6.187 / 6.332 / 6.381 | 10.81 / 13.27 / 10.85 | 0.1859 / 0.2008 / 0.1451 |
+
+Across both hosts and both toolchains, C reduced peak RSS by 34.09–37.97 MiB
+against full reuse. Relative to A, C used 8.0–13.0% more CPU per byte and
+increased p99 by 9.1–22.7%. Neither variant passed all four limits in any
+host/compiler pair. A separate same-binary diagnostic read the clocks for the
+whole process, the issuing thread and the public caller. Across both submission
+intervals, splitting added 0.70–0.82 ms of process CPU per read. The issuer
+used 2.32–2.38 ms less and the caller used 0.081–0.086 ms more. The remaining
+threads together used 2.97–3.11 ms more. These clocks do not distinguish those
+threads. [Matched candidate trials and thread clocks](https://github.com/OrbitInfra/OrbiTE/actions/runs/46021369203)
+
+On another Rust 1.85 host, fixed OrbiTE reached 6.50 and 6.47 GiB/s before
+and after thread sampling. A distinct Linux `iou-wrk-<issuer tid>` was visible
+in all 180 split reads and in none of the 180 single reads. Between successful
+clock reads strictly inside the public call, those workers accumulated 2.66 ms
+CPU per split READ. This samples part of each worker's lifetime and cannot
+assign time to individual kernel functions. A slower host measured 2.53 ms
+per split READ over the same intervals, with workers visible in 179 of 180
+reads. [Fast host and per-thread receipts](https://github.com/OrbitInfra/OrbiTE/actions/runs/46028818524) · [Independent repeat on a slower host](https://github.com/OrbitInfra/OrbiTE/actions/runs/46028135735)
+
+#### Consumer file vectors
+
+An x86-64 ext4 comparison on `ad18ae1` used the public
+`register_host_memory_batch` and `file_vectored` calls with external host
+allocations. It checked every payload, range guard and CRC, including the
+physical tail. Each compiler ran three fresh processes per shape with three
+warmups and 100 samples. The figures below are process medians. The separate
+instrumented runs recorded the descriptor actually submitted to io_uring.
+[Byte-checked vector trials and native descriptor traces](https://github.com/OrbitInfra/OrbiTE/actions/runs/45968583499)
+
+| Registered ranges, total 64 MiB | Descriptor | Goodput GiB/s (stable / 1.85) | p99 ms (stable / 1.85) | CPU ns/byte (stable / 1.85) | Peak RSS MiB (stable / 1.85) |
+|---|---|---:|---:|---:|---:|
+| One aligned range | Direct | 0.537 / 0.566 | 118.08 / 119.17 | 0.309 / 0.310 | 134.23 / 134.25 |
+| Four aligned ranges | Direct | 0.541 / 0.541 | 118.96 / 118.87 | 0.307 / 0.304 | 134.21 / 134.19 |
+| Four ranges ending in a 128-byte tail | Buffered | 8.650 / 8.511 | 8.82 / 8.60 | 0.108 / 0.109 | 70.17 / 70.08 |
+
+Both direct shapes submitted one private 64 MiB buffer. The median elapsed
+time from SQE construction to observing the CQE ranged from 84.8 to 107.4 ms
+across the direct runs. Copying confirmed bytes took another 7.8–8.1 ms.
+The buffered shape submitted four native iovecs directly into the caller's
+ranges and served cached data on this host. Its RSS was about 64 MiB lower.
+These trials characterize the host file-vector API. The scalar acceptance
+comparison uses its own caller and pairs both frozen engines on the same host.
+
+A separate AArch64 Linux ext4 control used a 5 MiB host vector with an explicit
+4 KiB padding element. With the staging pool enabled at its default size
+(32 slots of 4 MiB), `7369455` constructed a 128 MiB slab when acquiring a
+padding slot. It acquired the slot again on a second READ. At `5f8a1d2`
+the same two direct READs made zero slot acquisitions and constructed no slab.
+Both implementations retained 5 MiB each in the pageable and in-flight counters
+until the held CQE was delivered. Both counters returned to zero after drain.
+These values measure allocation capacity and ownership. The run did not measure RSS.
+
 ### Singleton tmpfs tail latency
 
 The `tmpfs_tail_only` input of the native CPU workflow measures warmed, buffered
@@ -832,10 +1202,11 @@ The proposed engine explanations can be narrowed:
 - All 64-block CQEs are published on the submitting batch worker. There is
   no caller-to-worker ring handoff in this case. Worker drain has **zero
   nanosleeps**; the benchmark caller still uses its documented status backoff.
-- Aligned gaps allocate **no bounce buffer**. The new
-  `aligned_file_batches_use_one_ring_without_bounce_for_gaps_or_contiguous_ranges`
-  control fails every bounce allocation and checks one ring, full bytes and
-  guards for READ/WRITE, 8/64 blocks, contiguous/gapped, ext4/tmpfs.
+- At that revision aligned gaps required no bounce allocation. Current direct
+  READs isolate the destination until the CQE to preserve bytes beyond EOF.
+  The [ext4 READ study](#eight-contiguous-direct-reads) covers that change.
+  Aligned WRITEs and buffered READs still check one ring and intact guards
+  with every bounce allocation denied.
 - The traced direct-I/O workload creates **one OrbiTE batch worker** per multi-request submission; TENT
   creates none. Before-first-SQE time in OrbiTE's slow 64-block samples is
   105–148 µs in the fixed paired traces, much shorter than the block wait. Removing thread creation

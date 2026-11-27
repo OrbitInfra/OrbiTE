@@ -103,8 +103,12 @@ A failed vector contributes zero bytes to the synchronous batch report.
 A vectored WRITE is never replayed. An unconfirmed drain retains the file,
 loans, staging memory and admission charge.
 
-Host io_uring submits one `readv` or `writev` and uses one private scratch
-lease for all padding in that vector. It zeroes the lease before each WRITE.
+Host io_uring submits one `readv` or `writev` per vector. Buffered I/O and
+WRITEs use one private scratch lease for all padding and zero it before each
+WRITE. A direct host READ receives the file bytes in one private buffer
+and scatters the completed prefix in file order. Explicit padding only advances
+the source position during this scatter. It uses no separate padding slot.
+Use a registered range for tail bytes that the caller needs to inspect.
 The lease uses the existing file staging pool or its byte-charged pageable
 fallback. For CUDA, the worker zeroes or discards padding in the pinned
 chunks it already holds and confirms each device copy. Both paths release
@@ -132,7 +136,7 @@ An unavailable kernel makes io_uring ineligible. QoS, the runtime window
 and the submission deadline apply to files. Local files require no receiver
 credit and reject attached notifications.
 
-The caller or existing batch worker owns one ring per submission. Before
+The caller or existing batch worker exclusively owns its submission's ring. Before
 publishing any SQE it validates every request, acquires exclusive host ranges,
 allocates aligned bounce buffers and checks SQ space. An overlapping host
 loan fails the group before I/O. An idle asynchronous batch can submit one
@@ -141,9 +145,17 @@ background progress and route fallback do not apply. After one nonblocking CQ
 check, it may block for a CQE for at most 200 µs or the remaining request deadline,
 whichever is shorter. The wait uses the ring’s timed `GETEVENTS` enter (or
 ring-fd readiness on older kernels), with zero submissions. At most three
-interrupted/unready waits share that one window; there is no spin. For a previously probed buffered file, an idle batch can also submit up to
-eight plain host READs or WRITEs with a common route and deadline, totaling at most
-64 KiB. The caller checks the number of visible CQEs and can make one timed
+interrupted/unready waits share that one window. An idle batch can also submit
+up to eight plain host requests with a common route and deadline, totaling
+at most 64 KiB. A previously probed buffered file admits READs and WRITEs.
+A cached direct descriptor admits READs whose file offsets are consecutive
+and whose lengths, offsets and host addresses meet the direct-path alignment.
+Successive direct READ groups can reuse one drained ring per engine. It holds
+at most eight entries and one file descriptor. A larger group releases an
+undersized ring before setup. If another ring setup exhausts file descriptors
+or memory, it can release the idle descriptor and mappings and retry setup once.
+The idle slot retains only the ring. Engine close releases its descriptor.
+The caller checks the number of visible CQEs and can make one timed
 wait for the entire consumed SQ prefix. Only a full set is reaped on the
 caller. Each offset, native loan, and completion stays independent. If the
 timed group wait is unavailable, incomplete or interrupted, the worker drains
@@ -169,6 +181,15 @@ WRITE, any submitted request in that span makes the remote effect `Unknown`.
 Async tasks publish their individual CQEs. A short READ or WRITE fails with
 its exact byte count, including zero at EOF. A later task may succeed. Only
 the returned READ prefix is copied back.
+
+A concurrent truncate can make an ext4 direct READ modify a full destination
+page while returning only part of it. OrbiTE isolates every host READ using
+the direct fd in a private aligned buffer, including an already aligned
+registration. Its CQE determines how many bytes reach caller memory. The
+buffer comes from the configured io_uring staging pool or the pageable budget
+bounded by `max_inflight_bytes`. A group that cannot reserve its buffers
+fails before submission. A lost completion retains the corresponding buffer
+and destination loan.
 
 OrbiTE reopens the retained inode with the segment's access rights.
 `file_segment_info().direct_io` records whether a direct fd was obtained.
@@ -201,7 +222,7 @@ leases page-aligned pinned chunks from its `ProxyManager`, bounded by
 The typed configuration or the `io_uring` JSON object sets these fields.
 Invalid enabled sizes return a configuration error before allocating a slab.
 The first eligible request creates one slab. Its slots can serve an entire
-GPU request or an unaligned DRAM request. CUDA uses portable pinned memory.
+GPU request, a direct DRAM READ or an unaligned DRAM request. CUDA uses portable pinned memory.
 The CPU platform uses ordinary page-aligned memory.
 
 A GPU with an explicit or GPU-local NUMA placement can use the slab only if
