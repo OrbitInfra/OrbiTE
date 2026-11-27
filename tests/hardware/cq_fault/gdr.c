@@ -27,6 +27,7 @@ struct ibv_mr *ibv_reg_mr(struct ibv_pd *pd, void *address, size_t length, int a
     if (!native) fail();
     struct ibv_mr *mr = native(pd, address, length, access);
     int saved_errno = errno;
+    memory_registration(mr, access);
     gdr_registration(pd, address, length, (unsigned)access, mr);
     errno = saved_errno;
     return mr;
@@ -39,6 +40,7 @@ struct ibv_mr *ibv_reg_mr_iova2(struct ibv_pd *pd, void *address, size_t length,
     if (!native) fail();
     struct ibv_mr *mr = native(pd, address, length, iova, access);
     int saved_errno = errno;
+    memory_registration(mr, access);
     gdr_registration(pd, address, length, access, mr);
     errno = saved_errno;
     return mr;

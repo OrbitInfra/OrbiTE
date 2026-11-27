@@ -589,7 +589,16 @@ same CQ it already owns. A known accepted prefix charges exactly those WRs.
 A contradictory successful window bind or invalidation also retains its range
 until the QP drains. A missing, foreign or contradictory first-failure pointer retains every possible
 WR until completion or QP drain. Grants retain their actual registrations,
-cross-transport DMA loans and protocol authority. A source configured with
+cross-transport DMA loans and protocol authority. Reusable host grants use
+OrbitRDMA's external-CQ shared-window control. Unlike the frozen TENT owner,
+OrbiTE joins a plain SEND receipt with a byte-matched DONE before local
+invalidation. Its single CQ poller routes BIND and LOCAL_INV to the original
+grant. Each private bind-only MR survives until its MW has retired, protecting
+DMA that may already have resolved the key. Failed deregistration retains
+the backing and grant credits. The delayed-CQE and failed-MR controls exercise
+this boundary. [Shared host windows](installed-host.md#shared-host-windows)
+
+A source configured with
 `host_source_reuse = false` isolates each direct host grant using the same
 private-PD lifetime as a non-reused direct GPU grant. The installed host gate
 checks the creation and retirement of that PD after each guarded transfer.

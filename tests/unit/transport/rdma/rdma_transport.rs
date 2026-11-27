@@ -639,3 +639,113 @@ mod cold_connections;
 
 #[path = "peer_retirement.rs"]
 mod peer_retirement;
+
+#[test]
+fn host_window_ack_waits_for_local_invalidation_and_private_mr_cleanup() {
+    use crate::transport::rdma::context::tests::{events, pause};
+    for failed_cleanup in [false, true] {
+        let source = rdma_fixture(if failed_cleanup {
+            "direct:copy_window_dereg_fail"
+        } else {
+            "direct:copy_window_hold"
+        });
+        let requester = rdma_fixture("direct:copy");
+        let exported = source
+            .register_memory(
+                vec![0x5e; 16].into_boxed_slice(),
+                Permission::RemoteReadWrite,
+            )
+            .unwrap();
+        let local = requester
+            .register_memory(vec![0xa1; 8].into_boxed_slice(), Permission::LocalOnly)
+            .unwrap();
+        let peer = requester
+            .open_segment(source.endpoint(), source.source_epoch(), TIMEOUT)
+            .unwrap();
+        let hold = pause(source_runtime(&source));
+        let trace = events(source_runtime(&source));
+        thread::scope(|scope| {
+            let pending = scope.spawn(|| {
+                requester
+                    .submit_and_wait(
+                        TransferOp::Write,
+                        &peer,
+                        &[TransferRequest::new(
+                            Transport::Rdma,
+                            local.base_address(),
+                            exported.base_address() + 4,
+                            8,
+                        )],
+                        TIMEOUT,
+                    )
+                    .unwrap()
+            });
+            let guard = hold.0.lock().unwrap();
+            let (mut guard, _) = hold.1.wait_timeout_while(guard, TIMEOUT, |s| !s.0).unwrap();
+            let reached = guard.0;
+            let busy = exported.write(4, &[0; 8]).is_err();
+            let ack_pending = !pending.is_finished();
+            let waiting = source.stats().unwrap().rdma.unwrap();
+            guard.1 = true;
+            hold.1.notify_all();
+            drop(guard);
+            assert!(reached && busy && ack_pending);
+            assert_eq!(
+                (
+                    waiting.completed_receives,
+                    waiting.completed_window_invalidations,
+                    waiting.active_windows,
+                    waiting.direct_bytes
+                ),
+                (1, 0, 1, 8)
+            );
+            let report = pending.join().unwrap();
+            assert_eq!(report.is_complete(), !failed_cleanup, "{report:?}");
+        });
+        let stats = source.stats().unwrap().rdma.unwrap();
+        assert_eq!(stats.completed_window_invalidations, 1);
+        let log = trace.lock().unwrap().clone();
+        let position = |name| log.iter().position(|&entry| entry == name).unwrap();
+        assert!(position("invalidate_window") < position("dealloc_window"));
+        assert!(position("dealloc_window") < position("deregister"));
+        if failed_cleanup {
+            assert_eq!(stats.completed_reusable_grants, 0);
+            assert_eq!(stats.retained_grants, 1);
+            assert!(matches!(
+                source.close(Duration::from_millis(50)),
+                Err(Error::Timeout | Error::Unquiesced { .. })
+            ));
+            assert!(matches!(
+                source.close(Duration::from_millis(50)),
+                Err(Error::Timeout | Error::Unquiesced { .. })
+            ));
+            assert!(exported.read(4, &mut [0; 8]).is_err());
+            assert_eq!(source.stats().unwrap().rdma.unwrap().direct_bytes, 8);
+            assert_eq!(
+                trace
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .filter(|&&e| e == "deregister")
+                    .count(),
+                1
+            );
+        } else {
+            let mut actual = [0; 16];
+            exported.read(0, &mut actual).unwrap();
+            assert_eq!(
+                actual,
+                [
+                    0x5e, 0x5e, 0x5e, 0x5e, 0xa1, 0xa1, 0xa1, 0xa1, 0xa1, 0xa1, 0xa1, 0xa1, 0x5e,
+                    0x5e, 0x5e, 0x5e
+                ]
+            );
+            assert_eq!(
+                (stats.completed_reusable_grants, stats.direct_bytes),
+                (1, 0)
+            );
+            source.close(TIMEOUT).unwrap();
+        }
+        requester.close(TIMEOUT).unwrap();
+    }
+}

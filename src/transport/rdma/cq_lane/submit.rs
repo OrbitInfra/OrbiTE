@@ -87,6 +87,7 @@ impl CqLane {
             if request.phase != Phase::Connected {
                 return Err(Error::Internal("MW QP is not ready"));
             }
+            let qpn = request.qpn;
             let resources = request
                 .resources
                 .as_mut()
@@ -110,12 +111,24 @@ impl CqLane {
                     resources.grant_mut()?.window_used = true;
                     65
                 }
-                #[cfg(test)]
-                slice::Operation::Invalidate if resources.grant_mut()?.window_bound => 66,
+                slice::Operation::Invalidate if resources.grant()?.bound() => 66,
                 _ => return Err(Error::Internal("MW authorization state")),
             };
             let namespace = self.shared.next_work_namespace()?;
             record.send_namespace.store(namespace, Ordering::Release);
+            let id = namespace * crate::transport::rdma::WR_ID_STRIDE + slot;
+            if let Some(window) = &mut resources.grant_mut()?.handles.host_window {
+                if operation == slice::Operation::Bind {
+                    record
+                        .connection
+                        .host_windows
+                        .store(true, Ordering::Release);
+                    window.bind(qpn, id)
+                } else {
+                    window.revoke(id)
+                }
+                .map_err(|_| Error::Protocol("RDMA host window control state"))?;
+            }
             let remote = Descriptor {
                 address: resources.grant_mut()?.buffer.address().as_ptr() as u64,
                 rkey: resources.grant_mut()?.handles.window_key,
@@ -124,10 +137,7 @@ impl CqLane {
             let send_queue = Arc::clone(&record.send_queue);
             request.work = Some(Work {
                 cancel: None,
-                queue: slice::SendWork::control(
-                    send_queue,
-                    namespace * crate::transport::rdma::WR_ID_STRIDE + slot,
-                )?,
+                queue: slice::SendWork::control(send_queue, id)?,
                 operation,
                 remote,
                 priority: crate::Priority::High,
@@ -186,7 +196,7 @@ impl CqLane {
                 || request.receive.is_some()
                 || !request.resources.as_ref().is_some_and(|r| {
                     r.grant.as_ref().is_some_and(|g| {
-                        g.window_bound || (g.handles.remote_mr && !g.handles.mr.is_null())
+                        g.bound() || (g.handles.remote_mr && !g.handles.mr.is_null())
                     })
                 })
             {

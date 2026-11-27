@@ -279,40 +279,50 @@ impl ReceiveQueue {
 }
 
 #[test]
-fn mr_authority_requires_plain_send_and_exact_binding_without_claiming_invalidation() {
-    for case in [
-        "valid",
-        "grh",
-        "immediate",
-        "invalidation",
-        "binding",
-        "profile",
+fn owner_revoked_authorities_require_plain_send_and_exact_binding() {
+    for profile in [
+        crate::transport::rdma::protocol::MR_AUTHORITY,
+        crate::transport::rdma::protocol::HOST_WINDOW,
     ] {
-        let (runtime, device, mut queue) = fixture(1);
-        let mut binding = [0x55; COMPLETION_MESSAGE_SIZE];
-        binding[COMPLETION_MESSAGE_SIZE - 1] = crate::transport::rdma::protocol::MR_AUTHORITY;
-        let receipt = ReceiveWork::new(129, binding, 7, Instant::now() + Duration::from_secs(3));
-        prepare(&mut queue, &receipt, &device).unwrap();
-        posted(&mut queue, &receipt, runtime.verbs, 0, 1).unwrap();
-        let mut completion = delivered(&mut queue, receipt.id, &receipt);
-        completion.flags = 0;
-        completion.invalidated_rkey = 0;
-        match case {
-            "grh" => completion.flags = sys::GRH,
-            "immediate" => completion.flags = sys::GRH | sys::ffi::IBV_WC_WITH_IMM,
-            "invalidation" => {
-                completion.flags = sys::WITH_INVALIDATE;
-                completion.invalidated_rkey = receipt.rkey;
+        for case in [
+            "valid",
+            "grh",
+            "checksum",
+            "immediate",
+            "invalidation",
+            "binding",
+            "profile",
+        ] {
+            let (runtime, device, mut queue) = fixture(1);
+            let mut binding = [0x55; COMPLETION_MESSAGE_SIZE];
+            binding[COMPLETION_MESSAGE_SIZE - 1] = profile;
+            let receipt =
+                ReceiveWork::new(129, binding, 7, Instant::now() + Duration::from_secs(3));
+            prepare(&mut queue, &receipt, &device).unwrap();
+            posted(&mut queue, &receipt, runtime.verbs, 0, 1).unwrap();
+            let mut completion = delivered(&mut queue, receipt.id, &receipt);
+            completion.flags = 0;
+            completion.invalidated_rkey = 0;
+            match case {
+                "grh" => completion.flags = sys::GRH,
+                "checksum" => completion.flags = sys::GRH | sys::ffi::IBV_WC_IP_CSUM_OK,
+                "immediate" => completion.flags = sys::GRH | sys::ffi::IBV_WC_WITH_IMM,
+                "invalidation" => {
+                    completion.flags = sys::WITH_INVALIDATE;
+                    completion.invalidated_rkey = receipt.rkey;
+                }
+                "binding" => queue.slots[0].message.memory.bytes_mut()[0] ^= 1,
+                "profile" => {
+                    queue.slots[0].message.memory.bytes_mut()[COMPLETION_MESSAGE_SIZE - 1] = 0
+                }
+                _ => {}
             }
-            "binding" => queue.slots[0].message.memory.bytes_mut()[0] ^= 1,
-            "profile" => queue.slots[0].message.memory.bytes_mut()[COMPLETION_MESSAGE_SIZE - 1] = 0,
-            _ => {}
+            assert_eq!(
+                acknowledge(&mut queue, completion).is_ok(),
+                matches!(case, "valid" | "grh" | "checksum"),
+                "{case}"
+            );
+            close(runtime, device, queue);
         }
-        assert_eq!(
-            acknowledge(&mut queue, completion).is_ok(),
-            matches!(case, "valid" | "grh"),
-            "{case}"
-        );
-        close(runtime, device, queue);
     }
 }

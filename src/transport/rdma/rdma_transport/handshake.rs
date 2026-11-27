@@ -12,8 +12,7 @@ use crate::transport::rdma::{
     grant::{GrantLease, RdmaGrant, admission::GrantCredits},
     path::NicPath,
     protocol::{
-        ACK, BINDING_SIZE, Binding, CACHE_MISS, DONE, GRANT, Hello, IDENTITY_SIZE, Identity,
-        OFFER_SIZE, READY,
+        ACK, Binding, CACHE_MISS, DONE, GRANT, Hello, IDENTITY_SIZE, Identity, OFFER_SIZE, READY,
     },
     qp::Descriptor,
     quota::DeviceLease,
@@ -130,7 +129,7 @@ impl RdmaTransport {
     ) -> Result<()> {
         let endpoint = &mut slice.grant;
         endpoint.send_completion(&slice.binding.0, slice.remote.rkey)?;
-        let cacheable = slice.binding.0[BINDING_SIZE - 1] == 1;
+        let cacheable = slice.binding.reusable();
         if cacheable {
             endpoint.finish_sent(&slice.binding.0)?;
         } else {
@@ -282,6 +281,8 @@ impl RdmaTransport {
             offer[IDENTITY_SIZE + 8..OFFER_SIZE - 1].copy_from_slice(&endpoint.connection());
             offer[OFFER_SIZE - 1] = if remote_mr {
                 super::super::protocol::MR_AUTHORITY
+            } else if cacheable && !memory.is_cuda() {
+                super::super::protocol::HOST_WINDOW
             } else {
                 u8::from(cacheable)
             };
@@ -343,7 +344,7 @@ impl RdmaTransport {
         let done = slice.binding.done(channel)?;
         let endpoint = &mut slice.grant;
         endpoint.receive_completion()?;
-        let cacheable = slice.binding.0[BINDING_SIZE - 1] == 1;
+        let cacheable = slice.binding.reusable();
         if cacheable {
             endpoint.finish_received(&done)?;
         } else {

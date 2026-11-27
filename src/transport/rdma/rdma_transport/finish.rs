@@ -54,7 +54,7 @@ impl RdmaTransfer {
             return Ok(true);
         };
         let grant = &mut slice.grant;
-        let cacheable = slice.binding.0[BINDING_SIZE - 1] == 1;
+        let cacheable = slice.binding.reusable();
         let phase = match progress.phase {
             Phase::Send => {
                 grant.progress.submit_completion(

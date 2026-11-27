@@ -40,6 +40,8 @@ mod resources;
 mod restart;
 #[path = "rdma_host/selector.rs"]
 mod selector;
+#[path = "rdma_host/windows.rs"]
+mod windows;
 
 use resources::{close, create, idle, maps};
 
@@ -483,6 +485,10 @@ fn result(case: &Case) -> Result<()> {
 }
 
 fn main() -> Result<()> {
+    let args: Vec<_> = env::args().skip(1).collect();
+    if args.first().is_some_and(|a| a == "windows") {
+        return windows::run(&args[1..]);
+    }
     if env::args().skip(1).eq(["--quota"]) {
         return quota::run();
     }

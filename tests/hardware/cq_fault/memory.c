@@ -2,11 +2,33 @@
 struct memory_snapshot {
     uint64_t version, armed, kind, attempts, code, mr, mw, pd, lkey, rkey, sequence;
 };
-static struct memory_snapshot memory_fault = {.version = 1};
+static struct memory_snapshot memory_fault = {.version = 2};
 static struct ibv_context *memory_context;
 static struct ibv_mr *memory_mr;
 static struct ibv_mw *memory_mw;
-static uint64_t memory_base;
+static uint64_t memory_base, memory_length;
+/* Remember live bind-enabled registrations by value. No provider pointer to a
+ * completed warm-up grant is borrowed at the later arm command. */
+struct registration_id { struct ibv_context *context; uint64_t address, length; uint32_t lkey; };
+static struct registration_id registrations[128];
+
+static void memory_registration(struct ibv_mr *mr, unsigned access) {
+    const char *mode = getenv("ORBITE_HOST_MODE");
+    if (!mr || !(access & IBV_ACCESS_MW_BIND) || !mode || strcmp(mode, "installed-memory-cleanup")) return;
+    pthread_mutex_lock(&lock);
+    unsigned slot = 128;
+    for (unsigned i = 0; i < 128; ++i) {
+        if (registrations[i].context == mr->context && registrations[i].lkey == mr->lkey) {
+            if (registrations[i].address != (uintptr_t)mr->addr || registrations[i].length != mr->length) fail();
+            pthread_mutex_unlock(&lock);
+            return; /* ibv_reg_mr may call the observed ibv_reg_mr_iova2. */
+        }
+        if (!registrations[i].context && slot == 128) slot = i;
+    }
+    if (slot == 128) fail();
+    registrations[slot] = (struct registration_id){mr->context, (uintptr_t)mr->addr, mr->length, mr->lkey};
+    pthread_mutex_unlock(&lock);
+}
 static uint32_t memory_bound_key;
 static int (*native_dereg_mr)(struct ibv_mr *);
 static int (*native_dealloc_pd)(struct ibv_pd *);
@@ -45,12 +67,15 @@ int ibv_dereg_mr(struct ibv_mr *mr) {
     if (memory_fault.attempts && mr == memory_mr) fail();
     int selected = memory_fault.armed && memory_fault.kind == 1 && !memory_fault.attempts
         && mr->context == memory_context && (uint64_t)(uintptr_t)mr->addr == memory_base
-        && (memory_mr ? mr == memory_mr : mr->lkey == memory_fault.lkey);
+        && mr->length == memory_length && mr->lkey == memory_fault.lkey;
     if (selected) {
         int code = memory_destroy(mr, NULL);
         pthread_mutex_unlock(&lock);
         return code;
     }
+    for (unsigned i = 0; i < 128; ++i)
+        if (registrations[i].context == mr->context && registrations[i].lkey == mr->lkey)
+            registrations[i] = (struct registration_id){0};
     pthread_mutex_unlock(&lock);
     return native_dereg_mr(mr);
 }
@@ -71,7 +96,9 @@ static int memory_dealloc_mw(struct ibv_mw *mw) {
 static int memory_bind(struct context *context, struct ibv_qp *qp,
                        struct ibv_send_wr *wr, struct ibv_send_wr **bad) {
     struct ibv_mr *mr = wr->bind_mw.bind_info.mr;
-    if (wr->next || memory_mw || !mr || (uint64_t)(uintptr_t)mr->addr != memory_base) fail();
+    if (wr->next || memory_mw || !mr || (uint64_t)(uintptr_t)mr->addr != memory_base
+            || mr->length != memory_length || wr->bind_mw.bind_info.addr != memory_base
+            || wr->bind_mw.bind_info.length != memory_length) fail();
     memory_mr = mr; memory_mw = wr->bind_mw.mw; memory_bound_key = wr->bind_mw.rkey;
     int code = context->post(qp, wr, bad);
     receipt("\"kind\":\"memory_bind\",\"context\":%u,\"mr\":%" PRIuPTR ",\"mw\":%" PRIuPTR ",\"qpn\":%u,\"wr_id\":%" PRIu64 ",\"key\":%u,\"code\":%d",
@@ -80,7 +107,7 @@ static int memory_bind(struct context *context, struct ibv_qp *qp,
     return code;
 }
 
-int orbite_memory_fault(unsigned command, unsigned kind, unsigned source, uint64_t base,
+int orbite_memory_fault(unsigned command, unsigned kind, unsigned source, uint64_t base, uint64_t length,
                          const char *rail, struct memory_snapshot *output) {
     if (!output) return EINVAL;
     pthread_mutex_lock(&lock);
@@ -88,18 +115,24 @@ int orbite_memory_fault(unsigned command, unsigned kind, unsigned source, uint64
     if (command == 1) {
         if (memory_fault.armed || state.armed || inflight.armed || cleanup.armed || state.errors
                 || state.contexts != 2 || !(kind == 1 || kind == 2) || source > 1
-                || (kind == 2 && !source) || !rail || !base) error = EINVAL;
+                || (kind == 2 && !source) || !rail || !base || !length) error = EINVAL;
         else {
             for (unsigned i = 0; i < 8; ++i)
                 if (contexts[i].owner && !strcmp(contexts[i].owner->device->name, rail)) {
                     if (memory_context) fail();
                     memory_context = contexts[i].owner;
-                    memory_mr = source ? contexts[i].bound_mr : NULL;
-                    memory_fault.lkey = source ? (memory_mr ? memory_mr->lkey : 0) : contexts[i].data_lkey;
+                    if (kind == 1 && source) {
+                        for (unsigned j = 0; j < 128; ++j)
+                            if (registrations[j].context == memory_context && registrations[j].address == base
+                                    && registrations[j].length == length) {
+                                if (memory_fault.lkey) fail();
+                                memory_fault.lkey = registrations[j].lkey;
+                            }
+                    } else if (kind == 1) memory_fault.lkey = contexts[i].data_lkey;
                 }
-            if (!memory_context || !memory_fault.lkey || (source && !memory_mr)) error = EINVAL;
+            if (!memory_context || (kind == 1 && !memory_fault.lkey)) error = EINVAL;
             else {
-                memory_fault.armed = 1; memory_fault.kind = kind; memory_base = base;
+                memory_fault.armed = 1; memory_fault.kind = kind; memory_base = base; memory_length = length;
                 receipt("\"kind\":\"memory_arm\",\"resource\":%u,\"source\":%u,\"context\":%u,\"address\":%" PRIu64, kind, source, find(memory_context), base);
             }
         }
