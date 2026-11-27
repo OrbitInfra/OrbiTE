@@ -154,7 +154,12 @@ fn large_direct_read_reuses_only_one_private_prefix_and_publishes_exact_short_cq
     let mut actual = vec![0; sentinel.len()];
     let moved_before = task::PUBLISHED_BY_MOVE.load(std::sync::atomic::Ordering::Relaxed);
     let recycled_before = task::RECYCLED_BY_MOVE.load(std::sync::atomic::Ordering::Relaxed);
-    for &prefix in &[SIZE, SPLIT + 17, SPLIT, SPLIT - 11] {
+    for &prefix in &[
+        SIZE,
+        (SPLIT + 17).min(SIZE - 1),
+        SPLIT.min(SIZE - 2),
+        SPLIT - 11,
+    ] {
         fs::write(&f.path, &image)?;
         f.memory.write(0, &sentinel)?;
         trace.lock().unwrap().truncate_to = Some(prefix as u64);

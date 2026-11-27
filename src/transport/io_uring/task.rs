@@ -173,7 +173,7 @@ impl Scratch {
 
 // Keep at most one prefix per engine. The rest of a large scalar READ is
 // pageable and drops as soon as this request has its one CQE.
-pub(super) const READ_PREFIX_BYTES: usize = 24 << 20;
+pub(super) const READ_PREFIX_BYTES: usize = 32 << 20;
 #[cfg(test)]
 pub(super) static PUBLISHED_BY_MOVE: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
@@ -183,7 +183,7 @@ pub(super) static RECYCLED_BY_MOVE: std::sync::atomic::AtomicUsize =
 
 struct SplitRead {
     iovecs: [libc::iovec; 2],
-    _tail: Bounce,
+    tail: Option<Bounce>,
     charge: super::pool::Charge,
     spare: Option<Bounce>,
     move_pages: bool,
@@ -216,10 +216,16 @@ impl SplitRead {
             None => allocate(READ_PREFIX_BYTES, 0)?,
         };
         let remaining = length - READ_PREFIX_BYTES;
-        let tail = allocate(remaining, READ_PREFIX_BYTES)?;
+        let tail = if remaining == 0 {
+            None
+        } else {
+            Some(allocate(remaining, READ_PREFIX_BYTES)?)
+        };
         let move_pages = move_pages
             && prefix.matches_destination(destination)
-            && tail.matches_destination(destination + READ_PREFIX_BYTES);
+            && tail
+                .as_ref()
+                .is_none_or(|b| b.matches_destination(destination + READ_PREFIX_BYTES));
         // These initially absent pages receive only an existing resident prefix
         // from the destination after a full completion. No copy populates them.
         let spare = if move_pages {
@@ -233,14 +239,16 @@ impl SplitRead {
                 iov_len: READ_PREFIX_BYTES,
             },
             libc::iovec {
-                iov_base: tail.ptr.as_ptr().cast(),
+                iov_base: tail
+                    .as_ref()
+                    .map_or(std::ptr::null_mut(), |b| b.ptr.as_ptr().cast()),
                 iov_len: remaining,
             },
         ];
         charge.prefix = Some(prefix);
         Ok(Self {
             iovecs,
-            _tail: tail,
+            tail,
             charge,
             spare,
             move_pages,
@@ -439,7 +447,7 @@ impl Task {
         let protect = request.lease.is_direct_read(operation, &file);
         if protect
             && !transport.pool.enabled
-            && request.length >= 2 * READ_PREFIX_BYTES
+            && request.length >= READ_PREFIX_BYTES
             && READ_PREFIX_BYTES % staging_alignment == 0
         {
             let private = Box::new(SplitRead::new(
@@ -521,7 +529,9 @@ impl Task {
         index: usize,
     ) -> squeue::Entry {
         let iovecs = match (&self.memory, &self.bounce) {
-            (Some(HostMemory::SplitRead { private, .. }), _) => private.iovecs.as_slice(),
+            (Some(HostMemory::SplitRead { private, .. }), _) => {
+                &private.iovecs[..if private.tail.is_some() { 2 } else { 1 }]
+            }
             (Some(HostMemory::Vector { iovecs, .. }), None) => &**iovecs,
             _ => std::slice::from_ref(iov),
         };
