@@ -17,14 +17,12 @@ and `cuda` features enable runtime-loaded libibverbs and CUDA Driver API binding
 RDMA install resolves `libibverbs.so.1` once and retains it for the process lifetime;
 a CPU-only engine in that build does not load it. A missing library or required
 export returns `Unavailable` naming `libibverbs.so.1`. Runtime RDMA still needs
-the host provider and devices. All engine, protocol,
-progress and resource owners are Rust. A small C shim only queries port rates
-from the installed libibverbs headers.
+the host provider and devices. The engine and OrbitRDMA use Rust for progress, resource ownership and port queries.
 
-The `rdma` feature uses OrbitRDMA 0.1.2 for every native verbs operation. The
+The `rdma` feature uses OrbitRDMA 0.2.0 for every native verbs operation. The
 combined `rdma,cuda` build also selects its dma-buf and mlx5 provider support.
 OrbiTE retains CUDA allocation/export lifetimes, peer grants, rail selection
-and progress scheduling.
+and progress scheduling. The progress lane polls each CQ in batches of up to 32 and dispatches all returned entries, including valid completions following a fault in the same batch. OrbitRDMA accounts for the physical work and burns GPU key candidates before firmware creation.
 
 For a direct host source, `RdmaConfig.host_source_reuse` defaults to `true`.
 When both peers select Direct memory and the source is host DRAM, each grant on a

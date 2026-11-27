@@ -65,6 +65,7 @@ unsafe extern "C" fn post(
 unsafe extern "C" fn poll(
     handles: *mut sys::ConnectionHandles,
     completion: *mut sys::Completion,
+    _limit: usize,
 ) -> i32 {
     // Delay CQ consumption, never fabricate completion: all four actual payload
     // posts must coexist in the shared SQ accounting before any is discharged.
@@ -79,7 +80,7 @@ unsafe extern "C" fn poll(
     }
     // SAFETY: The lane retains the CQ and provides writable completion output for the provider
     // call.
-    let count = unsafe { (sys::REAL.poll)(handles, completion) };
+    let count = unsafe { (sys::REAL.poll)(handles, completion, 1) };
     if count != 1 {
         return count;
     }

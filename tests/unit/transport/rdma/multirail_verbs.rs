@@ -407,12 +407,16 @@ unsafe extern "C" fn close_device(h: *mut sys::DeviceHandles) -> c_int {
     code
 }
 
-unsafe extern "C" fn poll(h: *mut sys::ConnectionHandles, out: *mut sys::Completion) -> i32 {
+unsafe extern "C" fn poll(
+    h: *mut sys::ConnectionHandles,
+    out: *mut sys::Completion,
+    limit: usize,
+) -> i32 {
     // SAFETY: The polling lane supplies live CQ handles; the observer borrows them within the
     // poll callback.
     unsafe {
         worker_pool::observe(h);
-        (sys::REAL.poll)(h, out)
+        (sys::REAL.poll)(h, out, limit)
     }
 }
 

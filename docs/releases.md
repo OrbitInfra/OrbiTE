@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- OrbitRDMA 0.1.2 supplies shared host windows with owner-local revocation.
+- OrbitRDMA 0.2.0 supplies shared host windows with owner-local revocation, batched CQ polling, physical send/receive credits and per-PD GPU key allocation.
   Both peers must run the same build. Reusable host grants encode the new
   release profile in the existing binding. The requester sends a plain SEND
   followed by DONE. The source replies only after physical grant retirement.

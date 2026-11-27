@@ -584,8 +584,7 @@ OrbitRDMA owns the native ABI, device and port queries, protection domains, RC
 transitions, Linux GID inventory, per-PD key history, host MR/MW operations, async and CQ events, dma-buf registration,
 mlx5 DevX keys and native destruction. OrbiTE retains CUDA export FDs and
 arbitrates loans across transports. It submits READ/WRITE and completion-message SEND/RECV
-through OrbitRDMA's `verbs::post`. The progress lane uses `verbs::poll` on the
-same CQ it already owns. A known accepted prefix charges exactly those WRs.
+through OrbitRDMA's `verbs::post`. The progress lane uses `verbs::poll_batch` on its own CQs and dispatches the entire returned prefix. It matches both the non-repeating work namespace and the QPN. OrbitRDMA's physical SQ ledger and per-slot RQ state retain every possibly accepted WR. A known prefix returns the unposted suffix to the lane immediately. Its per-PD named-key cursor records each proposed index and tag in the same history as host windows before a firmware call. OrbiTE applies bandwidth accounting and the grant/DONE protocol to the resulting receipts.
 A contradictory successful window bind or invalidation also retains its range
 until the QP drains. A missing, foreign or contradictory first-failure pointer retains every possible
 WR until completion or QP drain. Grants retain their actual registrations,

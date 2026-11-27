@@ -76,24 +76,11 @@ impl ProgressState {
     }
 
     pub(super) fn next_work_namespace(&self) -> Result<u64> {
-        let mut current = self.next_work_namespace.load(Ordering::Acquire);
-        loop {
-            let next = current
-                .checked_add(1)
-                .filter(|next| {
-                    current != 0 && next.checked_mul(super::super::WR_ID_STRIDE).is_some()
-                })
-                .ok_or(Error::ResourceExhausted)?;
-            match self.next_work_namespace.compare_exchange_weak(
-                current,
-                next,
-                Ordering::AcqRel,
-                Ordering::Acquire,
-            ) {
-                Ok(_) => return Ok(current),
-                Err(observed) => current = observed,
-            }
-        }
+        orbit_rdma::provider::WorkNamespaces::reserve_from(
+            &self.next_work_namespace,
+            super::super::WR_ID_STRIDE,
+        )
+        .map_err(|_| Error::ResourceExhausted)
     }
 
     pub(super) fn retain(&self, operation: &'static str, code: i32) {
@@ -400,14 +387,7 @@ impl ProgressState {
     }
 
     fn abort(&self, records: &[Arc<Record>], fault: Fault) {
-        // The record that received a failed WC already owns its root error.
-        // Draining its shared lane is not a second fault on a sibling rail.
-        let fault = match fault {
-            Fault::Backend("RDMA work completion", _) => {
-                Fault::Unavailable("RDMA lane retired after a work completion")
-            }
-            other => other,
-        };
+        let fault = fault.for_lane_retirement();
         // Fence accepted constructors under the same lock as native QP creation.
         // No other thread polls or submits native WRs.
         for record in records {
@@ -622,26 +602,32 @@ impl ProgressState {
                     cq: cq.unwrap_or(std::ptr::null_mut()),
                     ..Default::default()
                 };
-                for _ in 0..64 {
-                    let mut completion = sys::Completion::default();
-                    // SAFETY: This lane owns the CQ through polling and supplies writable
-                    // completion storage.
-                    let count = unsafe { (self.verbs.poll)(&mut handles, &mut completion) };
-                    match count {
-                        0 => break,
-                        1 => {
-                            progressed = true;
-                            self.complete(completion, receive_cq, completed_at);
-                        }
-                        code if code < 0 => {
-                            self.fail(Fault::Backend("ibv_poll_cq", code));
-                            break;
-                        }
-                        _ => {
-                            self.fail(Fault::Protocol("RDMA poll returned more than one CQE"));
-                            break;
-                        }
+                let mut remaining = 64;
+                let mut batch = [sys::Completion::default(); sys::POLL_BATCH];
+                while remaining != 0 {
+                    let limit = remaining.min(batch.len());
+                    // SAFETY: the lane retains the CQ and provides limit writable CQE slots.
+                    let count =
+                        unsafe { (self.verbs.poll)(&mut handles, batch.as_mut_ptr(), limit) };
+                    if count < 0 {
+                        self.fail(Fault::Backend("ibv_poll_cq", count));
+                        break;
                     }
+                    if count == 0 {
+                        break;
+                    }
+                    let count = count as usize;
+                    if count > limit {
+                        self.fail(Fault::Protocol("RDMA poll exceeded its CQE capacity"));
+                        break;
+                    }
+                    progressed = true;
+                    // All of these CQEs have left the native CQ. A fault fences new
+                    // work; later valid receipts in this batch must still be delivered.
+                    for completion in &batch[..count] {
+                        self.complete(*completion, receive_cq, completed_at);
+                    }
+                    remaining -= count;
                     if self
                         .control
                         .lock()

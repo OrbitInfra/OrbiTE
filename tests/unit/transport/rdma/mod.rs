@@ -987,7 +987,7 @@ unsafe extern "C" fn post(
             }
         }
         let status = injected.max(u32::from(
-            mode == "wc"
+            matches!(mode, "wc" | "wc_sibling_pause")
                 || mode.ends_with("copy_fault_partial")
                 || mode == "wc_close0"
                 || (mode == "copy_second_error_close0" && ordinal == 2)
@@ -1002,6 +1002,13 @@ unsafe extern "C" fn post(
         if !request.signaled && status == 0 {
             continue;
         }
+        if mode.starts_with("batch_bad_first") && i == 0 {
+            cq.completions.lock().unwrap().push_back(sys::Completion {
+                id: 0,
+                qpn: state.qpn,
+                ..Default::default()
+            });
+        }
         cq.completions.lock().unwrap().push_back(sys::Completion {
             id: if mode == "identity" {
                 u64::MAX
@@ -1010,7 +1017,8 @@ unsafe extern "C" fn post(
             } else {
                 request.id
             },
-            qpn: state.qpn + u32::from(mode == "wrong_qpn"),
+            qpn: state.qpn
+                + u32::from(mode == "wrong_qpn" || (mode == "batch_foreign_close0" && i == 0)),
             opcode: if write == 1 { 1 } else { 2 },
             length: request.length - u32::from(mode == "length"),
             status,
@@ -1257,8 +1265,20 @@ unsafe extern "C" fn send_completion(
 
 unsafe extern "C" fn poll(
     h: *mut sys::ConnectionHandles,
-    completion: *mut sys::Completion,
+    output: *mut sys::Completion,
+    limit: usize,
 ) -> c_int {
+    for i in 0..limit {
+        // SAFETY: the lane supplies limit writable slots and retains this CQ for the call.
+        let count = unsafe { poll_one(h, output.add(i)) };
+        if count != 1 {
+            return if i == 0 { count } else { i as c_int };
+        }
+    }
+    limit as c_int
+}
+
+unsafe fn poll_one(h: *mut sys::ConnectionHandles, completion: *mut sys::Completion) -> c_int {
     // SAFETY: The QP or lane retains this fixture CQ until its dependent work has been detached.
     let state = unsafe { &*(*h).cq.cast::<FakeCq>() };
     // SAFETY: The device outlives this dependent resource; the fixture installs its pointer when
@@ -2384,6 +2404,9 @@ fn native_send_windows_keep_the_whole_direct_lease_and_clear_remaining_debt_only
         ("unknown", 4, false),
         ("identity", 4, false),
         ("duplicate", 3, false),
+        ("batch_bad_first", 0, false),
+        ("batch_bad_first_final", 0, false),
+        ("batch_foreign_close0", 1, true),
         ("length", 4, false),
         ("wc", 3, false),
         ("timeout", 4, false),
@@ -2406,7 +2429,11 @@ fn native_send_windows_keep_the_whole_direct_lease_and_clear_remaining_debt_only
             .endpoint(
                 &memory,
                 0,
-                128,
+                if mode == "batch_bad_first_final" {
+                    64
+                } else {
+                    128
+                },
                 1,
                 Instant::now() + Duration::from_secs(2),
                 None,
@@ -2437,6 +2464,17 @@ fn native_send_windows_keep_the_whole_direct_lease_and_clear_remaining_debt_only
             "{mode}: {closed:?}"
         );
         let stats = runtime.stats().unwrap();
+        if mode.starts_with("batch_bad_first") {
+            // All four valid entries following the malformed CQE left the CQ in the same poll.
+            assert_eq!(stats.completed_reads, 4);
+            assert_eq!(stats.completed_read_bytes, 64);
+            assert_eq!(stats.progress_failures, 1);
+        }
+        if mode == "batch_foreign_close0" {
+            assert_eq!(stats.completed_reads, 3);
+            assert_eq!(stats.completed_read_bytes, 48);
+            assert_eq!(stats.retained_work_requests, 1);
+        }
         let owed = if mode.ends_with("close1") { 0 } else { owed };
         assert_eq!(stats.work_requests, if retained { owed } else { 0 });
         assert_eq!(

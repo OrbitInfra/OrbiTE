@@ -297,6 +297,8 @@ fn chained_posts_preserve_generated_abi_offsets_ids_and_accepted_prefix_without_
 }
 
 struct NativeCq {
+    calls: usize,
+    limit: c_int,
     sentinel: bool,
     count: i32,
     bytes: [u8; 48],
@@ -304,7 +306,7 @@ struct NativeCq {
 
 unsafe extern "C" fn capture_poll(
     cq: *mut ffi::ibv_cq,
-    _: c_int,
+    limit: c_int,
     completion: *mut ffi::ibv_wc,
 ) -> c_int {
     // A native-layout fixture writes the published binding's private CQ fields.
@@ -313,10 +315,18 @@ unsafe extern "C" fn capture_poll(
     // completion entries.
     unsafe {
         let state = &mut *(*cq).cq_context.cast::<NativeCq>();
+        state.calls += 1;
+        state.limit = limit;
         state.sentinel = (*completion).status == ffi::IBV_WC_GENERAL_ERR
             && (*completion).opcode == ffi::IBV_WC_LOCAL_INV;
-        if state.count == 1 {
-            std::ptr::copy_nonoverlapping(state.bytes.as_ptr(), completion.cast(), 48);
+        if (1..=limit).contains(&state.count) {
+            for i in 0..state.count as usize {
+                let wc = completion.add(i);
+                std::ptr::copy_nonoverlapping(state.bytes.as_ptr(), wc.cast(), 48);
+                if i != 0 {
+                    (*wc).wr_id += i as u64;
+                }
+            }
         }
         state.count
     }
@@ -327,6 +337,8 @@ fn poll_dispatch_decodes_native_cqes_and_only_reads_error_valid_fields() {
     assert_eq!(std::mem::size_of::<ffi::ibv_wc>(), 48);
     let mut context = Box::new(ffi::ibv_context::default());
     let mut state = NativeCq {
+        calls: 0,
+        limit: 0,
         sentinel: false,
         count: 0,
         bytes: [0; 48],
@@ -344,7 +356,7 @@ fn poll_dispatch_decodes_native_cqes_and_only_reads_error_valid_fields() {
     assert_eq!(
         // SAFETY: The test owns the CQ handles, its callback state and the writable completion
         // output.
-        unsafe { poll(&mut handles, &mut output) },
+        unsafe { poll(&mut handles, &mut output, 1) },
         -libc::EOPNOTSUPP
     );
     context.ops.poll_cq = Some(capture_poll);
@@ -352,7 +364,7 @@ fn poll_dispatch_decodes_native_cqes_and_only_reads_error_valid_fields() {
         state.count = count;
         // SAFETY: The test owns the CQ handles, its callback state and the writable completion
         // output.
-        assert_eq!(unsafe { poll(&mut handles, &mut output) }, expected);
+        assert_eq!(unsafe { poll(&mut handles, &mut output, 1) }, expected);
         assert_eq!(output.id, 0);
         assert!(state.sentinel);
     }
@@ -382,7 +394,7 @@ fn poll_dispatch_decodes_native_cqes_and_only_reads_error_valid_fields() {
         state.bytes[qpn..qpn + 4].copy_from_slice(&0x12345u32.to_ne_bytes());
         // SAFETY: The test owns the CQ handles, its callback state and the writable completion
         // output.
-        assert_eq!(unsafe { poll(&mut handles, &mut output) }, 1);
+        assert_eq!(unsafe { poll(&mut handles, &mut output, 1) }, 1);
         assert_eq!(
             (output.id, output.status, output.vendor_error, output.qpn),
             (7, status, vendor, 0x12345)
@@ -402,6 +414,14 @@ fn poll_dispatch_decodes_native_cqes_and_only_reads_error_valid_fields() {
             }
         );
     }
+    state.count = 3;
+    let before = state.calls;
+    let mut batch = [Completion::default(); 5];
+    // SAFETY: the test owns this live CQ and five writable CQE slots.
+    let count = unsafe { poll(&mut handles, batch.as_mut_ptr(), batch.len()) };
+    assert_eq!(count, 3);
+    assert_eq!((state.calls - before, state.limit), (1, 5));
+    assert_eq!(batch.map(|wc| wc.id), [7, 8, 9, 0, 0]);
 }
 
 struct WindowPost {

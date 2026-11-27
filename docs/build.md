@@ -26,11 +26,10 @@ CC=gcc CXX=g++ LIBCLANG_PATH=/usr/lib/llvm-18/lib \
 ```
 
 OrbitRDMA generates the verbs layouts from the installed `infiniband/verbs.h`
-with bindgen and builds the port bridge. OrbiTE uses the provider API. It no longer uses `ibverbs-sys`, whose build script unconditionally
-links libibverbs and builds a vendored header tree. No rdma-core library or provider
-is bundled. The small C port shim uses the same headers for provider-inline
-operations and receives its legacy callback from the runtime table. The build
-probes `active_speed_ex`; older headers keep the legacy speed/width path.
+with bindgen. Its Rust provider dispatches inline verbs and port queries using
+these layouts and the runtime function table. The build probes `active_speed_ex`;
+older headers use the legacy speed and width fields. The host provides libibverbs
+and its device provider.
 
 `libibverbs.so.1` is loaded only when RDMA is configured or explicitly discovered.
 All required exports are checked before opening a device, and the table and DSO

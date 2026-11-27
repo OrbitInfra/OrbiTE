@@ -792,8 +792,10 @@ fn abort_rechecks_async_consumer_after_waiting_for_an_accepted_constructor() {
 }
 
 pub(super) fn before_abort_lock(shared: &ProgressState, record: &Record) {
-    if shared.config.device.as_deref() != Some("async_abort_lock_pause") || record.tag != 1 {
-        return;
+    match shared.config.device.as_deref() {
+        Some("async_abort_lock_pause") if record.tag == 1 => {}
+        Some("batch_bad_first_abort_pause" | "wc_sibling_pause") => {}
+        _ => return,
     }
     let device = Arc::clone(&shared.control.lock().unwrap().cq.as_ref().unwrap()._device);
     let pause = crate::transport::rdma::context::tests::pause_device(&device);
@@ -804,6 +806,95 @@ pub(super) fn before_abort_lock(shared: &ProgressState, record: &Record) {
     while !state.1 {
         state = changed.wait(state).unwrap();
     }
+}
+
+#[test]
+fn a_failed_work_completion_charges_only_its_owner_before_lane_abort() {
+    let runtime = configured("wc_sibling_pause", 4);
+    let mut sibling = runtime.staging_endpoint(8, 2).unwrap();
+    sibling.connect(&sibling.descriptor()).unwrap();
+    sibling.bind_window().unwrap();
+    let mut binding = [0x32; COMPLETION_MESSAGE_SIZE];
+    binding[COMPLETION_MESSAGE_SIZE - 1] = 0;
+    post_receive(&mut sibling, &binding).unwrap();
+
+    let mut owner = runtime.staging_endpoint(8, 0).unwrap();
+    owner.connect(&owner.descriptor()).unwrap();
+    assert!(Arc::ptr_eq(&owner.progress, &sibling.progress));
+    assert_ne!(owner.descriptor().qpn, sibling.descriptor().qpn);
+    assert_eq!(runtime.stats().unwrap().receive_work_requests, 1);
+    let pause = pause(&runtime);
+    let failed = thread::spawn(move || {
+        let outcome = owner.transfer(
+            &owner.descriptor(),
+            TransferOp::Read,
+            crate::Priority::High,
+            deadline(),
+        );
+        (owner, outcome)
+    });
+    wait_blocked(&pause);
+    let before_abort = sibling.receive_completion();
+    release(&pause);
+    let (mut owner, failed_wc) = failed.join().unwrap();
+    let _ = owner.close();
+    let _ = sibling.close();
+    let _ = runtime.close(deadline());
+    assert!(matches!(
+        failed_wc,
+        Err(Error::Backend {
+            operation: "RDMA work completion",
+            code: 1
+        })
+    ));
+    assert!(matches!(
+        before_abort,
+        Err(Error::Unavailable(
+            "RDMA lane retired after a work completion"
+        ))
+    ));
+}
+
+#[test]
+fn a_fatal_cqe_fences_logical_success_while_the_final_window_physically_retires() {
+    let mut runtime = configured("direct:batch_bad_first_abort_pause", 4);
+    runtime.config.max_direct_bytes = 64;
+    runtime.config.block_size = 16;
+    runtime.config.max_send_wr = 4;
+    let registry = crate::memory::MemoryRegistry::new(crate::SourceEpoch([1; 16]), 1, 64);
+    let memory = registry
+        .register(
+            vec![0x55; 64].into_boxed_slice(),
+            crate::Permission::LocalOnly,
+        )
+        .unwrap();
+    let mut endpoint = runtime
+        .endpoint(&memory, 0, 64, 1, deadline(), None)
+        .unwrap();
+    let peer = endpoint.descriptor();
+    endpoint.connect(&peer).unwrap();
+    let pause = pause(&runtime);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let transfer = thread::spawn(move || {
+        let result = endpoint.transfer(&peer, TransferOp::Read, crate::Priority::High, deadline());
+        tx.send(result).unwrap();
+        endpoint
+    });
+    wait_blocked(&pause);
+    let result = rx.recv_timeout(EVENTUAL_PROGRESS);
+    let usage = runtime.stats().unwrap();
+    let held = memory.write(63, &[3]).is_err();
+    release(&pause);
+    let mut endpoint = transfer.join().unwrap();
+    let _ = endpoint.close();
+    let _ = runtime.close(deadline());
+    assert!(matches!(
+        result,
+        Ok(Err(Error::Protocol("RDMA completion identity")))
+    ));
+    assert_eq!((usage.completed_reads, usage.completed_read_bytes), (4, 64));
+    assert!(held);
+    memory.write(63, &[3]).unwrap();
 }
 
 #[test]

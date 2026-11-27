@@ -7,22 +7,10 @@ use super::super::quota::DeviceInfo;
 
 use super::super::{RdmaStats, sys};
 use crate::{Error, Result};
-
-struct Entry {
-    id: u64,
-    posted: bool,
-    length: u64,
-}
-
-struct State {
-    entries: Vec<Entry>,
-    drained: bool,
-    fenced: bool,
-}
+use orbit_rdma::provider::SendQueueLedger;
 
 pub(in crate::transport::rdma) struct SendQueue {
-    limit: usize,
-    state: Mutex<State>,
+    state: Mutex<SendQueueLedger>,
     pub(in crate::transport::rdma) bandwidth: Option<Arc<DeviceInfo>>,
     pub(in crate::transport::rdma) usage: Arc<Mutex<RdmaStats>>,
 }
@@ -36,18 +24,10 @@ impl SendQueue {
         if !(1..=64).contains(&limit) {
             return Err(Error::InvalidConfig("RDMA QP send depth must be in 1..=64"));
         }
-        let mut entries = Vec::new();
-        entries
-            .try_reserve_exact(limit)
-            .map_err(|_| Error::ResourceExhausted)?;
+        let ledger = SendQueueLedger::new(limit).map_err(|_| Error::ResourceExhausted)?;
         Ok(Arc::new(Self {
-            limit,
             bandwidth,
-            state: Mutex::new(State {
-                entries,
-                drained: false,
-                fenced: false,
-            }),
+            state: Mutex::new(ledger),
             usage,
         }))
     }
@@ -62,42 +42,21 @@ impl SendQueue {
             .state
             .lock()
             .map_err(|_| Error::Internal("RDMA SQ lock poisoned"))?;
-        if state.drained || state.fenced {
-            return Err(Error::Unavailable("RDMA QP send queue is fenced"));
-        }
-        if requests.is_empty() {
-            return Err(Error::Internal("RDMA empty SQ reservation"));
-        }
         let mut usage = self
             .usage
             .lock()
             .map_err(|_| Error::Internal("RDMA budget lock poisoned"))?;
-        let count = requests
-            .len()
-            .min(self.limit.saturating_sub(state.entries.len()))
-            .min(capacity.saturating_sub(usage.work_requests));
-        if count == 0 {
-            return Err(Error::ResourceExhausted);
-        }
-        for (index, request) in requests[..count].iter().enumerate() {
-            if request.id == 0
-                || requests[..index].iter().any(|other| other.id == request.id)
-                || state.entries.iter().any(|entry| entry.id == request.id)
-            {
-                return Err(Error::Protocol("RDMA duplicate SQ work identity"));
-            }
-        }
-        let interval = signal_interval.clamp(1, (self.limit / 2).max(1));
-        for (i, request) in requests[..count].iter_mut().enumerate() {
-            request.signaled = (i + 1) % interval == 0 || i + 1 == count;
-        }
-        state
-            .entries
-            .extend(requests[..count].iter().map(|request| Entry {
-                id: request.id,
-                posted: false,
-                length: u64::from(request.length),
-            }));
+        let count = state
+            .reserve(
+                requests,
+                capacity.saturating_sub(usage.work_requests),
+                signal_interval,
+            )
+            .map_err(|e| match e {
+                orbit_rdma::Error::Closed => Error::Unavailable("RDMA QP send queue is fenced"),
+                orbit_rdma::Error::Exhausted(_) => Error::ResourceExhausted,
+                _ => Error::Protocol("RDMA invalid SQ reservation"),
+            })?;
         usage.work_requests += count;
         usage.peak_work_requests = usage.peak_work_requests.max(usage.work_requests);
         Ok(count)
@@ -106,60 +65,29 @@ impl SendQueue {
     pub(in crate::transport::rdma) fn posted(
         &self,
         requests: &[sys::WorkRequest],
-        code: i32,
-        result: sys::PostResult,
+        receipt: orbit_rdma::verbs::PostReceipt,
         now: Instant,
-    ) -> Result<(usize, Option<u64>)> {
+    ) -> Result<(usize, bool, Option<u64>)> {
         let mut state = self
             .state
             .lock()
             .map_err(|_| Error::Internal("RDMA SQ lock poisoned"))?;
-        if requests.is_empty()
-            || requests.iter().any(|request| {
-                !state
-                    .entries
-                    .iter()
-                    .any(|entry| entry.id == request.id && !entry.posted)
-            })
-        {
-            return Err(Error::Protocol("RDMA SQ post receipt has no reservation"));
-        }
+        let code = receipt.code;
         let mut usage = self
             .usage
             .lock()
             .map_err(|_| Error::Internal("RDMA budget lock poisoned"))?;
         usage.post_calls += 1;
-        let uncertain = result.uncertain
-            || result.accepted > requests.len()
-            || (code == 0 && result.accepted != requests.len());
-        let owed = if uncertain {
-            requests.len()
-        } else {
-            result.accepted
-        };
-        for request in &requests[..owed] {
-            // The whole reservation was checked before changing either budget.
-            if let Some(entry) = state
-                .entries
-                .iter_mut()
-                .find(|entry| entry.id == request.id)
-            {
-                entry.posted = true;
-            }
-        }
-        state.entries.retain(|entry| {
-            !requests[owed..]
-                .iter()
-                .any(|request| request.id == entry.id)
-        });
+        let (owed, uncertain) = state
+            .posted(requests, receipt)
+            .map_err(|_| Error::Protocol("RDMA SQ post receipt has no reservation"))?;
         usage.work_requests -= requests.len() - owed;
         if uncertain {
             usage.uncertain_posts += 1;
         } else {
-            usage.posted_work_requests += result.accepted as u64;
-            usage.partial_posts += u64::from(code != 0 && result.accepted != 0);
+            usage.posted_work_requests += owed as u64;
+            usage.partial_posts += u64::from(code != 0 && owed != 0);
         }
-        state.fenced |= code != 0 || uncertain;
         drop(usage);
         let bytes = requests[..owed]
             .iter()
@@ -173,7 +101,7 @@ impl SendQueue {
             let generation = info.posted(bytes, failed, now);
             (bytes != 0).then_some(generation)
         });
-        Ok((owed, generation))
+        Ok((owed, uncertain, generation))
     }
 
     pub(in crate::transport::rdma) fn complete(
@@ -186,24 +114,10 @@ impl SendQueue {
             .state
             .lock()
             .map_err(|_| Error::Internal("RDMA SQ lock poisoned"))?;
-        // One native post contains one grant's consecutive WR IDs. Validate the whole
-        // receipt before returning any SQ slots, including on a shared physical QP.
-        if prefix.is_empty()
-            || successful > prefix.len()
-            || !prefix.iter().all(|wr| {
-                state
-                    .entries
-                    .iter()
-                    .any(|e| e.posted && e.id == wr.id && e.length == u64::from(wr.length))
-            })
-        {
-            return Err(Error::Protocol("RDMA completion has no posted SQ owner"));
-        }
-        let first = prefix[0].id;
-        let last = prefix[prefix.len() - 1].id;
-        state.entries.retain(|e| !(first..=last).contains(&e.id));
+        state
+            .complete(prefix, successful)
+            .map_err(|_| Error::Protocol("RDMA completion has no posted SQ owner"))?;
         let failed = successful < prefix.len();
-        state.fenced |= failed;
         let mut usage = self.usage.lock().unwrap_or_else(|p| p.into_inner());
         usage.work_requests -= prefix.len();
         drop(usage);
@@ -229,18 +143,16 @@ impl SendQueue {
         self.state
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .entries
-            .len()
+            .outstanding()
     }
 
     pub(in crate::transport::rdma) fn fence(&self) {
         let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
-        if !state.fenced && state.entries.iter().any(|e| e.posted && e.length != 0) {
+        if state.fence() {
             if let Some(info) = &self.bandwidth {
                 info.invalidate();
             }
         }
-        state.fenced = true;
     }
 
     // Called only after every associated QP and both CQs were destroyed.
@@ -248,22 +160,18 @@ impl SendQueue {
     pub(in crate::transport::rdma) fn quiesce(&self) {
         let mut state = self.state.lock().unwrap_or_else(|p| p.into_inner());
         let mut usage = self.usage.lock().unwrap_or_else(|p| p.into_inner());
-        usage.work_requests -= state.entries.len();
+        let (count, bytes) = state.quiesce();
+        usage.work_requests -= count;
         drop(usage);
-        let bytes = state
-            .entries
-            .iter()
-            .filter(|entry| entry.posted)
-            .map(|entry| entry.length)
-            .sum();
         if let Some(info) = &self.bandwidth {
             info.ended(bytes, false, Instant::now());
         }
-        state.entries.clear();
-        state.drained = true;
     }
 
     pub(in crate::transport::rdma) fn drained(&self) -> bool {
-        self.state.lock().unwrap_or_else(|p| p.into_inner()).drained
+        self.state
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .drained()
     }
 }
