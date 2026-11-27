@@ -106,7 +106,9 @@ loans, staging memory and admission charge.
 Host io_uring submits one `readv` or `writev` per vector. Buffered I/O and
 WRITEs use one private scratch lease for all padding and zero it before each
 WRITE. A direct host READ receives the file bytes in one private buffer
-and scatters the completed prefix in file order, advancing over padding.
+and scatters the completed prefix in file order. Explicit padding only advances
+the source position during this scatter. It uses no separate padding slot.
+Use a registered range for tail bytes that the caller needs to inspect.
 The lease uses the existing file staging pool or its byte-charged pageable
 fallback. For CUDA, the worker zeroes or discards padding in the pinned
 chunks it already holds and confirms each device copy. Both paths release

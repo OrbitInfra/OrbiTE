@@ -91,7 +91,8 @@ For [large direct READs](benchmarks.md#large-direct-reads), the completion
 owner copies only the CQE-confirmed prefix from private storage. A negative
 CQE publishes no bytes for that request. The [external-vector controls](qualification.md#local-file-segments)
 exercise this rule across independent registrations, including unregistration
-while a real completion is held. First-touch and copy costs keep the
+while a real completion is held. For explicit padding, a direct host READ
+advances over the gap in its private buffer. First-touch and copy costs keep the
 64 MiB workload outside its fixed-baseline limits on both Rust toolchains.
 [CPU benchmark and fault fixtures](benchmarks.md) cover verified size/batch
 sweeps and the software backend lifetime matrix. They add no hardware

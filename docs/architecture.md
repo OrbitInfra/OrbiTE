@@ -417,8 +417,11 @@ The whole GPU range stays loaned through file receipts and CUDA copy events.
 A file vector has one file lease, admission owner and logical receipt. Overlapping
 spans share an exclusive loan within their registration. The issuer retains
 the original fragment order for kernel iovecs, staged copies and cuFile cookies.
-Explicit file padding extends TENT's contiguous buffer contract. Host vectors
-lease private charged scratch, and CUDA vectors use their pinned staging chunks.
+Explicit file padding extends TENT's contiguous buffer contract. On a direct
+host READ the native iovec covers one private buffer. Its scatter list records
+the length of each gap. Buffered host READs and host WRITEs bind their gaps
+to a shared scratch lease before submission. WRITE checks the actual padding
+addresses when selecting the descriptor. CUDA vectors use their pinned staging chunks.
 Each lease stays exclusive until its completion receipt, so a READ that dirties
 scratch cannot race a WRITE that needs zeros. Padding makes cuFile ineligible.
 GDS discovery and CUDA buffer registration start at first eligible file use.

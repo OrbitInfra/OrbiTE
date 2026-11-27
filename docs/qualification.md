@@ -785,6 +785,12 @@ error on aligned direct layouts. The separate 128-byte tail is a registered
 range whose contents the caller verifies. That layout covers a full read and
 EOF seven bytes before the end of the tail on the buffered descriptor.
 
+The padding-slot control enables a one-slot pool and reads a range, a gap and
+a second range. The full extent exceeds the slot capacity. The ext4 direct
+READ acquires zero slots. The buffered tmpfs READ and each WRITE acquire one.
+The test checks the reported byte count, the entire destination including guards,
+the zero-filled gap on disk after WRITE, and the released byte and slot charges.
+
 Scratch allocation failure must leave the ring untouched and return the
 pageable charge. A 2 MiB direct READ control rejects the optional huge-page
 alignment at allocation. It checks the complete destination after a full CQE

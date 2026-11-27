@@ -561,6 +561,15 @@ ranges and served cached data on this host. Its RSS was about 64 MiB lower.
 These trials characterize the host file-vector API. The scalar acceptance
 comparison uses its own caller and pairs both frozen engines on the same host.
 
+A separate AArch64 Linux ext4 control used a 5 MiB host vector with an explicit
+4 KiB padding element. With the staging pool enabled at its default size
+(32 slots of 4 MiB), `7369455` constructed a 128 MiB slab when acquiring a
+padding slot. It acquired the slot again on a second READ. At `5f8a1d2`
+the same two direct READs made zero slot acquisitions and constructed no slab.
+Both implementations retained 5 MiB each in the pageable and in-flight counters
+until the held CQE was delivered. Both counters returned to zero after drain.
+These values measure allocation capacity and ownership. The run did not measure RSS.
+
 ### Singleton tmpfs tail latency
 
 The `tmpfs_tail_only` input of the native CPU workflow measures warmed, buffered
