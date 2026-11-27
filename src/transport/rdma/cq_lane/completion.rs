@@ -4,14 +4,16 @@ use super::*;
 
 impl ProgressState {
     pub(super) fn complete(&self, completion: sys::Completion, receive_cq: bool, now: Instant) {
-        let Some(tag) = completion
-            .id
-            .checked_sub(1)
-            .map(|id| id / super::super::WR_ID_STRIDE)
+        let Ok((tag, slot)) =
+            orbit_rdma::provider::WorkNamespaces::decode(super::super::WR_ID_STRIDE, completion.id)
         else {
             self.fail(Fault::Protocol("RDMA completion identity"));
             return;
         };
+        if slot == 0 {
+            self.fail(Fault::Protocol("RDMA completion identity"));
+            return;
+        }
         // Never hold the store lock while locking a grant or physical QP.
         // Finished grant records may disappear while their donated RQ slot lives.
         if receive_cq {

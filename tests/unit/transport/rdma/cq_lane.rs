@@ -792,7 +792,10 @@ fn abort_rechecks_async_consumer_after_waiting_for_an_accepted_constructor() {
 }
 
 pub(super) fn before_abort_lock(shared: &ProgressState, record: &Record) {
-    if shared.config.device.as_deref() != Some("async_abort_lock_pause") || record.tag != 1 {
+    let device = shared.config.device.as_deref();
+    if device != Some("batch_bad_first_abort_pause")
+        && !(device == Some("async_abort_lock_pause") && record.tag == 1)
+    {
         return;
     }
     let device = Arc::clone(&shared.control.lock().unwrap().cq.as_ref().unwrap()._device);
@@ -804,6 +807,48 @@ pub(super) fn before_abort_lock(shared: &ProgressState, record: &Record) {
     while !state.1 {
         state = changed.wait(state).unwrap();
     }
+}
+
+#[test]
+fn a_fatal_cqe_fences_logical_success_while_the_final_window_physically_retires() {
+    let mut runtime = configured("direct:batch_bad_first_abort_pause", 4);
+    runtime.config.max_direct_bytes = 64;
+    runtime.config.block_size = 16;
+    runtime.config.max_send_wr = 4;
+    let registry = crate::memory::MemoryRegistry::new(crate::SourceEpoch([1; 16]), 1, 64);
+    let memory = registry
+        .register(
+            vec![0x55; 64].into_boxed_slice(),
+            crate::Permission::LocalOnly,
+        )
+        .unwrap();
+    let mut endpoint = runtime
+        .endpoint(&memory, 0, 64, 1, deadline(), None)
+        .unwrap();
+    let peer = endpoint.descriptor();
+    endpoint.connect(&peer).unwrap();
+    let pause = pause(&runtime);
+    let (tx, rx) = std::sync::mpsc::channel();
+    let transfer = thread::spawn(move || {
+        let result = endpoint.transfer(&peer, TransferOp::Read, crate::Priority::High, deadline());
+        tx.send(result).unwrap();
+        endpoint
+    });
+    wait_blocked(&pause);
+    let result = rx.recv_timeout(EVENTUAL_PROGRESS);
+    let usage = runtime.stats().unwrap();
+    let held = memory.write(63, &[3]).is_err();
+    release(&pause);
+    let mut endpoint = transfer.join().unwrap();
+    let _ = endpoint.close();
+    let _ = runtime.close(deadline());
+    assert!(matches!(
+        result,
+        Ok(Err(Error::Protocol("RDMA completion identity")))
+    ));
+    assert_eq!((usage.completed_reads, usage.completed_read_bytes), (4, 64));
+    assert!(held);
+    memory.write(63, &[3]).unwrap();
 }
 
 #[test]

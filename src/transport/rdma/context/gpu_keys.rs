@@ -91,29 +91,22 @@ impl Resources {
         let ops = verbs.gpu_keys.ok_or(Error::Unavailable(
             "provider has no revocable GPU grant keys",
         ))?;
-        let space = self.handles.gpu_keys;
-        let count = u64::from(space.count).min(self.gpu_index_limit as u64);
-        // A busy named index may belong to a sibling grant or another PD on the HCA.
-        for _ in 0..count.min(64) {
-            let sequence = self.next_gpu_key;
-            if sequence >= count * 255 {
-                break;
-            }
-            self.next_gpu_key += 1;
-            let index = space.base + ((sequence + u64::from(space.pdn)) % count) as u32;
-            let key = (index << 8) | (1 + (sequence / count) as u32);
+        let cursor = self
+            .gpu_key_cursor
+            .as_mut()
+            .ok_or(Error::ResourceExhausted)?;
+        for _ in 0..self.gpu_key_attempts {
             let before = self.keys.len();
-            let fresh = self
-                .keys
-                .claim_exact(key)
+            let candidate = cursor
+                .claim(&mut self.keys, 1)
                 .map_err(|_| Error::ResourceExhausted)?;
             self.usage
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
                 .window_key_indices += self.keys.len() - before;
-            if !fresh {
+            let Some(key) = candidate else {
                 continue;
-            }
+            };
             // SAFETY: the caller retains the local-only parent MR, actual range
             // and PD. The index and tag have been burned before any firmware call.
             let code = unsafe {

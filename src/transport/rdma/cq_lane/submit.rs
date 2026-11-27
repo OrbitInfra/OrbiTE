@@ -2,6 +2,15 @@
 
 use super::*;
 
+fn work_id(namespace: u64, slot: u64) -> Result<u64> {
+    orbit_rdma::provider::WorkNamespaces::encode(
+        crate::transport::rdma::WR_ID_STRIDE,
+        namespace,
+        slot,
+    )
+    .map_err(|_| Error::ResourceExhausted)
+}
+
 impl CqLane {
     pub(in crate::transport::rdma) fn submit(
         &self,
@@ -43,7 +52,7 @@ impl CqLane {
                 self.shared.config.block_size,
                 cap,
                 Arc::clone(&record.send_queue),
-                self.shared.next_work_namespace()? * crate::transport::rdma::WR_ID_STRIDE + 1,
+                work_id(self.shared.next_work_namespace()?, 1)?,
             )?;
             record
                 .send_namespace
@@ -116,7 +125,7 @@ impl CqLane {
             };
             let namespace = self.shared.next_work_namespace()?;
             record.send_namespace.store(namespace, Ordering::Release);
-            let id = namespace * crate::transport::rdma::WR_ID_STRIDE + slot;
+            let id = work_id(namespace, slot)?;
             if let Some(window) = &mut resources.grant_mut()?.handles.host_window {
                 if operation == slice::Operation::Bind {
                     record
@@ -208,7 +217,7 @@ impl CqLane {
                 .as_mut()
                 .ok_or(Error::Internal("missing RDMA grant"))?;
             let receive = ReceiveWork::new(
-                namespace * crate::transport::rdma::WR_ID_STRIDE + 1,
+                work_id(namespace, 1)?,
                 expected,
                 resources.grant()?.rkey,
                 deadline,
@@ -241,6 +250,27 @@ impl CqLane {
         self.wait_receive(record, claim, deadline, true)
     }
 
+    fn completion_claim<'a>(
+        &self,
+        record: &Record,
+        request: MutexGuard<'a, Request>,
+        claim: u64,
+    ) -> Result<MutexGuard<'a, Request>> {
+        request.check_claim(claim)?;
+        if let Err(error) = record.require_live() {
+            // After a lane fault, remaining CQEs still retire physical work.
+            // Drop the grant lock before looking up the original lane failure.
+            drop(request);
+            let control = self
+                .shared
+                .control
+                .lock()
+                .unwrap_or_else(|p| p.into_inner());
+            return Err(control.fault.map_or(error, Fault::error));
+        }
+        Ok(request)
+    }
+
     fn wait_receive(
         &self,
         record: &Arc<Record>,
@@ -250,7 +280,7 @@ impl CqLane {
     ) -> Result<()> {
         let mut request = record.lock()?;
         loop {
-            request.check_claim(claim)?;
+            request = self.completion_claim(record, request, claim)?;
             let receive = request
                 .receive
                 .as_ref()
@@ -343,10 +373,7 @@ impl CqLane {
             request.message_sent = true;
             request.work = Some(Work {
                 cancel: None,
-                queue: slice::SendWork::control(
-                    send_queue,
-                    namespace * crate::transport::rdma::WR_ID_STRIDE + 1,
-                )?,
+                queue: slice::SendWork::control(send_queue, work_id(namespace, 1)?)?,
                 operation: slice::Operation::Send,
                 priority: crate::Priority::High,
                 enqueued: Instant::now(),
@@ -371,11 +398,10 @@ impl CqLane {
         record: &Arc<Record>,
         claim: u64,
     ) -> Result<bool> {
-        record.require_live()?;
         let Some(request) = record.try_lock()? else {
             return Ok(false);
         };
-        request.check_claim(claim)?;
+        let request = self.completion_claim(record, request, claim)?;
         let work = request
             .work
             .as_ref()
@@ -395,7 +421,7 @@ impl CqLane {
         let Some(request) = record.try_lock()? else {
             return Ok(false);
         };
-        request.check_claim(claim)?;
+        let request = self.completion_claim(record, request, claim)?;
         Ok(request
             .work
             .as_ref()
@@ -412,7 +438,7 @@ impl CqLane {
         self.shared.signal();
         let mut request = record.lock()?;
         loop {
-            request.check_claim(claim)?;
+            request = self.completion_claim(record, request, claim)?;
             if request
                 .work
                 .as_ref()

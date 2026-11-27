@@ -29,6 +29,7 @@ pub(crate) use gpu_registration::GpuRegistrationVerbs;
 pub(super) use provider::mlx5::peermem_at;
 mod qp;
 
+pub(super) use cq::POLL_BATCH;
 use cq::poll;
 pub(super) use device::devices;
 use device::query_address;
@@ -157,14 +158,7 @@ pub(super) const FLUSHED: u32 = ffi::IBV_WC_WR_FLUSH_ERR;
 pub(super) const GRH: u32 = ffi::IBV_WC_GRH;
 pub(super) const WITH_INVALIDATE: u32 = ffi::IBV_WC_WITH_INV;
 
-#[derive(Clone, Copy, Debug)]
-#[repr(C)]
-pub(super) struct WorkRequest {
-    pub id: u64,
-    pub offset: u32,
-    pub length: u32,
-    pub signaled: bool,
-}
+pub(super) use provider::WorkSlice as WorkRequest;
 
 #[derive(Clone, Copy)]
 pub(super) struct AsyncVerbs {
@@ -274,7 +268,7 @@ pub(crate) struct Verbs {
         unsafe extern "C" fn(*mut MemoryHandles, *const DeviceHandles) -> c_int,
     pub(in crate::transport::rdma) dealloc_window: CloseMemory,
     pub(in crate::transport::rdma) poll:
-        unsafe extern "C" fn(*mut ConnectionHandles, *mut Completion) -> c_int,
+        unsafe extern "C" fn(*mut ConnectionHandles, *mut Completion, usize) -> c_int,
     pub(in crate::transport::rdma) reset_qp: CloseConnection,
     pub(in crate::transport::rdma) destroy_qp: CloseConnection,
     pub(in crate::transport::rdma) deregister: CloseMemory,

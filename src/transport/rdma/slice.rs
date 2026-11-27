@@ -1,3 +1,4 @@
+use orbit_rdma::provider::PostedWindow;
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -56,7 +57,7 @@ pub(super) struct SendWork {
     first_id: u64,
     cursor: usize,
     window_start: usize,
-    pending: u64,
+    pending: PostedWindow,
     send_queue: Arc<SendQueue>,
     started: Option<(Instant, u64)>,
     sample_valid: bool,
@@ -96,7 +97,7 @@ impl SendWork {
             first_id,
             cursor: 0,
             window_start: 0,
-            pending: 0,
+            pending: PostedWindow::default(),
             started: None,
             sample_valid: true,
             send_queue,
@@ -122,7 +123,7 @@ impl SendWork {
             first_id: id,
             cursor: 0,
             window_start: 0,
-            pending: 0,
+            pending: PostedWindow::default(),
             started: None,
             sample_valid: true,
             send_queue,
@@ -144,11 +145,8 @@ impl SendWork {
         )?;
         self.window_start = self.cursor;
         self.cursor += count;
-        self.pending = if count == 64 {
-            u64::MAX
-        } else {
-            (1u64 << count) - 1
-        };
+        self.pending =
+            PostedWindow::new(count).map_err(|_| Error::Internal("RDMA SQ reservation length"))?;
         Ok(&self.requests[self.window_start..self.cursor])
     }
 
@@ -158,13 +156,9 @@ impl SendWork {
         result: sys::PostResult,
         now: Instant,
     ) -> Result<()> {
-        let count = self.cursor - self.window_start;
-        let uncertain =
-            result.uncertain || result.accepted > count || (code == 0 && result.accepted != count);
-        let (owed, generation) = self.send_queue.posted(
+        let (owed, uncertain, generation) = self.send_queue.posted(
             &self.requests[self.window_start..self.cursor],
-            code,
-            result,
+            result.receipt(code),
             now,
         )?;
         self.sample_valid &= code == 0 && !uncertain;
@@ -175,11 +169,8 @@ impl SendWork {
                 self.started = Some((now, generation));
             }
         }
-        self.pending = if owed == 64 {
-            u64::MAX
-        } else {
-            (1u64 << owed) - 1
-        };
+        self.pending =
+            PostedWindow::new(owed).map_err(|_| Error::Internal("RDMA SQ receipt length"))?;
         if code != 0 {
             return Err(Error::Backend {
                 operation: "ibv_post_send",
@@ -205,10 +196,6 @@ impl SendWork {
             .and_then(|id| usize::try_from(id).ok())
             .filter(|index| *index >= self.window_start && *index < self.cursor)
             .ok_or(Error::Protocol("RDMA completion identity"))?;
-        let bit = 1u64 << (index - self.window_start);
-        if self.pending & bit == 0 {
-            return Err(Error::Protocol("RDMA duplicate completion"));
-        }
         let request = &self.requests[index];
         let expected_opcode = match operation {
             Operation::Write => 1,
@@ -224,34 +211,26 @@ impl SendWork {
         {
             return Err(Error::Protocol("RDMA completion opcode/length"));
         }
-        // An ordered RC receipt covers the unsignaled WRs immediately before its
-        // tail in this post. Another signaled tail (including another grant's)
-        // always owes its own CQE. A flush proves retirement but no payload bytes.
-        let mut start = index;
-        while start > self.window_start
-            && !self.requests[start - 1].signaled
-            && self.pending & (1u64 << (start - 1 - self.window_start)) != 0
-        {
-            start -= 1;
-        }
-        let prefix = &self.requests[start..=index];
-        let successful = match completion.status {
-            0 => prefix.len(),
-            sys::FLUSHED => 0,
-            _ => prefix.len() - 1,
-        };
+        let (start, successful, retired) = self
+            .pending
+            .completion(
+                &self.requests[self.window_start..self.cursor],
+                index - self.window_start,
+                completion.status,
+            )
+            .map_err(|_| Error::Protocol("RDMA duplicate completion"))?;
+        let prefix = &self.requests[self.window_start + start..=index];
         self.send_queue.complete(prefix, successful, now)?;
         let bytes: u64 = prefix[..successful]
             .iter()
             .map(|wr| u64::from(wr.length))
             .sum();
-        let mask = (u64::MAX >> (64 - prefix.len())) << (start - self.window_start);
         let mut usage = self
             .send_queue
             .usage
             .lock()
             .map_err(|_| Error::Internal("RDMA budget lock poisoned"))?;
-        self.pending &= !mask;
+        self.pending = retired;
         usage.payload_send_cqes +=
             u64::from(matches!(operation, Operation::Read | Operation::Write));
         match operation {
@@ -312,7 +291,7 @@ impl SendWork {
         self.outstanding() != 0
     }
     pub(super) fn outstanding(&self) -> usize {
-        self.pending.count_ones() as usize
+        self.pending.outstanding()
     }
     pub(super) fn finished(&self) -> bool {
         self.cursor == self.requests.len() && !self.pending()
@@ -322,7 +301,7 @@ impl SendWork {
         if !self.send_queue.drained() {
             return Err(Error::Internal("RDMA grant work before native SQ drain"));
         }
-        self.pending = 0;
+        self.pending = PostedWindow::default();
         Ok(())
     }
 }

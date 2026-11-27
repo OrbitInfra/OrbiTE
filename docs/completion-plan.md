@@ -319,9 +319,9 @@ unlink/unregister races. Physical HP-TCP rails and CXL need installed runs.
 
 Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
 
-OrbitRDMA 0.1.2 provides all native RDMA operations, including device and port
+OrbitRDMA 0.2.0 provides all native RDMA operations, including device and port
 queries, shared CQs, RC setup, registrations, windows, events, and teardown.
-OrbiTE owns queue scheduling, grants and cross-transport loans. Reusable host grants
+OrbitRDMA also accounts for physical SQ/RQ work, groups selective completions, batches CQ polls and allocates named GPU keys within each PD. OrbiTE owns queue scheduling, grants and cross-transport loans. Reusable host grants
 use independent windows, bound plain SEND/DONE receipts and owner-local invalidation.
 On Linux RXE, the [two-process gate](installed-host.md#shared-host-windows)
 retired A while B stayed bound to the original QP, then completed B for both

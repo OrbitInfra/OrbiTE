@@ -43,8 +43,8 @@ struct Resources {
     domain: [u8; 16],
     next_connection: u64,
     next_grant: u64,
-    next_gpu_key: u64,
-    gpu_index_limit: usize,
+    gpu_key_cursor: Option<orbit_rdma::provider::NamedKeyCursor>,
+    gpu_key_attempts: usize,
     keys: KeyHistory,
     exhausted_windows: Vec<ExhaustedWindow>,
     address: RdmaAddress,
@@ -118,8 +118,8 @@ impl RdmaContext {
                 domain,
                 next_connection: 1,
                 next_grant: 1,
-                next_gpu_key: 0,
-                gpu_index_limit: config.max_window_key_indices,
+                gpu_key_cursor: None,
+                gpu_key_attempts: 0,
                 keys: KeyHistory::new(config.max_window_key_indices),
                 exhausted_windows: Vec::new(),
                 address,
@@ -162,6 +162,17 @@ impl RdmaContext {
                 }
                 if !observed.active {
                     owner.asynchronous.fence_route();
+                }
+                let space = resources.handles.gpu_keys;
+                if space.count != 0 {
+                    resources.gpu_key_cursor = orbit_rdma::provider::NamedKeyCursor::new(
+                        space,
+                        config.max_window_key_indices,
+                    )
+                    .ok();
+                    resources.gpu_key_attempts = (space.count as usize)
+                        .min(config.max_window_key_indices)
+                        .min(64);
                 }
                 resources.refresh_port_speed(verbs, &mut observed);
                 resources.address = observed;

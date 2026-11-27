@@ -530,7 +530,11 @@ unsafe extern "C" fn send_completion(
     code
 }
 
-unsafe extern "C" fn poll(h: *mut sys::ConnectionHandles, out: *mut sys::Completion) -> c_int {
+unsafe extern "C" fn poll(
+    h: *mut sys::ConnectionHandles,
+    out: *mut sys::Completion,
+    _limit: usize,
+) -> c_int {
     // SAFETY: The polling lane supplies live CQ handles; the observer borrows them within the
     // poll callback.
     unsafe { worker_pool::observe(h) };
@@ -558,7 +562,7 @@ unsafe extern "C" fn poll(h: *mut sys::ConnectionHandles, out: *mut sys::Complet
     }
     // SAFETY: The lane retains the CQ and provides writable completion output for the provider
     // call.
-    let code = unsafe { (sys::REAL.poll)(h, out) };
+    let code = unsafe { (sys::REAL.poll)(h, out, 1) };
     let mut trace = TRACE.get().unwrap().lock().unwrap();
     if code == 1 && trace.requester && trace.held && !trace.released {
         trace

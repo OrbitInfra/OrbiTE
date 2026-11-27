@@ -1,5 +1,6 @@
 //! Physical RQ buffers and dispatch to independently identified grant receipts.
 
+use orbit_rdma::provider::ReceiveSlot;
 use std::sync::{Arc, Mutex};
 
 use super::super::receive::{MessageBuffer, ReceiveCredits, ReceiveWork};
@@ -11,8 +12,7 @@ struct Slot {
     donor: Arc<ReceiveWork>,
     message: MessageBuffer,
     credits: Option<ReceiveCredits>,
-    pending: bool,
-    posted: bool,
+    credit: ReceiveSlot,
 }
 
 pub(in crate::transport::rdma) struct ReceiveQueue {
@@ -85,8 +85,7 @@ impl ReceiveQueue {
             donor: work,
             message,
             credits: Some(credits),
-            pending: false,
-            posted: false,
+            credit: ReceiveSlot::Idle,
         });
         let slot = self
             .slots
@@ -120,7 +119,7 @@ impl ReceiveQueue {
             .iter_mut()
             .find(|slot| slot.id == id)
             .ok_or(Error::Internal("missing RDMA receive slot"))?;
-        if slot.pending || slot.posted || slot.credits.is_none() {
+        if slot.credit != ReceiveSlot::Idle || slot.credits.is_none() {
             return Err(Error::Internal("RDMA receive state"));
         }
         {
@@ -131,13 +130,15 @@ impl ReceiveQueue {
             if usage.receive_work_requests >= capacity {
                 return Err(Error::ResourceExhausted);
             }
+            slot.credit
+                .reserve()
+                .map_err(|_| Error::Internal("RDMA receive state"))?;
             usage.receive_work_requests += 1;
             usage.peak_receive_work_requests = usage
                 .peak_receive_work_requests
                 .max(usage.receive_work_requests);
             usage.receive_post_calls += 1;
         }
-        slot.pending = true;
         let mut result = sys::PostResult::default();
         // SAFETY: this QP owns the registered slot until its CQE or native drain.
         let code = unsafe {
@@ -150,7 +151,11 @@ impl ReceiveQueue {
                 &mut result,
             )
         };
-        if result.uncertain || result.accepted > 1 || (code == 0 && result.accepted != 1) {
+        let (owed, uncertain) = slot
+            .credit
+            .posted(result.receipt(code))
+            .map_err(|_| Error::Internal("RDMA receive post state"))?;
+        if uncertain {
             self.fenced = true;
             self.usage
                 .lock()
@@ -163,15 +168,17 @@ impl ReceiveQueue {
         }
         if code != 0 {
             self.fenced = true;
-            if result.accepted == 0 {
-                Self::discharge(slot, &self.usage);
+            if owed == 0 {
+                self.usage
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .receive_work_requests -= 1;
             }
             return Err(Error::Backend {
                 operation: "ibv_post_recv",
                 code,
             });
         }
-        slot.posted = true;
         slot.donor.mark_posted();
         Ok(())
     }
@@ -191,7 +198,7 @@ impl ReceiveQueue {
         let slot = self
             .slots
             .iter_mut()
-            .find(|slot| slot.id == completion.id && slot.pending && slot.posted)
+            .find(|slot| slot.id == completion.id && slot.credit == ReceiveSlot::Posted)
             .ok_or(Error::Protocol("RDMA receive identity or duplicate"))?;
         if completion.status != 0 {
             Self::discharge(slot, &self.usage);
@@ -238,12 +245,11 @@ impl ReceiveQueue {
     }
 
     fn discharge(slot: &mut Slot, usage: &Mutex<RdmaStats>) {
-        if slot.pending {
+        if slot.credit.retire() {
             usage
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
                 .receive_work_requests -= 1;
-            slot.pending = false;
         }
     }
 
@@ -252,7 +258,10 @@ impl ReceiveQueue {
     }
 
     pub(in crate::transport::rdma) fn outstanding(&self) -> usize {
-        self.slots.iter().filter(|slot| slot.pending).count()
+        self.slots
+            .iter()
+            .filter(|slot| slot.credit.pending())
+            .count()
     }
 
     pub(in crate::transport::rdma) fn memory_usage(&self) -> (usize, usize) {
@@ -281,7 +290,7 @@ impl ReceiveQueue {
     fn reap(&mut self, verbs: &sys::Verbs) -> std::result::Result<(), (&'static str, i32)> {
         let mut index = 0;
         while index < self.slots.len() {
-            if self.slots[index].pending || !self.slots[index].posted {
+            if self.slots[index].credit != ReceiveSlot::Retired {
                 index += 1;
                 continue;
             }
@@ -316,7 +325,6 @@ impl ReceiveQueue {
         // Native drain also permits reclaiming prepared but unposted buffers.
         for slot in &mut self.slots {
             Self::discharge(slot, &self.usage);
-            slot.posted = true;
         }
         self.reap(verbs)?;
         self.receipts.clear();

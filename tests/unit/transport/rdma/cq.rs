@@ -314,6 +314,7 @@ unsafe extern "C" fn send(
 unsafe extern "C" fn poll(
     h: *mut sys::ConnectionHandles,
     completion: *mut sys::Completion,
+    limit: usize,
 ) -> c_int {
     let entry = entries()
         .lock()
@@ -327,7 +328,7 @@ unsafe extern "C" fn poll(
     }
     // SAFETY: The lane retains the CQ and provides writable completion output for the provider
     // call.
-    unsafe { (BASE.poll)(h, completion) }
+    unsafe { (BASE.poll)(h, completion, limit) }
 }
 
 pub(in crate::transport::rdma) static VERBS: sys::Verbs = sys::Verbs {
