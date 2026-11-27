@@ -793,8 +793,10 @@ fn abort_rechecks_async_consumer_after_waiting_for_an_accepted_constructor() {
 
 pub(super) fn before_abort_lock(shared: &ProgressState, record: &Record) {
     let device = shared.config.device.as_deref();
-    if device != Some("batch_bad_first_abort_pause")
-        && !(device == Some("async_abort_lock_pause") && record.tag == 1)
+    if !matches!(
+        device,
+        Some("batch_bad_first_abort_pause" | "wc_sibling_pause")
+    ) && !(device == Some("async_abort_lock_pause") && record.tag == 1)
     {
         return;
     }
@@ -807,6 +809,53 @@ pub(super) fn before_abort_lock(shared: &ProgressState, record: &Record) {
     while !state.1 {
         state = changed.wait(state).unwrap();
     }
+}
+
+#[test]
+fn a_failed_work_completion_charges_only_its_owner_before_lane_abort() {
+    let runtime = configured("wc_sibling_pause", 4);
+    let mut sibling = runtime.staging_endpoint(8, 2).unwrap();
+    sibling.connect(&sibling.descriptor()).unwrap();
+    sibling.bind_window().unwrap();
+    let mut binding = [0x32; COMPLETION_MESSAGE_SIZE];
+    binding[COMPLETION_MESSAGE_SIZE - 1] = 0;
+    post_receive(&mut sibling, &binding).unwrap();
+
+    let mut owner = runtime.staging_endpoint(8, 0).unwrap();
+    owner.connect(&owner.descriptor()).unwrap();
+    assert!(Arc::ptr_eq(&owner.progress, &sibling.progress));
+    assert_ne!(owner.descriptor().qpn, sibling.descriptor().qpn);
+    assert_eq!(runtime.stats().unwrap().receive_work_requests, 1);
+    let pause = pause(&runtime);
+    let failed = thread::spawn(move || {
+        let outcome = owner.transfer(
+            &owner.descriptor(),
+            TransferOp::Read,
+            crate::Priority::High,
+            deadline(),
+        );
+        (owner, outcome)
+    });
+    wait_blocked(&pause);
+    let before_abort = sibling.receive_completion();
+    release(&pause);
+    let (mut owner, failed_wc) = failed.join().unwrap();
+    let _ = owner.close();
+    let _ = sibling.close();
+    let _ = runtime.close(deadline());
+    assert!(matches!(
+        failed_wc,
+        Err(Error::Backend {
+            operation: "RDMA work completion",
+            code: 1
+        })
+    ));
+    assert!(matches!(
+        before_abort,
+        Err(Error::Unavailable(
+            "RDMA lane retired after a work completion"
+        ))
+    ));
 }
 
 #[test]

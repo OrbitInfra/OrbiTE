@@ -987,7 +987,7 @@ unsafe extern "C" fn post(
             }
         }
         let status = injected.max(u32::from(
-            mode == "wc"
+            matches!(mode, "wc" | "wc_sibling_pause")
                 || mode.ends_with("copy_fault_partial")
                 || mode == "wc_close0"
                 || (mode == "copy_second_error_close0" && ordinal == 2)
