@@ -1,0 +1,208 @@
+{
+  "old_reclaim": [
+    {
+      "name": "large_direct_read_after_truncate_publishes_only_the_confirmed_prefix",
+      "full": "transport::io_uring::tests::inline::group::large_direct_read_after_truncate_publishes_only_the_confirmed_prefix",
+      "env": {},
+      "patterns": []
+    },
+    {
+      "name": "large_direct_read_with_negative_cqe_preserves_the_entire_destination",
+      "full": "transport::io_uring::tests::inline::group::large_direct_read_with_negative_cqe_preserves_the_entire_destination",
+      "env": {},
+      "patterns": []
+    },
+    {
+      "name": "large_direct_read_uses_device_alignment_when_huge_alignment_is_unavailable",
+      "full": "transport::io_uring::tests::inline::group::large_direct_read_uses_device_alignment_when_huge_alignment_is_unavailable",
+      "env": {},
+      "patterns": []
+    },
+    {
+      "name": "large_direct_read_reuses_only_one_private_prefix_and_publishes_exact_short_cqes",
+      "full": "transport::io_uring::tests::inline::group::large_direct_read_reuses_only_one_private_prefix_and_publishes_exact_short_cqes",
+      "env": {
+        "ORBITE_REQUIRE_PAGE_MOVE": "1",
+        "ORBITE_REQUIRE_TRIM_RECEIPT": "1"
+      },
+      "patterns": [
+        "idle direct READ pages: \\d+ -> \\d+ resident bytes"
+      ]
+    }
+  ],
+  "previous": [
+    {
+      "name": "large_direct_read_after_truncate_publishes_only_the_confirmed_prefix",
+      "full": "transport::io_uring::tests::inline::group::large_direct_read_after_truncate_publishes_only_the_confirmed_prefix",
+      "env": {
+        "ORBITE_DIAG_SPLIT_PREWARM_FAULT": "1"
+      },
+      "patterns": [
+        "reused fault receipt count=1"
+      ],
+      "occurrences": {
+        "reused fault receipt count=1": 3
+      }
+    },
+    {
+      "name": "large_direct_read_with_negative_cqe_preserves_the_entire_destination",
+      "full": "transport::io_uring::tests::inline::group::large_direct_read_with_negative_cqe_preserves_the_entire_destination",
+      "env": {
+        "ORBITE_DIAG_SPLIT_PREWARM_FAULT": "1"
+      },
+      "patterns": [
+        "reused fault receipt count=1"
+      ],
+      "occurrences": {
+        "reused fault receipt count=1": 1
+      }
+    },
+    {
+      "name": "large_direct_read_uses_device_alignment_when_huge_alignment_is_unavailable",
+      "full": "transport::io_uring::tests::inline::group::large_direct_read_uses_device_alignment_when_huge_alignment_is_unavailable",
+      "env": {},
+      "patterns": []
+    },
+    {
+      "name": "large_direct_read_reuses_only_one_private_prefix_and_publishes_exact_short_cqes",
+      "full": "transport::io_uring::tests::inline::group::large_direct_read_reuses_only_one_private_prefix_and_publishes_exact_short_cqes",
+      "env": {
+        "ORBITE_REQUIRE_PAGE_MOVE": "1",
+        "ORBITE_REQUIRE_TRIM_RECEIPT": "1",
+        "ORBITE_REQUIRE_SPLIT_RECEIPT": "1"
+      },
+      "patterns": [
+        "idle direct READ pages: \\d+ -> \\d+ resident bytes",
+        "private READ receipts \\[1, 1, 1, 1, 1\\]"
+      ]
+    }
+  ],
+  "hot": [
+    {
+      "name": "large_direct_read_after_truncate_publishes_only_the_confirmed_prefix",
+      "full": "transport::io_uring::tests::inline::group::large_direct_read_after_truncate_publishes_only_the_confirmed_prefix",
+      "env": {
+        "ORBITE_DIAG_SPLIT_PREWARM_FAULT": "1"
+      },
+      "patterns": [
+        "reused fault receipt count=1"
+      ],
+      "occurrences": {
+        "reused fault receipt count=1": 3
+      }
+    },
+    {
+      "name": "large_direct_read_with_negative_cqe_preserves_the_entire_destination",
+      "full": "transport::io_uring::tests::inline::group::large_direct_read_with_negative_cqe_preserves_the_entire_destination",
+      "env": {
+        "ORBITE_DIAG_SPLIT_PREWARM_FAULT": "1"
+      },
+      "patterns": [
+        "reused fault receipt count=1"
+      ],
+      "occurrences": {
+        "reused fault receipt count=1": 1
+      }
+    },
+    {
+      "name": "large_direct_read_uses_device_alignment_when_huge_alignment_is_unavailable",
+      "full": "transport::io_uring::tests::inline::group::large_direct_read_uses_device_alignment_when_huge_alignment_is_unavailable",
+      "env": {},
+      "patterns": []
+    }
+  ],
+  "reclaim": [
+    {
+      "name": "large_direct_read_after_truncate_publishes_only_the_confirmed_prefix",
+      "full": "transport::io_uring::tests::inline::group::large_direct_read_after_truncate_publishes_only_the_confirmed_prefix",
+      "env": {
+        "ORBITE_DIAG_SPLIT_PREWARM_FAULT": "1"
+      },
+      "patterns": [
+        "reused fault receipt count=1"
+      ],
+      "occurrences": {
+        "reused fault receipt count=1": 3
+      }
+    },
+    {
+      "name": "large_direct_read_with_negative_cqe_preserves_the_entire_destination",
+      "full": "transport::io_uring::tests::inline::group::large_direct_read_with_negative_cqe_preserves_the_entire_destination",
+      "env": {
+        "ORBITE_DIAG_SPLIT_PREWARM_FAULT": "1"
+      },
+      "patterns": [
+        "reused fault receipt count=1"
+      ],
+      "occurrences": {
+        "reused fault receipt count=1": 1
+      }
+    },
+    {
+      "name": "large_direct_read_uses_device_alignment_when_huge_alignment_is_unavailable",
+      "full": "transport::io_uring::tests::inline::group::large_direct_read_uses_device_alignment_when_huge_alignment_is_unavailable",
+      "env": {},
+      "patterns": []
+    },
+    {
+      "name": "large_direct_read_reuses_only_one_private_prefix_and_publishes_exact_short_cqes",
+      "full": "transport::io_uring::tests::inline::group::large_direct_read_reuses_only_one_private_prefix_and_publishes_exact_short_cqes",
+      "env": {
+        "ORBITE_REQUIRE_PAGE_MOVE": "1",
+        "ORBITE_REQUIRE_TRIM_RECEIPT": "1",
+        "ORBITE_REQUIRE_SPLIT_RECEIPT": "1"
+      },
+      "patterns": [
+        "idle direct READ pages: \\d+ -> \\d+ resident bytes",
+        "private READ receipts \\[1, 1, 1, 1, 1\\]"
+      ]
+    }
+  ],
+  "populate": [
+    {
+      "name": "large_direct_read_after_truncate_publishes_only_the_confirmed_prefix",
+      "full": "transport::io_uring::tests::inline::group::large_direct_read_after_truncate_publishes_only_the_confirmed_prefix",
+      "env": {
+        "ORBITE_DIAG_SPLIT_PREWARM_FAULT": "1"
+      },
+      "patterns": [
+        "reused fault receipt count=1"
+      ],
+      "occurrences": {
+        "reused fault receipt count=1": 3
+      }
+    },
+    {
+      "name": "large_direct_read_with_negative_cqe_preserves_the_entire_destination",
+      "full": "transport::io_uring::tests::inline::group::large_direct_read_with_negative_cqe_preserves_the_entire_destination",
+      "env": {
+        "ORBITE_DIAG_SPLIT_PREWARM_FAULT": "1"
+      },
+      "patterns": [
+        "reused fault receipt count=1"
+      ],
+      "occurrences": {
+        "reused fault receipt count=1": 1
+      }
+    },
+    {
+      "name": "large_direct_read_uses_device_alignment_when_huge_alignment_is_unavailable",
+      "full": "transport::io_uring::tests::inline::group::large_direct_read_uses_device_alignment_when_huge_alignment_is_unavailable",
+      "env": {},
+      "patterns": []
+    },
+    {
+      "name": "large_direct_read_reuses_only_one_private_prefix_and_publishes_exact_short_cqes",
+      "full": "transport::io_uring::tests::inline::group::large_direct_read_reuses_only_one_private_prefix_and_publishes_exact_short_cqes",
+      "env": {
+        "ORBITE_REQUIRE_PAGE_MOVE": "1",
+        "ORBITE_REQUIRE_TRIM_RECEIPT": "1",
+        "ORBITE_REQUIRE_SPLIT_RECEIPT": "1"
+      },
+      "patterns": [
+        "idle direct READ pages: \\d+ -> \\d+ resident bytes",
+        "private READ receipts \\[1, 1, 1, 1, 1\\]"
+      ]
+    }
+  ]
+}
