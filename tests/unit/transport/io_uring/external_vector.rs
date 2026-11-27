@@ -83,6 +83,9 @@ fn check_extent(dir: &Path, image: &[u8], lengths: &[usize], receipt: Receipt) -
         let (file, _) = lease.file_for_iovecs(0, &iovecs)?;
         lease.is_direct_read(TransferOp::Read, &file)
     };
+    if lengths.last() == Some(&128) {
+        assert!(!direct, "the sub-sector ext4 tail must select buffered I/O");
+    }
     if !direct {
         assert!(
             lengths.len() == 3 && lengths[2] <= 512,
@@ -127,12 +130,17 @@ fn check_extent(dir: &Path, image: &[u8], lengths: &[usize], receipt: Receipt) -
         // has not yet received the CQE that allows it to release the vector.
         assert!(arrived.recv_timeout(EVENTUAL_PROGRESS).unwrap() > 0);
         assert_eq!(f.engine.stats()?.inflight_bytes, SIZE);
-        for ((memory, start, _), handle) in ranges.iter().zip(handles) {
+        for handle in handles {
+            f.engine.unregister_memory(&handle)?;
+        }
+        // Removing every registration closes admission while the already-posted
+        // native request still owns every destination and its full byte charge.
+        assert_eq!(f.engine.stats()?.inflight_bytes, SIZE);
+        for (memory, start, _) in &ranges {
             assert!(matches!(
                 memory.read(*start, &mut [0]),
                 Err(Error::Unavailable(_))
             ));
-            f.engine.unregister_memory(&handle)?;
         }
         resume.send(()).unwrap();
         submit.join().unwrap()

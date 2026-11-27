@@ -537,6 +537,30 @@ Full reuse reached 6.44 GiB/s at 387.57 MiB. Its 11.28 ms p99 also
 exceeded the limit against fixed OrbiTE on this runner.
 [Independent stable repeat](https://github.com/OrbitInfra/OrbiTE/actions/runs/45962090941)
 
+#### Consumer file vectors
+
+An x86-64 ext4 comparison on `ad18ae1` used the public
+`register_host_memory_batch` and `file_vectored` calls with external host
+allocations. It checked every payload, range guard and CRC, including the
+physical tail. Each compiler ran three fresh processes per shape with three
+warmups and 100 samples. The figures below are process medians. The separate
+instrumented runs recorded the descriptor actually submitted to io_uring.
+[Byte-checked vector trials and native descriptor traces](https://github.com/OrbitInfra/OrbiTE/actions/runs/45968583499)
+
+| Registered ranges, total 64 MiB | Descriptor | Goodput GiB/s (stable / 1.85) | p99 ms (stable / 1.85) | CPU ns/byte (stable / 1.85) | Peak RSS MiB (stable / 1.85) |
+|---|---|---:|---:|---:|---:|
+| One aligned range | Direct | 0.537 / 0.566 | 118.08 / 119.17 | 0.309 / 0.310 | 134.23 / 134.25 |
+| Four aligned ranges | Direct | 0.541 / 0.541 | 118.96 / 118.87 | 0.307 / 0.304 | 134.21 / 134.19 |
+| Four ranges ending in a 128-byte tail | Buffered | 8.650 / 8.511 | 8.82 / 8.60 | 0.108 / 0.109 | 70.17 / 70.08 |
+
+Both direct shapes submitted one private 64 MiB buffer. The median elapsed
+time from SQE construction to observing the CQE ranged from 84.8 to 107.4 ms
+across the direct runs. Copying confirmed bytes took another 7.8–8.1 ms.
+The buffered shape submitted four native iovecs directly into the caller's
+ranges and served cached data on this host. Its RSS was about 64 MiB lower.
+These trials characterize the host file-vector API. The scalar acceptance
+comparison uses its own caller and pairs both frozen engines on the same host.
+
 ### Singleton tmpfs tail latency
 
 The `tmpfs_tail_only` input of the native CPU workflow measures warmed, buffered
