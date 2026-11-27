@@ -68,12 +68,9 @@ impl Bounce {
         let offset = destination.wrapping_sub(raw as usize) % HUGE_PAGE;
         // SAFETY: offset is strictly less than the extra space reserved above.
         let ptr = unsafe { base.cast::<u8>().add(offset) };
-        let head = (ptr.as_ptr() as usize).wrapping_neg() % HUGE_PAGE;
-        let whole = length.saturating_sub(head) / HUGE_PAGE * HUGE_PAGE;
-        if whole != 0 {
-            // SAFETY: advise only whole huge pages strictly inside the owned payload.
-            unsafe { libc::madvise(ptr.as_ptr().add(head).cast(), whole, libc::MADV_HUGEPAGE) };
-        }
+        // SAFETY: raw and capacity are the entire private mapping. Uniform advice
+        // keeps this payload in one VMA even when its PMD offset is nonzero.
+        unsafe { libc::madvise(raw, capacity, libc::MADV_HUGEPAGE) };
         Ok(Self {
             ptr,
             storage: Allocation::Mapping { base, capacity },
