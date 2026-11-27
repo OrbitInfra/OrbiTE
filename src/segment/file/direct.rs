@@ -105,7 +105,9 @@ impl FileLease {
             })
     }
 
-    /// Linux validates DIO alignment for each vector element independently.
+    /// Check file offset, element lengths and caller addresses. For a READ into
+    /// aggregate scratch, a null address denotes discarded padding and imposes no
+    /// address alignment. WRITE supplies actual pointers for all elements.
     #[cfg(feature = "io-uring")]
     pub(crate) fn file_for_iovecs(
         &self,

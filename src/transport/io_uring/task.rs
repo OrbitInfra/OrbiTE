@@ -93,6 +93,37 @@ impl Scratch {
         })
     }
 
+    /// Give each padding element a slice of one scratch lease before submitting
+    /// the vector to the kernel. A protected READ submits its own contiguous buffer.
+    #[allow(unsafe_code)]
+    fn bind_padding(
+        transport: &super::IoUringTransport,
+        iovecs: &mut [libc::iovec],
+        operation: TransferOp,
+    ) -> Result<Option<Self>> {
+        let length = iovecs
+            .iter()
+            .filter(|v| v.iov_base.is_null())
+            .map(|v| v.iov_len)
+            .sum();
+        if length == 0 {
+            return Ok(None);
+        }
+        let scratch = Self::acquire(transport, length, 4096, false)?;
+        let base = scratch.address().as_ptr();
+        if operation == TransferOp::Write {
+            // SAFETY: this exclusive lease covers every padding byte. An idle
+            // slot may contain data from a previous READ.
+            unsafe { base.write_bytes(0, length) };
+        }
+        let mut offset = 0;
+        for iov in iovecs.iter_mut().filter(|v| v.iov_base.is_null()) {
+            iov.iov_base = base.wrapping_add(offset).cast();
+            offset += iov.iov_len;
+        }
+        Ok(Some(scratch))
+    }
+
     fn address(&self) -> NonNull<u8> {
         match self {
             Self::Slot(slot) => slot.ptr,
@@ -129,66 +160,41 @@ impl Task {
     ) -> Result<(Self, libc::iovec)> {
         if request.parts.vectored() {
             let (loans, spans) = request.parts.borrow_ranges(|m, o, n| m.dma_lease(o, n))?;
-            let padding_bytes = request
+            let mut iovecs: Vec<_> = request
                 .parts
                 .iter()
-                .filter(|part| part.local.is_none())
-                .map(|part| part.length)
-                .sum::<usize>();
-            let padding = if padding_bytes == 0 {
-                None
-            } else {
-                let scratch = Scratch::acquire(transport, padding_bytes, 4096, false)?;
-                if operation == TransferOp::Write {
-                    // SAFETY: this exclusive scratch lease covers all padding bytes.
-                    // A reused slot may contain bytes from an earlier READ.
-                    unsafe {
-                        scratch.address().as_ptr().write_bytes(0, padding_bytes);
-                    }
-                }
-                Some(scratch)
-            };
-            let mut scratch_offset = 0;
-            let mut iovecs = Vec::with_capacity(spans.len());
-            for (part, span) in request.parts.iter().zip(spans) {
-                let address = if let Some(span) = span {
-                    loans[span.loan]
-                        .address()
-                        .as_ptr()
-                        .wrapping_add(span.offset)
-                } else {
-                    let scratch = padding
-                        .as_ref()
-                        .ok_or(Error::Internal("missing file padding scratch"))?;
-                    let address = scratch.address().as_ptr().wrapping_add(scratch_offset);
-                    scratch_offset += part.length;
-                    address
-                };
-                iovecs.push(libc::iovec {
-                    iov_base: address.cast(),
+                .zip(spans)
+                .map(|(part, span)| libc::iovec {
+                    iov_base: span.map_or(std::ptr::null_mut(), |span| {
+                        loans[span.loan]
+                            .address()
+                            .as_ptr()
+                            .wrapping_add(span.offset)
+                            .cast()
+                    }),
                     iov_len: part.length,
-                });
+                })
+                .collect();
+            let mut padding = None;
+            if operation == TransferOp::Write {
+                // WRITE submits these addresses, so check the actual padding alignment.
+                padding = Scratch::bind_padding(transport, &mut iovecs, operation)?;
             }
             let (file, alignment) = request.lease.file_for_iovecs(request.offset, &iovecs)?;
-            let (bounce, padding) = if request.lease.is_direct_read(operation, &file) {
-                // Padding only advances the position in the private READ buffer.
-                for (iov, part) in iovecs.iter_mut().zip(request.parts.iter()) {
-                    if part.local.is_none() {
-                        iov.iov_base = std::ptr::null_mut();
-                    }
-                }
-                drop(padding);
-                (
-                    Some(Scratch::acquire(
-                        transport,
-                        request.length,
-                        alignment,
-                        true,
-                    )?),
-                    None,
-                )
+            let bounce = if request.lease.is_direct_read(operation, &file) {
+                // The kernel sees one aligned buffer. A null destination in the
+                // scatter list advances the file position without publishing bytes.
+                Some(Scratch::acquire(
+                    transport,
+                    request.length,
+                    alignment,
+                    true,
+                )?)
             } else {
-                (None, padding)
+                if operation == TransferOp::Read {
+                    padding = Scratch::bind_padding(transport, &mut iovecs, operation)?;
+                }
+                None
             };
             let span = libc::iovec {
                 iov_base: bounce
