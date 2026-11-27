@@ -14,6 +14,15 @@ pub(super) const OFFER_SIZE: usize = IDENTITY_SIZE + 8 + DESCRIPTOR_SIZE + 1;
 pub(super) const BINDING_SIZE: usize = REQUEST_SIZE + 2 * IDENTITY_SIZE + 8 + 1;
 const _: () = assert!(BINDING_SIZE == super::COMPLETION_MESSAGE_SIZE);
 pub(super) const MR_AUTHORITY: u8 = 2;
+pub(super) const HOST_WINDOW: u8 = 3;
+
+pub(super) fn reusable(profile: u8) -> bool {
+    matches!(profile, 1 | HOST_WINDOW)
+}
+
+pub(super) fn peer_invalidates(profile: u8) -> bool {
+    matches!(profile, 0 | 1)
+}
 pub(super) const ACCEPT: u8 = 1;
 pub(super) const GRANT: u8 = 2;
 pub(super) const DONE: u8 = 3;
@@ -157,6 +166,10 @@ impl BoundDone {
 }
 
 impl Binding {
+    pub(super) fn reusable(&self) -> bool {
+        reusable(self.0[BINDING_SIZE - 1])
+    }
+
     pub(super) fn new(
         request: &Request,
         source: Identity,
@@ -164,7 +177,7 @@ impl Binding {
         grant: u64,
         profile: u8,
     ) -> Result<Self> {
-        if profile > MR_AUTHORITY {
+        if profile > HOST_WINDOW {
             return Err(Error::Protocol("RDMA release profile"));
         }
         if grant == 0 {

@@ -11,6 +11,7 @@ const WIRE_VERSION: u16 = 1;
 #[derive(Default)]
 struct State {
     armed: bool,
+    one: bool,
     held: usize,
     serial: u64,
     stopped: bool,
@@ -83,6 +84,14 @@ impl GrantGate {
     }
 
     pub(super) fn arm(&self) -> Result<()> {
+        self.arm_grants(false)
+    }
+
+    pub(super) fn hold_one(&self) -> Result<()> {
+        self.arm_grants(true)
+    }
+
+    fn arm_grants(&self, one: bool) -> Result<()> {
         let mut state = self
             .control
             .state
@@ -91,7 +100,22 @@ impl GrantGate {
         if state.armed || state.held != 0 || state.stopped {
             return Err("gate still owns a previous interruption".into());
         }
+        state.one = one;
         state.armed = true;
+        Ok(())
+    }
+
+    pub(super) fn resume(&self) -> Result<()> {
+        let mut state = self
+            .control
+            .state
+            .lock()
+            .map_err(|_| "gate lock poisoned")?;
+        if !state.one || state.held != 1 {
+            return Err("expected one held grant".into());
+        }
+        state.armed = false;
+        self.control.changed.notify_all();
         Ok(())
     }
 
@@ -198,7 +222,7 @@ fn relay(mut client: TcpStream, upstream: SocketAddr, control: &Control) -> Resu
     let request = frame::<52>(&mut client)?;
     let (operation, _) = header(&request)?;
     if !matches!(operation, 0 | 4 | 5) {
-        return Err("relay rejects payload and sliced opcodes".into());
+        return Err(format!("relay rejects control opcode {operation}").into());
     }
     let mut source = TcpStream::connect_timeout(&upstream, TIMEOUT)?;
     source.set_read_timeout(Some(TIMEOUT))?;
@@ -235,7 +259,7 @@ fn relay(mut client: TcpStream, upstream: SocketAddr, control: &Control) -> Resu
         return Err("missing source ready at relay".into());
     }
     let mut state = control.state.lock().map_err(|_| "gate lock poisoned")?;
-    if state.armed {
+    if state.armed && (!state.one || state.held == 0) {
         let serial = state.serial;
         state.held += 1;
         control.changed.notify_all();
@@ -252,11 +276,13 @@ fn relay(mut client: TcpStream, upstream: SocketAddr, control: &Control) -> Resu
                 .map_err(|_| "gate lock poisoned")?
                 .0;
         }
-        let _ = client.shutdown(Shutdown::Both);
-        let _ = source.shutdown(Shutdown::Both);
         state.held -= 1;
         control.changed.notify_all();
-        return Ok(());
+        if state.serial != serial || state.stopped {
+            let _ = client.shutdown(Shutdown::Both);
+            let _ = source.shutdown(Shutdown::Both);
+            return Ok(());
+        }
     }
     drop(state);
     client.write_all(&ready)?;

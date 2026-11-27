@@ -319,11 +319,17 @@ unlink/unregister races. Physical HP-TCP rails and CXL need installed runs.
 
 Requirements: B04 host profile; F02/F04/F12/F15/F16/F18 foundations.
 
-OrbitRDMA 0.1.1 provides all native RDMA operations, including device and port
+OrbitRDMA 0.1.2 provides all native RDMA operations, including device and port
 queries, shared CQs, RC setup, registrations, windows, events, and teardown.
-OrbiTE owns queue scheduling, grants and cross-transport loans. CPU controls cover chained posts, fenced SEND with invalidation,
-RECV slots, private host grant retirement and CQ error fields. A single-VM
-RXE round trip checks the private-PD profile. The packaged two-host gate checks
+OrbiTE owns queue scheduling, grants and cross-transport loans. Reusable host grants
+use independent windows, bound plain SEND/DONE receipts and owner-local invalidation.
+On Linux RXE, the [two-process gate](installed-host.md#shared-host-windows)
+retired A while B stayed bound to the original QP, then completed B for both
+READ and WRITE. It also recovered the bound range after a forced disconnect.
+The packaged consumer passed on stable and Rust 1.85. CPU controls cover
+delayed LOCAL_INV, sticky private-MR cleanup, chained posts, fenced SEND with
+invalidation, RECV slots, private host grant retirement and CQ error fields.
+A single-VM RXE round trip checks the private-PD profile. The packaged two-host gate checks
 guarded READ/WRITE and fresh PD and QP retirement each round. Its physical RNIC
 profile is unqualified. [Private host grants](installed-host.md#private-host-grants)
 

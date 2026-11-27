@@ -2,7 +2,13 @@
 
 ## Unreleased
 
-- OrbitRDMA 0.1.1 supplies device and port queries, RC queues, host and GPU
+- OrbitRDMA 0.1.2 supplies shared host windows with owner-local revocation.
+  Both peers must run the same build. Reusable host grants encode the new
+  release profile in the existing binding. The requester sends a plain SEND
+  followed by DONE. The source replies only after physical grant retirement.
+  [Shared host windows](installed-host.md#shared-host-windows)
+
+- OrbitRDMA supplies device and port queries, RC queues, host and GPU
   registrations, events, data operations and native teardown. Direct host sources
   can set `host_source_reuse = false` to allocate a private PD, QP and
   exact-range MR for each grant. The existing MR-authority handshake governs

@@ -26,7 +26,6 @@ struct context {
     int (*poll)(struct ibv_cq *, int, struct ibv_wc *);
     int (*post)(struct ibv_qp *, struct ibv_send_wr *, struct ibv_send_wr **);
     int (*dealloc_mw)(struct ibv_mw *);
-    struct ibv_mr *bound_mr;
     struct ibv_qp *last_qp;
     uint32_t data_lkey;
 };
@@ -106,7 +105,6 @@ static int post(struct ibv_qp *qp, struct ibv_send_wr *wr, struct ibv_send_wr **
     pthread_mutex_lock(&lock);
     unsigned index = find(qp->context);
     struct context context = contexts[index];
-    if (wr->opcode == IBV_WR_BIND_MW) contexts[index].bound_mr = wr->bind_mw.bind_info.mr;
     if (operation(wr->opcode) && wr->num_sge == 1) contexts[index].data_lkey = wr->sg_list[0].lkey;
     if (memory_fault.armed && memory_fault.kind == 2 && wr->opcode == IBV_WR_BIND_MW
             && qp->context == memory_context && !memory_fault.attempts) {

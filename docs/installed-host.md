@@ -60,6 +60,27 @@ counters, bounded QP creation and reuse must match the workload. TCP carries onl
 rendezvous; the controller checks the round ledger, provider mappings, child exit
 and released locks.
 
+## Shared host windows
+
+Build the host consumer on both peers from the same revision. Choose each
+host's active device, physical port and GID index. Use the source control
+address and a routable local IP on each host.
+
+```bash
+python3 tests/hardware/build_installed.py --consumer host --toolchain stable --output "$ART"
+# On the source
+"$ART/installed/bin/orbite-rdma-host" windows listen "$CONTROL_ADDR" "$SOURCE_IP" "$DEVICE" "$PORT" "$GID"
+# On the requester
+"$ART/installed/bin/orbite-rdma-host" windows connect "$CONTROL_ADDR" "$REQUESTER_IP" "$DEVICE" "$PORT" "$GID"
+```
+
+Repeat with `--toolchain 1.85.0`. The control relay holds B after its window
+bind and RQ post. A completes on the same direction-specific QP while B is
+held. The source checks that A is locally writable and B is busy. Both peers
+then verify B's payload, guard bytes, QP counters and native drain. A final
+interruption closes the relay with a live window. A same-host RXE run exercises
+the software provider. The physical two-host run remains queued.
+
 ## Private host grants
 
 Use `installed-private-host` to exercise `host_source_reuse = false` on the
@@ -213,7 +234,7 @@ frozen cases use 64 KiB READ/polling and WRITE/events.
 
 After three healthy rounds, the real `ibv_dereg_mr` or `dealloc_mw` returns
 `EIO` through the same scoped filter, and any retry is rejected. MR failure must
-keep the registration charge and backing; MW failure must keep its parent MR
+keep the registration charge and backing; MW failure must keep its private exact-range MR
 borrow, grant, DMA loan, quota and key domain. A real PD destroy must still
 return `EBUSY`. Both processes then create fresh engines at the same addresses:
 old epochs fail before QP creation, three rounds pass, and the old quarantined

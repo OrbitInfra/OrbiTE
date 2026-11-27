@@ -199,9 +199,9 @@ checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
 name = "orbit-rdma"
-version = "0.1.1"
+version = "0.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6db49f36471c681f73762e547f16fff6e5bbeec68fc83eaef61b7518bc72f6dc"
+checksum = "c67b761d337faba2792d31922d47b3682b9d50652d6eb17bde2a0f2556b89aff"
 dependencies = [
  "bindgen",
  "cc",

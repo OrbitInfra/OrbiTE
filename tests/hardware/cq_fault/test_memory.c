@@ -49,14 +49,17 @@ static void run(unsigned kind, unsigned source) {
     struct ibv_pd pd = {.context = &context[0]};
     struct ibv_mr mr = {.context = &context[0], .pd = &pd, .addr = (void *)1024, .length = 65536, .lkey = 7, .rkey = 8};
     struct ibv_mw mw = {.context = &context[0], .pd = &pd, .rkey = 9};
-    contexts[0].bound_mr = &mr; contexts[0].data_lkey = mr.lkey;
+    setenv("ORBITE_HOST_MODE", "installed-memory-cleanup", 1);
+    memory_registration(&mr, IBV_ACCESS_MW_BIND);
+    memory_registration(&mr, IBV_ACCESS_MW_BIND);
+    contexts[0].data_lkey = mr.lkey;
     native_dereg_mr = fake_dereg; native_dealloc_pd = fake_pd;
     struct memory_snapshot output;
     assert(sizeof(output) == 88);
-    assert(orbite_memory_fault(2, 0, 0, 0, NULL, &output) == EINVAL);
-    assert(orbite_memory_fault(1, kind, source, 1024, "test-rail", &output) == 0);
+    assert(orbite_memory_fault(2, 0, 0, 0, 0, NULL, &output) == EINVAL);
+    assert(orbite_memory_fault(1, kind, source, 1024, 65536, "test-rail", &output) == 0);
     assert(output.armed == 1 && output.attempts == 0);
-    assert(orbite_memory_fault(1, kind, source, 1024, "test-rail", &output) == EINVAL);
+    assert(orbite_memory_fault(1, kind, source, 1024, 65536, "test-rail", &output) == EINVAL);
     struct ibv_mr unrelated = mr; unrelated.addr = (void *)2048;
     assert(ibv_dereg_mr(&unrelated) == 0 && passthrough == 1);
     if (kind == 1) assert(ibv_dereg_mr(&mr) == EIO);
@@ -64,12 +67,13 @@ static void run(unsigned kind, unsigned source) {
         struct ibv_qp qp = {.context = &context[0], .qp_num = 3};
         struct ibv_send_wr wr = {.wr_id = 4, .opcode = IBV_WR_BIND_MW};
         wr.bind_mw.mw = &mw; wr.bind_mw.rkey = 10; wr.bind_mw.bind_info.mr = &mr;
+        wr.bind_mw.bind_info.addr = (uintptr_t)mr.addr; wr.bind_mw.bind_info.length = mr.length;
         struct ibv_send_wr *bad = NULL;
         assert(post(&qp, &wr, &bad) == 0);
         assert(context[0].ops.dealloc_mw(&mw) == EIO);
     }
     assert(native_calls == 1 && write(blocked_fd, "x", 1) == 1);
-    assert(orbite_memory_fault(2, 0, 0, 0, NULL, &output) == 0);
+    assert(orbite_memory_fault(2, 0, 0, 0, 0, NULL, &output) == 0);
     assert(output.mr == (uintptr_t)&mr && output.code == EIO && output.attempts == 1 && probes == 1);
     pid_t retry = fork(); assert(retry >= 0);
     if (!retry) { if (kind == 1) ibv_dereg_mr(&mr); else memory_dealloc_mw(&mw); _exit(0); }

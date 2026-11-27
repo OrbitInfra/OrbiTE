@@ -150,6 +150,13 @@ pub(super) struct GrantResources {
 }
 
 impl GrantResources {
+    pub(super) fn bound(&self) -> bool {
+        self.handles
+            .host_window
+            .as_ref()
+            .map_or(self.window_bound, |w| w.is_bound())
+    }
+
     pub(super) fn close(
         &mut self,
         connection: &ConnectionResources,
@@ -176,16 +183,10 @@ impl GrantResources {
         self.close_native(verbs)
     }
 
-    fn close_native(&mut self, verbs: &sys::Verbs) -> std::result::Result<(), (&'static str, i32)> {
-        if let Err(Error::Unquiesced { operation, code }) = self.device.asynchronous.check() {
-            return Err((operation, code));
-        }
-        self.handles.destroy_gpu_key(verbs)?;
-        if self.handles.gpu_parent {
-            // Even a retiring registration must keep its parent MR until CUDA
-            // confirms visibility and restores the submitting thread's context.
-            self.buffer.confirm_visibility()?;
-        }
+    pub(super) fn detach_window(
+        &mut self,
+        verbs: &sys::Verbs,
+    ) -> std::result::Result<(), (&'static str, i32)> {
         if !self.handles.mw.is_null() {
             // SAFETY: The grant owns this window and its PD throughout teardown, including a
             // failed deallocation.
@@ -199,14 +200,29 @@ impl GrantResources {
                 .unwrap_or_else(|p| p.into_inner())
                 .active_windows -= 1;
         }
+        Ok(())
+    }
+
+    fn close_native(&mut self, verbs: &sys::Verbs) -> std::result::Result<(), (&'static str, i32)> {
+        if let Err(Error::Unquiesced { operation, code }) = self.device.asynchronous.check() {
+            return Err((operation, code));
+        }
+        self.handles.destroy_gpu_key(verbs)?;
+        if self.handles.gpu_parent {
+            // Even a retiring registration must keep its parent MR until CUDA
+            // confirms visibility and restores the submitting thread's context.
+            self.buffer.confirm_visibility()?;
+        }
+        self.detach_window(verbs)?;
+        if self.handles.host_window.is_some() || self.cached_mr.is_none() {
+            self.handles.retire(verbs)?;
+        }
         if let Some(cached) = &mut self.cached_mr {
             cached.release().map_err(|error| match error {
                 Error::Unquiesced { operation, code } => (operation, code),
                 _ => ("RDMA MR borrow release", libc::EIO),
             })?;
             self.handles.mr = std::ptr::null_mut();
-        } else {
-            self.handles.retire(verbs)?;
         }
         if let Some(message) = &mut self.message {
             message.close(verbs)?;
@@ -323,7 +339,7 @@ impl RdmaGrant {
         if !request.resources.as_ref().is_some_and(|r| {
             r.grant
                 .as_ref()
-                .is_some_and(|g| g.window_bound || (g.handles.remote_mr && !g.handles.mr.is_null()))
+                .is_some_and(|g| g.bound() || (g.handles.remote_mr && !g.handles.mr.is_null()))
         }) || request.phase != Phase::Connected
         {
             return Err(Error::Unavailable("source MW has no completed bind"));

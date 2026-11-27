@@ -109,7 +109,12 @@ impl GrantDrain {
             && self.generation != 0
             && grant.generation == self.generation
             && grant.permission == self.permission
-            && !grant.window_bound
+            && !grant.bound()
+            && grant
+                .handles
+                .host_window
+                .as_ref()
+                .is_none_or(|w| w.is_invalidated())
     }
 }
 

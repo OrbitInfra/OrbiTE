@@ -9,7 +9,6 @@ pub(super) enum Operation {
     Read,
     Write,
     Bind,
-    #[cfg(test)]
     Invalidate,
     Send,
 }
@@ -215,7 +214,6 @@ impl SendWork {
             Operation::Write => 1,
             Operation::Read => 2,
             Operation::Bind => 5,
-            #[cfg(test)]
             Operation::Invalidate => 6,
             Operation::Send => 0,
         };
@@ -267,7 +265,6 @@ impl SendWork {
             }
             Operation::Bind => usage.completed_window_binds += successful as u64,
             Operation::Send => usage.completed_sends += successful as u64,
-            #[cfg(test)]
             Operation::Invalidate => usage.completed_window_invalidations += successful as u64,
         }
         if completion.status != 0 {

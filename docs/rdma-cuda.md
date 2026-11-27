@@ -21,27 +21,34 @@ the host provider and devices. All engine, protocol,
 progress and resource owners are Rust. A small C shim only queries port rates
 from the installed libibverbs headers.
 
-The `rdma` feature uses OrbitRDMA 0.1.1 for every native verbs operation. The
+The `rdma` feature uses OrbitRDMA 0.1.2 for every native verbs operation. The
 combined `rdma,cuda` build also selects its dma-buf and mlx5 provider support.
 OrbiTE retains CUDA allocation/export lifetimes, peer grants, rail selection
 and progress scheduling.
 
 For a direct host source, `RdmaConfig.host_source_reuse` defaults to `true`.
-Each reused QP requires a per-grant memory window and an exact remote-invalidation
-receipt. Set it to `false` on a source whose provider cannot report that
-receipt. OrbiTE registers only the granted byte range with its requested
-permission on a fresh QP and private PD. The peer sends the existing plain
-completion message. QP drain, MR deregistration and PD cleanup retire the
-authority. The requester learns the grant profile during the handshake.
+When both peers select Direct memory and the source is host DRAM, each grant on a
+reusable RC QP gets a type-2B window and a private bind-only MR over its exact
+range. OrbiTE also keeps the existing registered-view lease through grant cleanup,
+including for private staging slots. The private MR is the bind target. After payload completion the requester posts a fenced plain SEND with the
+grant binding, waits for its send CQE and sends the same binding in DONE. The
+source matches both DONE and its receive CQE, posts LOCAL_INV, and waits for the
+matching local work ID, QPN and successful opcode. It then deallocates the MW and
+deregisters the private MR before releasing the DMA loan, sending ACK and
+publishing READY. Another window on that QP can stay open throughout. If the
+peer disconnects, the owner fences the QP, resets it, detaches still-bound
+windows, and drains the native owners before releasing the ranges.
 
-The Debian 12 RXE provider on Linux 6.1 reports flags `0x5` for a receive
-with invalidation. Its checksum bit cannot establish invalidation through the
-userspace verbs ABI. Use the private source profile on this stack. With an
-active software device, run
+Set `host_source_reuse = false` to give each Direct host grant a fresh QP,
+private PD and exact-range remote MR. Staged window grants and reusable GPU
+DevX keys use a fenced SEND_WITH_INV and require a receive completion carrying
+the matching invalidated key. A checksum flag alone cannot supply that receipt.
+
+The [two-process host window gate](installed-host.md#shared-host-windows) checks
+READ and WRITE on one QP per direction, guard bytes, independent retirement and
+interrupted cleanup. For the private host profile run
 `cargo run --locked --features rdma --example rdma_roundtrip -- orbit_rxe 1 1`
-using the actual device, port and GID index. The example checks host READ and
-WRITE, all guard bytes, and both engines' shutdown.
-[Kernel RXE completions](https://github.com/torvalds/linux/blob/v6.1/drivers/infiniband/sw/rxe/rxe_resp.c#L898-L920) · [rdma-core WC flags](https://github.com/linux-rdma/rdma-core/blob/v44.0/libibverbs/verbs.h#L547-L568)
+with the selected device, port and GID index.
 
 A request names `Transport::Tcp`, `Transport::Rdma` or `Transport::Nvlink`, or
 uses `Transport::Unspec` for [transport selection](transport-selection.md). Each
@@ -358,14 +365,12 @@ publishing the grant; Type-2B support is required. The PD keeps a bounded key
 history so an old key cannot regain authority, parking exhausted MW indices up
 to `max_window_key_indices`.
 
-The requester posts READ/WRITE work and sends a fenced `SEND_WITH_INV` after
-all payload WRs complete. `signal_interval` defaults to 1. A larger interval
+The requester posts READ/WRITE work and sends the fenced completion message for the negotiated source profile after all payload WRs complete. `signal_interval` defaults to 1. A larger interval
 signals every Nth WR and the actual post tail, capped at half the SQ depth
 (minimum one). Each possible flush still needs one CQ slot per outstanding WR.
 `RdmaStats::payload_send_cqes` counts physical payload receipts, while
 `completed_reads` and `completed_writes` count successful WRs. The source accepts completion only when its
-RQ receives the exact 141-byte binding and invalidated key, then cleans the MW
-and grant, sends ACK and publishes READY. `RdmaQp` tracks exact outstanding WR
+RQ receives the exact grant binding and the control channel delivers matching DONE. Each profile then completes its revocation steps before ACK. Only reusable grants publish READY. `RdmaQp` tracks exact outstanding WR
 identities, so old or duplicate completions cannot repay current debt. Only an
 explicit pre-authority cache miss permits a reconnect; ambiguous writes are never
 replayed. This protocol is OrbiTE's own, not TENT wire compatibility.

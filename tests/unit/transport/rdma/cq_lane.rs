@@ -160,6 +160,7 @@ fn unopened(runtime: &RdmaTransport) -> RdmaGrant {
             remote: None,
             permission: 0,
             closed: false,
+            windows_reset: false,
             lease: Some(ConnectionLease {
                 usage: Arc::clone(&runtime.usage),
                 drained: Arc::clone(&runtime.drained),
@@ -861,7 +862,8 @@ fn blocking_native_retirement_detaches_before_destroy_and_keeps_the_store_availa
 #[test]
 fn source_receive_progresses_without_sq_debt_and_control_bytes_end_before_output_handoff() {
     let runtime = configured("ok", 1);
-    let binding = [0x42; COMPLETION_MESSAGE_SIZE];
+    let mut binding = [0x42; COMPLETION_MESSAGE_SIZE];
+    binding[COMPLETION_MESSAGE_SIZE - 1] = 0;
     let mut source = runtime.staging_endpoint(8, 2).unwrap();
     source.connect(&source.descriptor()).unwrap();
     source.bind_window().unwrap();
@@ -1004,7 +1006,8 @@ fn wr_namespace_exhaustion_never_wraps_or_reaches_native_post() {
 fn received_binding_wrong_cq_qp_and_old_wr_cannot_confirm_a_source_grant() {
     for case in ["binding", "old_wr", "qpn", "wrong_cq", "opcode"] {
         let runtime = configured("ok", 1);
-        let binding = [0x42; COMPLETION_MESSAGE_SIZE];
+        let mut binding = [0x42; COMPLETION_MESSAGE_SIZE];
+        binding[COMPLETION_MESSAGE_SIZE - 1] = 0;
         let mut endpoint = runtime.staging_endpoint(8, 2).unwrap();
         endpoint.connect(&endpoint.descriptor()).unwrap();
         endpoint.bind_window().unwrap();
@@ -1063,7 +1066,8 @@ fn receive_and_message_failures_retain_exact_native_owners_without_drop_retries(
             .staging_endpoint(8, if sending { 0 } else { 2 })
             .unwrap();
         endpoint.connect(&endpoint.descriptor()).unwrap();
-        let binding = [0x42; COMPLETION_MESSAGE_SIZE];
+        let mut binding = [0x42; COMPLETION_MESSAGE_SIZE];
+        binding[COMPLETION_MESSAGE_SIZE - 1] = 0;
         let posted = if sending {
             endpoint
                 .transfer(

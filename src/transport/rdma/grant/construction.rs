@@ -124,6 +124,11 @@ impl GrantConstruction {
                 _worker: worker_lease,
                 device,
                 handles: sys::MemoryHandles {
+                    host_window: (permission != 0
+                        && is_direct
+                        && !memory.is_cuda()
+                        && !matches!(connection, Connection::Fresh(None)))
+                    .then(orbit_rdma::provider::SharedWindowControl::default),
                     native: orbit_rdma::provider::Memory {
                         remote_mr,
                         gpu_parent: gpu_source && !remote_mr,
@@ -186,11 +191,15 @@ impl GrantConstruction {
                 ));
             }
             grant.cached_mr = Some(registration);
-            grant.handles.mr = grant
-                .cached_mr
-                .as_ref()
-                .ok_or(Error::Internal("missing prepared MR"))?
-                .handle()?;
+            // Registered exports and private staging slots keep their existing cache
+            // lease. Each reusable host window instead binds its own exact-range MR.
+            if grant.handles.host_window.is_none() {
+                grant.handles.mr = grant
+                    .cached_mr
+                    .as_ref()
+                    .ok_or(Error::Internal("missing prepared MR"))?
+                    .handle()?;
+            }
         }
         self.open(transport, deadline).map(Some)
     }
@@ -251,6 +260,7 @@ impl GrantConstruction {
                             remote: None,
                             permission,
                             closed: false,
+                            windows_reset: false,
                             lease: Some(self.connection_lease.take().ok_or(Error::Internal(
                                 "missing prepared connection reservation",
                             ))?),

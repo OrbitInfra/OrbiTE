@@ -39,7 +39,7 @@ impl ProgressState {
             return;
         };
         let mut request = record.state.lock().unwrap_or_else(|p| p.into_inner());
-        let result = if completion.qpn != request.qpn {
+        let mut result = if completion.qpn != request.qpn {
             Err(Error::Protocol("RDMA completion QP identity"))
         } else if let Some(work) = &mut request.work {
             work.queue.complete(completion, work.operation, now)
@@ -51,15 +51,23 @@ impl ProgressState {
             if request.work.as_ref().is_some_and(|w| w.queue.finished()) {
                 request.phase = Phase::Connected;
             }
-            if operation == Some(slice::Operation::Bind) {
+            if matches!(
+                operation,
+                Some(slice::Operation::Bind | slice::Operation::Invalidate)
+            ) {
                 if let Some(grant) = request.resources.as_mut().and_then(|r| r.grant.as_mut()) {
-                    grant.window_bound = true;
-                }
-            }
-            #[cfg(test)]
-            if operation == Some(slice::Operation::Invalidate) {
-                if let Some(grant) = request.resources.as_mut().and_then(|r| r.grant.as_mut()) {
-                    grant.window_bound = false;
+                    if let Some(window) = &mut grant.handles.host_window {
+                        result = window
+                            .complete(
+                                completion.qpn,
+                                completion.id,
+                                completion.status,
+                                completion.opcode,
+                            )
+                            .map_err(|_| Error::Protocol("RDMA host window completion"));
+                    } else {
+                        grant.window_bound = operation == Some(slice::Operation::Bind);
+                    }
                 }
             }
         }
@@ -118,19 +126,30 @@ impl ProgressState {
                 .as_mut()
                 .ok_or(Error::Internal("missing RDMA receive owner"))?
                 .grant_mut()?;
-            if (!grant.window_bound && !grant.handles.remote_mr) || grant.rkey != receipt.rkey {
+            if (!grant.bound() && !grant.handles.remote_mr) || grant.rkey != receipt.rkey {
                 return Err(Error::Protocol("RDMA receive changed grant authority"));
             }
-            grant.window_bound = false;
-            // MW authority is already invalidated. An isolated GPU MR is revoked
-            // by QP/MR/PD teardown before the source ACK and loan release.
+            let host_window = grant.handles.host_window.is_some();
+            if host_window
+                != (receipt.expected[COMPLETION_MESSAGE_SIZE - 1]
+                    == super::super::protocol::HOST_WINDOW)
+            {
+                return Err(Error::Protocol(
+                    "RDMA receive changed window revocation mode",
+                ));
+            }
+            // Plain SEND acknowledges peer use. Only the owner's LOCAL_INV can retire a host window.
+            if !host_window {
+                grant.window_bound = false;
+            }
             receipt.mark_completed();
             let mut usage = self.usage.lock().unwrap_or_else(|p| p.into_inner());
             usage.completed_receives += 1;
             if grant.handles.gpu_parent {
                 usage.invalidated_gpu_grant_keys += 1;
             } else {
-                usage.completed_window_invalidations += u64::from(!grant.handles.remote_mr);
+                usage.completed_window_invalidations +=
+                    u64::from(!host_window && !grant.handles.remote_mr);
             }
             drop(usage);
             drop(request);

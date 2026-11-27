@@ -205,7 +205,7 @@ impl ReceiveQueue {
             });
         }
         // GRH describes the network header. It conveys no information about remote invalidation.
-        let message_flags = completion.flags & !sys::GRH;
+        let message_flags = completion.flags & !(sys::GRH | sys::ffi::IBV_WC_IP_CSUM_OK);
         if completion.opcode != 128
             || completion.length != COMPLETION_MESSAGE_SIZE as u32
             || !matches!(message_flags, 0 | sys::WITH_INVALIDATE)
@@ -220,9 +220,9 @@ impl ReceiveQueue {
             .find(|work| {
                 work.posted()
                     && !work.completed()
-                    && if work.expected[COMPLETION_MESSAGE_SIZE - 1]
-                        == super::super::protocol::MR_AUTHORITY
-                    {
+                    && if !super::super::protocol::peer_invalidates(
+                        work.expected[COMPLETION_MESSAGE_SIZE - 1],
+                    ) {
                         message_flags == 0
                     } else {
                         message_flags == sys::WITH_INVALIDATE

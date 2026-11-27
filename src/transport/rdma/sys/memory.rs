@@ -61,7 +61,11 @@ pub(super) unsafe extern "C" fn prepare_grant(
     unsafe {
         let m = &mut *memory;
         let source = m.source();
-        provider::prepare_grant(h, &mut m.native, device, buffer, length, permission, source)
+        if m.host_window.is_some() {
+            provider::prepare_shared_window(h, &mut m.native, device, buffer, length, permission)
+        } else {
+            provider::prepare_grant(h, &mut m.native, device, buffer, length, permission, source)
+        }
     }
 }
 pub(super) unsafe extern "C" fn allocate_window(
