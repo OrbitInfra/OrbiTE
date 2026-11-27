@@ -16,6 +16,7 @@ struct Trace {
     invalid_sq_head: bool,
     invalid_cqe: bool,
     read_bytes_before_eio: Option<usize>,
+    hold_read_receipt: Option<(mpsc::SyncSender<usize>, mpsc::Receiver<()>)>,
     truncate_to: Option<u64>,
     errors: std::collections::VecDeque<i32>,
     alive: std::sync::Weak<()>,
@@ -80,6 +81,12 @@ impl Ring for Observed {
                         // Replace a real, completed READ receipt after its DMA writes.
                         result = -libc::EIO;
                     }
+                }
+                let hold = trace.hold_read_receipt.take();
+                drop(trace);
+                if let Some((observed, resume)) = hold {
+                    observed.send(bytes).unwrap();
+                    resume.recv_timeout(EVENTUAL_PROGRESS).unwrap();
                 }
             }
             self.receipts
@@ -173,6 +180,9 @@ fn observed_at(
     });
     Ok((f, trace))
 }
+
+#[path = "external_vector.rs"]
+mod external_vector;
 
 #[path = "inline_group.rs"]
 mod group;
