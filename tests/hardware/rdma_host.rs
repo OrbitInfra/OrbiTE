@@ -56,6 +56,7 @@ fn number(name: &str) -> Result<usize> {
 struct Case {
     selector: bool,
     selective: bool,
+    private_host: bool,
     source: bool,
     read: bool,
     parents: usize,
@@ -69,9 +70,11 @@ struct Case {
 
 impl Case {
     fn load() -> Result<Self> {
+        let mode = env::var("ORBITE_HOST_MODE")?;
         let case = Self {
-            selective: env::var("ORBITE_HOST_MODE")? == "installed-selective",
-            selector: env::var("ORBITE_HOST_MODE")?.as_str() == "installed-selector",
+            selective: mode == "installed-selective",
+            selector: mode == "installed-selector",
+            private_host: mode == "installed-private-host",
             source: match env::var("ORBITE_SHARED_ROLE")?.as_str() {
                 "source" => true,
                 "requester" => false,
@@ -97,7 +100,7 @@ impl Case {
                 .map(str::to_owned)
                 .collect(),
         };
-        let max_block = if env::var("ORBITE_HOST_MODE")?.as_str() == "installed-inflight-dma" {
+        let max_block = if mode == "installed-inflight-dma" {
             16 << 20
         } else {
             4 << 20
@@ -128,6 +131,14 @@ impl Case {
         }
         if case.length() > 256 << 20 {
             return Err("installed-host backing exceeds 256 MiB".into());
+        }
+        if case.private_host
+            && (case.parents != 1
+                || case.lanes != 1
+                || case.mask.count_ones() != 1
+                || case.payload > case.block)
+        {
+            return Err("private host gate requires one grant on one rail per round".into());
         }
         Ok(case)
     }
@@ -410,7 +421,18 @@ fn rounds(
             case.mask.count_ones() as usize
         };
         if stats.opened_devices != 2
-            || stats.persistent_mrs != 4
+            || stats.retained_grants != 0
+            || stats.progress_failures != baseline.progress_failures
+            || stats.progress_recoveries != baseline.progress_recoveries
+            || stats.progress_lanes != active_rails * case.lanes
+            || stats.active_cqs != 2 * stats.progress_lanes
+            || stats.staging_bytes != 0
+        {
+            return Err(format!("unexpected post-round RDMA resources: {stats:?}").into());
+        }
+        if case.private_host {
+            resources::private_grant(case, round, &stats)?;
+        } else if stats.persistent_mrs != 4
             || stats.opened_persistent_mrs != 4
             || stats.persistent_source_mrs != 2
             || stats.opened_connections == 0
@@ -420,12 +442,6 @@ fn rounds(
             || stats.opened_connections - stats.closed_connections > (2 * case.lanes) as u64
             || stats.completed_reusable_grants <= last_completed
             || (round > 0 && stats.reused_connections <= last_reused)
-            || stats.retained_grants != 0
-            || stats.progress_failures != baseline.progress_failures
-            || stats.progress_recoveries != baseline.progress_recoveries
-            || stats.progress_lanes != active_rails * case.lanes
-            || stats.active_cqs != 2 * stats.progress_lanes
-            || stats.staging_bytes != 0
         {
             return Err(format!("persistent MR/QP contract failed: {stats:?}").into());
         }
@@ -489,6 +505,7 @@ fn main() -> Result<()> {
         "installed-inflight-dma" => inflight::run(&case),
         "installed-memory-cleanup" => memory::run(&case),
         mode @ ("installed-host"
+        | "installed-private-host"
         | "installed-rail-accounting"
         | "installed-selective"
         | "installed-selector"

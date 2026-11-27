@@ -193,6 +193,19 @@ def build(root, output, toolchain, allow_dirty=False, consumer_kind="host"):
             fault_library = output / 'liborbite_cq_fault.so'
             run('fault-library', [*compiler, *flags, '-fPIC', '-shared',
                                  str(fault_sources / 'cq_fault.c'), '-ldl', '-o', str(fault_library)])
+            lookup_root = output / 'lookup-control'
+            lookup_root.mkdir()
+            mock_verbs = lookup_root / 'libibverbs.so.1'
+            run('lookup-provider-build', [*compiler, *flags, '-fPIC', '-shared',
+                                          str(fault_sources / 'test_lookup_provider.c'), '-o', str(mock_verbs)])
+            other = lookup_root / 'libother.so'
+            shutil.copyfile(mock_verbs, other)
+            control = lookup_root / 'test_lookup'
+            run('lookup-control-build', [*compiler, *flags, str(fault_sources / 'test_lookup.c'),
+                                         '-ldl', '-o', str(control)])
+            run('lookup-control', ['env', f'LD_PRELOAD={fault_library}', f'LD_LIBRARY_PATH={lookup_root}',
+                                   f'ORBITE_RESTART_ROOT={lookup_root}', 'ORBITE_RESTART_GENERATION=0',
+                                   'ORBITE_GDR_OBSERVE=1', str(control), str(other)], cwd=lookup_root)
             for name in ('cq_fault', 'inflight', 'memory', 'dependency', 'accounting'):
                 control = output / ('test_' + name)
                 run(name + '-control-build', [*compiler, *flags, str(fault_sources / ('test_' + name + '.c')),

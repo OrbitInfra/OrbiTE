@@ -349,7 +349,11 @@ profile of the recorded S20 artifact. The unrun native profiles are now out of s
 
 The [OrbitRDMA host control](rdma-cuda.md#build-and-select-a-path) runs two
 public engines using the OrbitRDMA provider over one Linux RXE port with private host source grants. It checks
-READ, WRITE, guard bytes and shutdown. Physical two-host runs remain queued.
+READ, WRITE, guard bytes and shutdown. For the unqualified physical two-host profile,
+build the host consumer with `python3 tests/hardware/build_installed.py --consumer host --toolchain stable --output "$ART"`
+and run `python3 tests/hardware/run.py --profile "$TWO_RNIC_PRIVATE_HOST_PROFILE" --installation "$ART/manifest.json" --binary "$ART/installed/bin/orbite-rdma-host" --output "$RUN/private-host"`.
+Repeat with Rust 1.85.0 and separate output directories. The
+[private host cases](installed-host.md#private-host-grants) check per-grant PD and QP retirement.
 
 No GPU or RDMA machine has been available since 2026-11-03. The profiles below
 wait for one hardware pass. Each run uses fresh nodes with recorded host,

@@ -60,6 +60,33 @@ counters, bounded QP creation and reuse must match the workload. TCP carries onl
 rendezvous; the controller checks the round ledger, provider mappings, child exit
 and released locks.
 
+## Private host grants
+
+Use `installed-private-host` to exercise `host_source_reuse = false` on the
+two-host inventory above. Supply both of these entries in the profile's
+`cases` array, substituting its node names. Each case runs three rounds.
+
+```json
+[
+  {"source":"a","requester":"b","source_kind":"cpu","requester_kind":"cpu","transport":"rdma","mode":"installed-private-host","operation":"read","rdma_events":false,"parents":1,"payload":4096,"block":65536,"num_lanes":1,"mask":1},
+  {"source":"a","requester":"b","source_kind":"cpu","requester_kind":"cpu","transport":"rdma","mode":"installed-private-host","operation":"write","rdma_events":true,"parents":1,"payload":4096,"block":65536,"num_lanes":1,"mask":1}
+]
+```
+
+Run the packaged host binary with the standard controller on each toolchain.
+
+```sh
+python3 tests/hardware/run.py --profile "$TWO_RNIC_PRIVATE_HOST_PROFILE" \
+  --installation "$ART/manifest.json" --binary "$ART/installed/bin/orbite-rdma-host" \
+  --output "$RUN/private-host"
+```
+
+Both processes check every payload and guard byte. After each transfer the
+source must have opened and closed one fresh grant PD, and each peer must
+have opened and closed one QP. The requester must have opened zero grant PDs.
+The controller also checks the native byte counts, zero opened memory windows,
+zero MW-bind parent registrations and zero live grant PDs and QPs at drain.
+
 ## Physical rail accounting
 
 Select `mode: "installed-rail-accounting"` with 16 parents,
@@ -128,9 +155,13 @@ Select `mode: "installed-lost-completion"` with the restart roles, 2–3
 generations, `payload <= block`, 8 parents with one lane or 16 with three, a
 1 MiB payload, both rails, both directions and both progress modes.
 
-`build_installed.py` also builds the packaged `tests/hardware/cq_fault/` tool,
-pinned by hash and loaded with `LD_PRELOAD` only for this profile. Armed on the
-requester, it records accepted payload WRs and removes their successful CQEs
+`build_installed.py` also builds and hashes the packaged `tests/hardware/cq_fault/`
+observer. A CPU control loads a test verbs library through the same private
+dynamic-library handle as OrbitRDMA. It checks that the observer sees both
+context-opening paths and QP destruction, forwards an MR error, and leaves
+missing symbols and lookups on a different library alone. The two-host driver
+preloads the observer for native fault profiles. Armed on the requester, it
+records accepted payload WRs and removes their successful CQEs
 from `poll_cq`; it never fabricates data or completions. At the kill point the
 engine still owns SQ debt, source authorization, DMA loans and busy batches. The
 surviving requester must fail and drain with zero reported bytes and WRITE

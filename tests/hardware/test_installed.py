@@ -19,12 +19,22 @@ class InstalledHostEvidence(unittest.TestCase):
         for role in ('source', 'requester'):
             rows = [('ORBITE_INSTALLED_NIC ', dict(name=name, pci=str(index)))
                     for index, name in enumerate(self.profile['rails'])]
-            rows += [('ORBITE_INSTALLED_ROUND ', dict(phase=0, round=index, opened_qps=6, closed_qps=0,
-                     reused_qps=index * 96, completed_grants=(index + 1) * 96,
-                     opened_mrs=4, read_bytes=(index + 1) * self.case['parents'] * self.case['payload']
-                     if role == 'requester' else 0, write_bytes=0)) for index in range(3)]
+            for index in range(3):
+                transferred = (index + 1) * self.case['parents'] * self.case['payload'] if role == 'requester' else 0
+                row = dict(phase=0, round=index, opened_qps=6, closed_qps=0, reused_qps=index * 96,
+                           completed_grants=(index + 1) * 96, opened_mrs=4,
+                           read_bytes=transferred if self.case['operation'] == 'read' else 0,
+                           write_bytes=transferred if self.case['operation'] == 'write' else 0)
+                if self.case['mode'] == 'installed-private-host':
+                    grants = index + 1
+                    pds = grants if role == 'source' else 0
+                    row.update(opened_qps=grants, closed_qps=grants, reused_qps=0,
+                               completed_grants=0, opened_mrs=2)
+                    rows.append(('ORBITE_PRIVATE_GRANT ', dict(round=index, opened_pds=pds,
+                                closed_pds=pds, active_pds=0, active_qps=0, windows=0, source_parents=0)))
+                rows.append(('ORBITE_INSTALLED_ROUND ', row))
             rows += [('ORBITE_INSTALLED_RESULT ', dict(protocol=installed.PROTOCOL,
-                     status='passed', role=role, operation='read', parents=self.case['parents'],
+                     status='passed', role=role, operation=self.case['operation'], parents=self.case['parents'],
                      payload=self.case['payload'], rounds=3,
                      full_bytes_and_guards=True, locally_drained=True))]
             result[role] = {'stdout.log': '\n'.join(prefix + json.dumps(row) for prefix, row in rows),
@@ -92,6 +102,41 @@ class InstalledHostEvidence(unittest.TestCase):
             bad = copy.deepcopy(evidence)
             bad['requester']['stdout.log'] = bad['requester']['stdout.log'].replace(old, new)
             with self.subTest(change=new), self.assertRaises(ValueError):
+                installed.verify(self.profile, self.case, bad)
+
+    def test_private_host_checks_both_roles_each_round_and_requires_both_directions(self):
+        self.case.update(mode='installed-private-host', parents=1, num_lanes=1, mask=1, payload=128)
+        profile = dict(cases=[self.case], nodes={
+            'a': dict(hostname='host-a', boot_id='boot-a'),
+            'b': dict(hostname='host-b', boot_id='boot-b'),
+        })
+        with self.assertRaisesRegex(ValueError, 'both READ and WRITE'):
+            installed.validate_nodes(profile)
+        profile['cases'].append(dict(self.case, operation='write'))
+        installed.validate_nodes(profile)
+        for changes in [dict(parents=2), dict(num_lanes=2), dict(mask=3),
+                        dict(payload=self.case['block'] + 1)]:
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                installed.validate({**self.case, **changes})
+
+        self.case['operation'] = 'write'
+        installed.verify(self.profile, self.case, self.evidence())
+        self.case['operation'] = 'read'
+        evidence = self.evidence()
+        installed.verify(self.profile, self.case, evidence)
+        for role, field, old, new in [
+            ('source', 'opened_pds', 1, 0), ('source', 'closed_pds', 3, 2),
+            ('requester', 'opened_pds', 0, 1), ('source', 'active_pds', 0, 1),
+            ('source', 'windows', 0, 1), ('source', 'source_parents', 0, 1),
+            ('requester', 'closed_qps', 1, 0), ('source', 'reused_qps', 0, 1),
+            ('requester', 'read_bytes', 128, 0), ('source', 'full_bytes_and_guards', True, False),
+        ]:
+            bad = copy.deepcopy(evidence)
+            record = bad[role]
+            before, after = (f'"{field}": {json.dumps(value)}' for value in (old, new))
+            self.assertIn(before, record['stdout.log'])
+            record['stdout.log'] = record['stdout.log'].replace(before, after, 1)
+            with self.subTest(role=role, field=field), self.assertRaises(ValueError):
                 installed.verify(self.profile, self.case, bad)
 
     def test_selector_gate_requires_exact_pool_indices_and_per_rail_bytes(self):

@@ -3,7 +3,20 @@
 use super::*;
 
 pub(in crate::transport::rdma) fn devices() -> Result<Vec<(String, String)>> {
-    provider::devices().map_err(provider_error)
+    provider::devices().map_err(device_list_error)
+}
+
+pub(super) fn device_list_error(error: orbit_rdma::Error) -> Error {
+    match error {
+        orbit_rdma::Error::DeviceList(error) => match error.raw_os_error() {
+            Some(code) => Error::Backend {
+                operation: "ibv_get_device_list",
+                code: if code == 0 { libc::EIO } else { code },
+            },
+            None => Error::Io(error),
+        },
+        other => provider_error(other),
+    }
 }
 
 pub(super) fn validate_gid_entry(entry: &provider::GidEntry, address: &RdmaAddress) -> Result<()> {

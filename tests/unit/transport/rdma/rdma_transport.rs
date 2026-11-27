@@ -113,14 +113,16 @@ fn private_host_source_grants_retire_their_pd_and_preserve_adjacent_bytes() {
     requester.close(TIMEOUT).unwrap();
     source.close(TIMEOUT).unwrap();
     let stats = source.stats().unwrap().rdma.unwrap();
-    assert_eq!(
-        (
-            stats.opened_grant_pds,
-            stats.closed_grant_pds,
-            stats.active_grant_pds
-        ),
-        (2, 2, 0)
-    );
+    let requester_stats = requester.stats().unwrap().rdma.unwrap();
+    for (node, private_pds) in [(&stats, 2), (&requester_stats, 0)] {
+        assert_eq!(
+            (node.opened_grant_pds, node.closed_grant_pds),
+            (private_pds, private_pds)
+        );
+        assert_eq!((node.active_grant_pds, node.active_endpoints), (0, 0));
+        assert_eq!((node.opened_connections, node.closed_connections), (2, 2));
+        assert_eq!((node.reused_connections, node.opened_windows), (0, 0));
+    }
     // The shared PD keeps only the eagerly published local registration.
     assert_eq!(stats.opened_persistent_mrs, 1);
     assert_eq!(stats.opened_source_mrs, 0);

@@ -309,7 +309,7 @@ a successfully installed table, so retained cleanup owners cannot outlive its
 code. OrbitRDMA’s `table_retains_loaded_code_with_and_without_optional_port_speed` checks that
 the loaded code remains callable after its file is removed. This changes no
 transfer, registration or retirement contract.
-`missing_library_and_each_required_export_are_unavailable_before_a_native_call`
+`missing_library_and_each_missing_export_return_typed_errors`
 rejects each incomplete table, and the clean-container gate runs the full
 feature suite and an installed wheel without any verbs/CUDA/cuFile runtime.
 Its ELF negative control rejects a library linked to libibverbs. Explicit GDS
@@ -591,7 +591,9 @@ until the QP drains. A missing, foreign or contradictory first-failure pointer r
 WR until completion or QP drain. Grants retain their actual registrations,
 cross-transport DMA loans and protocol authority. A source configured with
 `host_source_reuse = false` isolates each direct host grant using the same
-private-PD lifetime as a non-reused direct GPU grant. [OrbitRDMA](https://github.com/OrbitInfra/OrbitRDMA)
+private-PD lifetime as a non-reused direct GPU grant. The installed host gate
+checks the creation and retirement of that PD after each guarded transfer.
+[Private host grants](installed-host.md#private-host-grants) · [OrbitRDMA](https://github.com/OrbitInfra/OrbitRDMA)
 
 CUDA registration adds a deliberate extension to frozen TENT's XPU dma-buf
 exporter in `rdma/context.cpp`; TENT's NVIDIA availability check uses peermem.

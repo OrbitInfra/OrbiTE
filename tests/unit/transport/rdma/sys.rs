@@ -3,6 +3,22 @@
 use super::device::{endpoint_address, validate_gid_entry};
 use super::*;
 
+#[test]
+fn device_enumeration_preserves_native_errno_and_sysfs_keeps_its_io_error() {
+    use std::io;
+    let native = |code| orbit_rdma::Error::DeviceList(io::Error::from_raw_os_error(code));
+    for (code, expected) in [(libc::ENOMEM, libc::ENOMEM), (0, libc::EIO)] {
+        assert!(matches!(
+            device::device_list_error(native(code)),
+            Error::Backend { operation: "ibv_get_device_list", code } if code == expected
+        ));
+    }
+    assert!(matches!(
+        provider_error(native(libc::ENOENT)),
+        Error::Io(error) if error.raw_os_error() == Some(libc::ENOENT)
+    ));
+}
+
 #[derive(Debug, PartialEq)]
 struct SendRequest {
     id: u64,

@@ -323,8 +323,9 @@ OrbitRDMA 0.1.1 provides all native RDMA operations, including device and port
 queries, shared CQs, RC setup, registrations, windows, events, and teardown.
 OrbiTE owns queue scheduling, grants and cross-transport loans. CPU controls cover chained posts, fenced SEND with invalidation,
 RECV slots, private host grant retirement and CQ error fields. A single-VM
-RXE round trip checks the private-PD profile. The physical RNIC profile is
-unqualified. [RDMA resource owners](architecture.md#rdma-resource-owners)
+RXE round trip checks the private-PD profile. The packaged two-host gate checks
+guarded READ/WRITE and fresh PD and QP retirement each round. Its physical RNIC
+profile is unqualified. [Private host grants](installed-host.md#private-host-grants)
 
 QP arrays, persistent multi-context MRs, concurrent grants, transport Workers,
 NUMA affinity, multirail slicing, discovery and periodic monitor recovery are

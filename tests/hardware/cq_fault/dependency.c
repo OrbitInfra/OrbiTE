@@ -10,11 +10,11 @@ static struct ibv_qp *(*native_create_qp)(struct ibv_pd *, struct ibv_qp_init_at
 static struct ibv_cq *(*native_create_cq)(struct ibv_context *, int, void *, struct ibv_comp_channel *, int);
 
 static void dependency_symbols(void) {
-    if (!native_destroy_cq) *(void **)(&native_destroy_cq) = dlsym(RTLD_NEXT, "ibv_destroy_cq");
-    if (!native_destroy_channel) *(void **)(&native_destroy_channel) = dlsym(RTLD_NEXT, "ibv_destroy_comp_channel");
-    if (!native_create_qp) *(void **)(&native_create_qp) = dlsym(RTLD_NEXT, "ibv_create_qp");
-    if (!native_create_cq) *(void **)(&native_create_cq) = dlsym(RTLD_NEXT, "ibv_create_cq");
-    if (!native_dealloc_pd) *(void **)(&native_dealloc_pd) = dlsym(RTLD_NEXT, "ibv_dealloc_pd");
+    if (!native_destroy_cq) *(void **)(&native_destroy_cq) = native_verb("ibv_destroy_cq");
+    if (!native_destroy_channel) *(void **)(&native_destroy_channel) = native_verb("ibv_destroy_comp_channel");
+    if (!native_create_qp) *(void **)(&native_create_qp) = native_verb("ibv_create_qp");
+    if (!native_create_cq) *(void **)(&native_create_cq) = native_verb("ibv_create_cq");
+    if (!native_dealloc_pd) *(void **)(&native_dealloc_pd) = native_verb("ibv_dealloc_pd");
     if (!native_destroy_cq || !native_destroy_channel || !native_create_qp || !native_create_cq || !native_dealloc_pd) fail();
 }
 
