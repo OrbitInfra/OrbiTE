@@ -1,5 +1,7 @@
 //! Single-issuer file sub-batches. The caller or existing batch worker owns the ring.
 mod config;
+mod page_publish;
+mod parallel_read;
 pub(crate) mod pool;
 pub use config::IoUringConfig;
 pub use pool::IoUringStats;
@@ -34,6 +36,7 @@ pub(crate) struct IoUringTransport {
     idle_read: Arc<Mutex<ring::IdleReadRing>>,
     pool: Arc<pool::Pool>,
     allocate: fn(usize, usize) -> Result<task::Bounce>,
+    mappings: &'static crate::platform::numa::Numa,
     create: Arc<dyn Fn(u32) -> io::Result<Box<dyn Ring>> + Send + Sync>,
 }
 
@@ -45,6 +48,7 @@ impl IoUringTransport {
             pool: pool::Pool::new(config.io_uring, config.max_inflight_bytes)?,
             create: Arc::new(ring::create),
             allocate: task::Bounce::new,
+            mappings: &crate::platform::numa::NATIVE,
         }))
     }
     pub(crate) fn available(&self) -> bool {
@@ -117,6 +121,20 @@ impl IoUringTransport {
                 .execute(self, max_batch_requests, report)?;
             }
             if count != 0 && !staged {
+                if operation == TransferOp::Read
+                    && requests.len() == 1
+                    && parallel_read::execute(
+                        self,
+                        &requests[0],
+                        deadline,
+                        progress,
+                        report,
+                        #[cfg(test)]
+                        |_| {},
+                    )?
+                {
+                    return Ok(());
+                }
                 *report = self
                     .start_host(
                         operation,

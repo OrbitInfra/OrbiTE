@@ -41,6 +41,171 @@ fn ranges_reject_empty_overflow_and_out_of_bounds() {
     assert_eq!(checked_range(4, 4, 8).unwrap(), 4..8);
 }
 
+#[cfg(all(
+    target_os = "linux",
+    feature = "io-uring",
+    not(any(feature = "cuda", feature = "rdma"))
+))]
+#[test]
+fn file_page_publication_requires_dedicated_aligned_local_storage() -> Result<()> {
+    let page = crate::platform::numa::page_round(1)?;
+    let large = 64 << 20;
+    for (size, permission, enabled, eligible) in [
+        (large, Permission::LocalOnly, true, true),
+        (large, Permission::RemoteRead, true, false),
+        (large, Permission::LocalOnly, false, false),
+        (3 * page, Permission::LocalOnly, true, false),
+    ] {
+        let mut input = vec![0x5b; size].into_boxed_slice();
+        input[size - 1] = 0xe7;
+        let original = input.as_ptr() as u64;
+        let host = Arc::new(HostMemory::for_file_registration(
+            input, permission, enabled,
+        )?);
+        let base = host.base_address();
+        assert_eq!(original != base, eligible);
+        let registry = MemoryRegistry::new(SourceEpoch([1; 16]), 1, size);
+        let memory = registry.register_host(host, 0, size, permission)?;
+        let offset = (base.next_multiple_of(page as u64) - base) as usize;
+        let loan = memory.dma_lease(offset, page)?;
+        assert_eq!(loan.can_publish_file_pages(), eligible);
+        assert_eq!(memory.base_address(), base);
+        assert_eq!(loan.address().as_ptr() as u64, base + offset as u64);
+        assert!(memory.write(offset, &[0]).is_err());
+        drop(loan);
+        assert!(!memory.dma_lease(offset + 1, page)?.can_publish_file_pages());
+        assert!(!memory.dma_lease(offset, page - 1)?.can_publish_file_pages());
+        for (at, expected) in [(0, 0x5b), (size - 1, 0xe7)] {
+            let mut byte = [0];
+            memory.read(at, &mut byte)?;
+            assert_eq!(byte[0], expected);
+        }
+    }
+    let fixture = common::external_memory(&vec![0xa5; 3 * page]);
+    let base = fixture.memory.base_address();
+    let registry = MemoryRegistry::new(SourceEpoch([2; 16]), 1, 3 * page);
+    let external = registry.register_host(fixture.memory, 0, 3 * page, Permission::LocalOnly)?;
+    let offset = (base.next_multiple_of(page as u64) - base) as usize;
+    assert!(!external.dma_lease(offset, page)?.can_publish_file_pages());
+    Ok(())
+}
+
+#[test]
+fn owned_registration_reserves_before_building_and_rolls_back_failures() -> Result<()> {
+    let registry = MemoryRegistry::new(SourceEpoch([1; 16]), 2, 8);
+    let permission = Permission::LocalOnly;
+    let check_limit = || {
+        let result = registry.register_owned(
+            1,
+            permission,
+            || panic!("second allocation must not start"),
+            |_| Ok(()),
+        );
+        assert!(matches!(result, Err(Error::ResourceExhausted)));
+    };
+    let result = registry.register_owned(
+        8,
+        permission,
+        || {
+            assert_eq!(registry.usage()?, (1, 8));
+            check_limit();
+            Err(Error::Unavailable("owned memory creation"))
+        },
+        |_| Ok(()),
+    );
+    assert!(matches!(result, Err(Error::Unavailable(_))));
+    assert_eq!(registry.usage()?, (0, 0));
+    let create = || HostMemory::new(vec![0x55; 8].into_boxed_slice());
+    let native = registry.register_owned(8, permission, create, |_| {
+        assert_eq!(registry.usage()?, (1, 8));
+        Err(Error::Unavailable("native registration"))
+    });
+    assert!(matches!(native, Err(Error::Unavailable(_))));
+    assert_eq!(registry.usage()?, (0, 0));
+    let live = registry.register_owned(8, permission, create, |_| Ok(()))?;
+    registry.unregister(&live)?;
+    check_limit();
+    drop(live);
+    assert_eq!(registry.usage()?, (0, 0));
+    Ok(())
+}
+
+#[cfg(all(
+    feature = "io-uring",
+    not(any(feature = "cuda", feature = "rdma")),
+    target_os = "linux"
+))]
+#[test]
+fn owned_registration_retains_failed_file_mapping_charge_without_retry() -> Result<()> {
+    use crate::platform::numa::{MappedMemory, NATIVE, Numa};
+    use std::sync::atomic::AtomicUsize;
+    static CALLS: AtomicUsize = AtomicUsize::new(0);
+    static FAILING: Numa = Numa {
+        unmap: |_, _| {
+            CALLS.fetch_add(1, Ordering::SeqCst);
+            Err(Error::Io(std::io::Error::from_raw_os_error(libc::EIO)))
+        },
+        ..NATIVE
+    };
+    let make = |numa: &'static Numa| -> Result<HostMemory> {
+        let mapping = MappedMemory::anonymous(4096, numa)?;
+        let file = FileDestination {
+            mapping,
+            charge: None,
+        };
+        Ok(HostMemory::owned(
+            HostBacking::FileDestination(std::mem::ManuallyDrop::new(Box::new(file))),
+            4096,
+            None,
+        ))
+    };
+    let registry = MemoryRegistry::new(SourceEpoch([3; 16]), 1, 4096);
+    let memory =
+        registry.register_owned(4096, Permission::LocalOnly, || make(&NATIVE), |_| Ok(()))?;
+    let backing = memory.0.allocation.clone();
+    registry.unregister(&memory)?;
+    drop(memory);
+    assert_eq!(registry.usage()?, (1, 4096));
+    drop(backing);
+    assert_eq!(registry.usage()?, (0, 0));
+    registry.check_file_mapping_retirements()?;
+
+    let rollback = registry.register_owned(
+        4096,
+        Permission::LocalOnly,
+        || make(&FAILING),
+        |_| Err(Error::Unavailable("native preparation")),
+    );
+    assert!(matches!(
+        rollback,
+        Err(Error::Unquiesced {
+            code: libc::EIO,
+            ..
+        })
+    ));
+    for _ in 0..2 {
+        assert!(matches!(
+            registry.check_file_mapping_retirements(),
+            Err(Error::Unquiesced {
+                code: libc::EIO,
+                ..
+            })
+        ));
+        assert_eq!(registry.usage()?, (1, 4096));
+        assert_eq!(CALLS.load(Ordering::SeqCst), 1);
+    }
+    assert!(matches!(
+        registry.register_owned(
+            1,
+            Permission::LocalOnly,
+            || panic!("uncertain mapping still owns capacity"),
+            |_| Ok(())
+        ),
+        Err(Error::ResourceExhausted)
+    ));
+    Ok(())
+}
+
 #[test]
 fn retired_memory_keeps_budget_until_all_owners_release_it() {
     let registry = MemoryRegistry::new(SourceEpoch([1; 16]), 1, 8);
