@@ -112,10 +112,12 @@ def verify(profile, case, evidence):
         if len(arms) != 1 or len(errors) != 1 or len(retained) != 2 or len(binds) != resource - 1:
             raise ValueError('missing native error, post-drop probe or unexpected retry')
         arm, error = arms[0], errors[0]
+        offset = (64 if case['operation'] == 'read' else case['payload'] + 128) if resource == 2 else 0
+        length = case['payload'] if resource == 2 else 2 * case['payload'] + 192
         if (not arm['seq'] < error['seq'] < retained[0]['seq'] < retained[1]['seq']
                 or arm['resource'] != resource or arm['source'] != int(role == 'source')
-                or arm['address'] != owner['address'] or error['address'] != owner['address']
-                or error['length'] != 2 * case['payload'] + 192
+                or arm['address'] != owner['address'] + offset or error['address'] != arm['address']
+                or error['length'] != length
                 or error['code'] != 5 or error['attempts'] != 1 or error['syscall_fault'] is not True
                 or error['lkey'] <= 0 or error['rkey'] <= 0 or error['context'] not in active
                 or error['context'] != arm['context'] or proof['sequence'] != retained[0]['seq']):

@@ -44,6 +44,19 @@ class GpuDirectEvidence(unittest.TestCase):
                                                              native_pid=123, fault_library_sha256='abc'))}
         return profile, case, evidence
 
+    def test_host_window_uses_plain_send_with_a_direct_gpu_requester(self):
+        profile, case, evidence = self.evidence()
+        case['source_kind'] = 'cpu'
+        public = evidence['source']['stdout.log'].replace('"cuda": true', '"cuda": false')
+        evidence['source']['stdout.log'] = public.replace('"opened_private_pds": 12', '"opened_private_pds": 0').replace(
+            '"closed_private_pds": 12', '"closed_private_pds": 0')
+        gdr.verify(profile, case, evidence)
+        requester = evidence['requester']
+        requester['cq-fault-0.jsonl'] = requester['cq-fault-0.jsonl'].replace('"opcode": 2,', '"opcode": 9,')
+        with self.assertRaises(ValueError):
+            gdr.verify(profile, case, evidence)
+        gdr.verify(profile, dict(case, source_host_memory='staged'), evidence)
+
     def test_reuse_needs_local_only_parents_and_matching_native_invalidations(self):
         profile, case, evidence = self.evidence()
         case.update(gpu_source_reuse=True, expected_grants=12)

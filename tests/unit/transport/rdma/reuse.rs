@@ -595,8 +595,12 @@ fn wrong_ack_or_ready_retires_requester_without_replaying_a_completed_write() {
 #[test]
 fn source_never_returns_ready_for_only_tcp_done_or_only_native_receive() {
     use crate::memory::MemoryRegistry;
-    for native_receive in [false, true] {
-        let source = rdma_fixture("direct:async_copy");
+    for (native_receive, reset_failure) in [(false, false), (true, false), (true, true)] {
+        let source = rdma_fixture(if reset_failure {
+            "direct:async_copy_window_reset_fail"
+        } else {
+            "direct:async_copy"
+        });
         let remote = source
             .register_memory(
                 vec![0x29; 8].into_boxed_slice(),
@@ -636,13 +640,13 @@ fn source_never_returns_ready_for_only_tcp_done_or_only_native_receive() {
         );
         let mut offer = [0; OFFER_SIZE];
         channel.read_exact(&mut offer).unwrap();
-        assert_eq!(offer[OFFER_SIZE - 1], 1);
+        assert_eq!(offer[OFFER_SIZE - 1], HOST_WINDOW);
         let binding = Binding::new(
             &wire,
             Identity::decode(&offer[..IDENTITY_SIZE]).unwrap(),
             local_identity,
             u64_at(&offer, IDENTITY_SIZE),
-            1,
+            HOST_WINDOW,
         )
         .unwrap();
         binding.write(&mut channel, ACCEPT).unwrap();
@@ -691,6 +695,7 @@ fn source_never_returns_ready_for_only_tcp_done_or_only_native_receive() {
             (1, 1, 0, 1)
         );
         assert_eq!(stats.completed_reusable_grants, 0);
+        assert_eq!(stats.completed_window_invalidations, 0);
         assert!(
             remote.read(0, &mut [0; 8]).is_err(),
             "only one half of the receipt must keep the exact source loan"
@@ -702,6 +707,34 @@ fn source_never_returns_ready_for_only_tcp_done_or_only_native_receive() {
         endpoint.close().unwrap();
         drop(endpoint);
         requester.close(deadline(TIMEOUT).unwrap()).unwrap();
+        if reset_failure {
+            let until = Instant::now() + EVENTUAL_PROGRESS;
+            while source.stats().unwrap().rdma.unwrap().retained_grants != 1 {
+                assert!(Instant::now() < until);
+                thread::yield_now();
+            }
+            for _ in 0..2 {
+                assert!(matches!(
+                    source.close(Duration::from_millis(50)),
+                    Err(Error::Timeout | Error::Unquiesced { .. })
+                ));
+            }
+            let stats = source.stats().unwrap().rdma.unwrap();
+            assert_eq!(
+                (
+                    stats.active_windows,
+                    stats.retained_windows,
+                    stats.direct_bytes
+                ),
+                (1, 1, 8)
+            );
+            assert!(remote.write(0, &[0; 8]).is_err());
+            let trace = crate::transport::rdma::context::tests::events(source_runtime(&source));
+            let trace = trace.lock().unwrap();
+            assert_eq!(trace.iter().filter(|&&e| e == "reset_qp").count(), 1);
+            assert!(!trace.contains(&"dealloc_window") && !trace.contains(&"destroy_qp"));
+            continue;
+        }
         source.close(TIMEOUT).unwrap();
         let stats = source.stats().unwrap().rdma.unwrap();
         assert_eq!(

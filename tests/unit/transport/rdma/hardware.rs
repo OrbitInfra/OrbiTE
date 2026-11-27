@@ -76,6 +76,7 @@ static VERBS: sys::Verbs = sys::Verbs {
     allocate_window: sys::REAL.allocate_window,
     dealloc_window: sys::REAL.dealloc_window,
     poll: sys::REAL.poll,
+    reset_qp: sys::REAL.reset_qp,
     destroy_qp: sys::REAL.destroy_qp,
     deregister: sys::REAL.deregister,
     destroy_cq: sys::REAL.destroy_cq,

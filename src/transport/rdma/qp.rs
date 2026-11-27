@@ -36,6 +36,7 @@ pub(super) struct ConnectionResources {
     pub(super) remote: Option<Descriptor>,
     pub(super) permission: u32,
     pub(super) closed: bool,
+    pub(super) windows_reset: bool,
     pub(super) lease: Option<ConnectionLease>,
 }
 
@@ -110,6 +111,7 @@ impl ConnectionResources {
 
 /// One physical QP and its queues, shared by independently retained grant records.
 pub(super) struct RdmaQp {
+    pub(super) host_windows: AtomicBool,
     terminal: AtomicBool,
     state: Mutex<ConnectionResources>,
 }
@@ -118,6 +120,7 @@ impl RdmaQp {
     pub(super) fn new(resources: ConnectionResources) -> Arc<Self> {
         Arc::new(Self {
             terminal: AtomicBool::new(false),
+            host_windows: AtomicBool::new(false),
             state: Mutex::new(resources),
         })
     }

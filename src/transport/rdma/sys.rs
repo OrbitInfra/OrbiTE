@@ -38,7 +38,7 @@ use memory::{allocate_window, dealloc_window, prepare_grant, register_memory, wi
 use provider::{
     ack_async_event, ack_completion_event, arm_completion, close_completion_channel, close_device,
     create_completion_channel, create_cq, dealloc_pd, destroy_cq, destroy_qp, get_async_event,
-    get_completion_event, open_device,
+    get_completion_event, open_device, reset_qp,
 };
 use qp::{connect, open, post, post_receive, send_completion};
 
@@ -74,6 +74,7 @@ pub(crate) struct MemoryHandles {
     #[cfg(feature = "cuda")]
     pub(crate) dmabuf_verb: Option<gpu_registration::DmaBufVerb>,
     pub(crate) gpu_route: u8,
+    pub(super) host_window: Option<provider::SharedWindowControl>,
     pub(super) deregister_failure: c_int,
     pub(super) native: provider::Memory,
     pub gpu_key_failure: c_int,
@@ -138,7 +139,7 @@ impl MemoryHandles {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Clone, Copy)]
 #[repr(C)]
 pub(super) struct Completion {
     pub id: u64,
@@ -274,6 +275,7 @@ pub(crate) struct Verbs {
     pub(in crate::transport::rdma) dealloc_window: CloseMemory,
     pub(in crate::transport::rdma) poll:
         unsafe extern "C" fn(*mut ConnectionHandles, *mut Completion) -> c_int,
+    pub(in crate::transport::rdma) reset_qp: CloseConnection,
     pub(in crate::transport::rdma) destroy_qp: CloseConnection,
     pub(in crate::transport::rdma) deregister: CloseMemory,
     pub(in crate::transport::rdma) destroy_cq: unsafe extern "C" fn(*mut CqHandles) -> c_int,
@@ -338,6 +340,7 @@ pub(super) static REAL: Verbs = Verbs {
     allocate_window,
     dealloc_window,
     poll,
+    reset_qp,
     destroy_qp,
     deregister: memory::deregister,
     destroy_cq,

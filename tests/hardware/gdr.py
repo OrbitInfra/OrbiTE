@@ -104,7 +104,8 @@ def verify(profile, case, evidence):
             require(any(qp['kind'] == 'gdr_qp' and qp['context'] == mr['context'] and qp['pd'] == mr['pd'] and qp['qpn']
                         for mr in matches for qp in native['source']), 'GPU MR and source QP do not share private PD')
     sends = [row for row in requester if row['kind'] == 'gdr_post' and row['opcode'] in (2, 9)]
-    expected = 2 if memory['source']['cuda'] and not reuse else 9
+    staged_host = not memory['source']['cuda'] and case.get('source_host_memory', case.get('host_memory', 'direct')) == 'staged'
+    expected = 9 if reuse or staged_host else 2
     require(sends and all(row['opcode'] == expected and row['code'] == 0 for row in sends),
             'wrong completion SEND authority profile')
     if reuse:

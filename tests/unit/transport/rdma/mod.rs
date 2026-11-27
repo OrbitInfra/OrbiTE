@@ -763,6 +763,14 @@ unsafe extern "C" fn window(
         return libc::EIO;
     }
     state.store(bind, Ordering::Release);
+    // The simulated NIC keeps the grant's DMA reference until the signaled LOCAL_INV completes.
+    // SAFETY: the individual grant owns these handle slots throughout this post.
+    if !bind && unsafe { (*memory).host_window.is_some() } {
+        qp.completed_grants
+            .lock()
+            .unwrap()
+            .insert(id, memory as usize);
+    }
     result.accepted = 1;
     if (bind && fault == "window_bind_timeout") || (!bind && fault == "window_inv_timeout") {
         return 0;
@@ -1177,7 +1185,7 @@ unsafe extern "C" fn send_completion(
                 if grant.window == 0 {
                     return (!invalidate && rkey == 0x707).then_some((*key, 0));
                 }
-                assert!(invalidate);
+                // Host shared windows stay bound until their owner posts LOCAL_INV.
                 // SAFETY: The grant retains the boxed FakeWindow from allocation until it
                 // detaches and deallocates the window.
                 let window = unsafe { &*(grant.window as *const FakeWindow) };
@@ -1200,7 +1208,7 @@ unsafe extern "C" fn send_completion(
                     receive_address as *mut u8,
                     length,
                 );
-                if window != 0 {
+                if window != 0 && invalidate {
                     (*(window as *const FakeWindow))
                         .bound
                         .store(false, Ordering::Release);
@@ -1263,6 +1271,18 @@ unsafe extern "C" fn poll(
         return -1;
     }
     let mut queue = state.completions.lock().unwrap();
+    if matches!(
+        device.mode.as_str(),
+        "copy_window_hold" | "copy_window_dereg_fail"
+    ) && queue.iter().any(|wc| wc.opcode == 6)
+    {
+        let mut paused = device.pause.0.lock().unwrap();
+        if !paused.1 {
+            paused.0 = true;
+            device.pause.1.notify_all();
+            return 0;
+        }
+    }
     if device.mode == "copy_selective_orphan"
         && queue.front().is_some_and(|wc| matches!(wc.opcode, 1 | 2))
     {
@@ -1297,16 +1317,18 @@ unsafe extern "C" fn poll(
     };
     drop(queue);
     if let Some(value) = value {
-        if value.status == 0 && matches!(value.opcode, 0 | 128) {
+        if value.status == 0 && matches!(value.opcode, 0 | 6 | 128) {
             if let Some(owner) = state.owners.lock().unwrap().get(&value.qpn).copied() {
                 // SAFETY: The fixture keeps the boxed QP alive while its handle or recorded in-
                 // flight work is referenced.
                 let qp = unsafe { &*(owner as *const Fake) };
                 let grant = qp.completed_grants.lock().unwrap().remove(&value.id);
                 if let Some(key) = grant {
+                    let mut plain_window_ack = false;
                     if value.opcode == 128 {
                         if let Some(grant) = qp.grants.lock().unwrap().get(&key) {
                             if grant.window != 0 {
+                                plain_window_ack = value.flags & sys::WITH_INVALIDATE == 0;
                                 // SAFETY: The grant retains the boxed FakeWindow from allocation
                                 // until it detaches and deallocates the window.
                                 unsafe { &*(grant.window as *const FakeWindow) }
@@ -1315,7 +1337,9 @@ unsafe extern "C" fn poll(
                             }
                         }
                     }
-                    detach_grant(qp, key);
+                    if !plain_window_ack {
+                        detach_grant(qp, key);
+                    }
                     detach_message(qp, value.id);
                 }
             }
@@ -1328,6 +1352,28 @@ unsafe extern "C" fn poll(
     } else {
         0
     }
+}
+
+unsafe extern "C" fn reset_qp(h: *mut sys::ConnectionHandles) -> c_int {
+    // SAFETY: the fenced physical QP and all of its grant resources remain owned.
+    let qp = unsafe { &*(*h).qp.cast::<Fake>() };
+    // SAFETY: the retained fixture QP holds its device through terminal destruction.
+    let device = unsafe { &*qp.device };
+    device.events.lock().unwrap().push("reset_qp");
+    if device.mode.ends_with("copy_window_reset_fail") {
+        return libc::EIO;
+    }
+    for grant in qp.grants.lock().unwrap().values_mut() {
+        if grant.window != 0 {
+            // SAFETY: RESET precedes MW deallocation and the grant still owns this window.
+            unsafe { &*(grant.window as *const FakeWindow) }
+                .qp_alive
+                .store(false, Ordering::Release);
+            grant.window = 0;
+        }
+    }
+    qp.window.store(0, Ordering::Release);
+    0
 }
 
 unsafe extern "C" fn qp(h: *mut sys::ConnectionHandles) -> c_int {
@@ -1456,6 +1502,7 @@ unsafe extern "C" fn mr(h: *mut sys::MemoryHandles) -> c_int {
         "MWs close before parent MR"
     );
     if device.mode.ends_with("close1")
+        || (device.mode == "copy_window_dereg_fail" && handles.host_window.is_some())
         || device.mode == "mr_close"
         || (device.mode == "copy_stage_close"
             && state.local_only
@@ -1694,6 +1741,7 @@ pub(super) static VERBS: sys::Verbs = sys::Verbs {
     allocate_window,
     dealloc_window,
     poll,
+    reset_qp,
     destroy_qp: qp,
     deregister: mr,
     destroy_cq: cq,

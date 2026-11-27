@@ -206,8 +206,9 @@ impl ProgressState {
                         message.memory.address.as_ptr() as u64,
                         message.memory.length,
                         work.remote.rkey,
-                        message.memory.bytes()[COMPLETION_MESSAGE_SIZE - 1]
-                            != super::super::protocol::MR_AUTHORITY,
+                        super::super::protocol::peer_invalidates(
+                            message.memory.bytes()[COMPLETION_MESSAGE_SIZE - 1],
+                        ),
                         &mut posted,
                     )
                 }

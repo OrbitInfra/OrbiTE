@@ -323,9 +323,23 @@ impl RequesterSetup {
         if cached.is_some_and(|peer| remote_identity.connection != peer.connection) {
             return Err(Error::Protocol("RDMA source changed cached connection"));
         }
+        if super::super::protocol::reusable(profile)
+            && (profile == super::super::protocol::HOST_WINDOW)
+                != (self.request.remote.memory_type() == crate::MemoryType::Cpu)
+        {
+            return Err(Error::Protocol(
+                "RDMA release profile differs from described source memory",
+            ));
+        }
         let cacheable = match profile {
             0 | MR_AUTHORITY if endpoint.endpoint.is_none() => false,
-            1 if transport.direct(&self.request.local) && endpoint.endpoint.is_some() => true,
+            profile
+                if super::super::protocol::reusable(profile)
+                    && transport.direct(&self.request.local)
+                    && endpoint.endpoint.is_some() =>
+            {
+                true
+            }
             _ => return Err(Error::Protocol("RDMA release profile mismatch")),
         };
         let grant = u64_at(&self.bytes, IDENTITY_SIZE);

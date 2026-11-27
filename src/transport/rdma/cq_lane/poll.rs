@@ -284,14 +284,62 @@ impl ProgressState {
         Ok(())
     }
 
+    // A single terminal QP may still carry several grants. RESET removes pending
+    // SQ/RQ work; detach every live MW before destroy. The private registrations,
+    // DMA loans and work credits remain owned through normal native drain.
+    fn detach_host_windows(
+        &self,
+        owner: &Arc<super::super::qp::RdmaQp>,
+        records: &[Arc<Record>],
+    ) -> std::result::Result<(), (&'static str, i32)> {
+        if !owner.host_windows.load(Ordering::Acquire) {
+            return Ok(());
+        }
+        for record in records.iter().filter(|r| Arc::ptr_eq(&r.connection, owner)) {
+            let mut request = record.state.lock().unwrap_or_else(|p| p.into_inner());
+            let Some(resources) = &mut request.resources else {
+                continue;
+            };
+            let Some(grant) = &mut resources.grant else {
+                continue;
+            };
+            if !grant.window_used
+                || grant.handles.mw.is_null()
+                || grant
+                    .handles
+                    .host_window
+                    .as_ref()
+                    .is_none_or(|w| w.is_invalidated())
+            {
+                continue;
+            }
+            if let Err(Error::Unquiesced { operation, code }) = self.asynchronous.check() {
+                return Err((operation, code));
+            }
+            let mut connection = resources.connection.retiring();
+            if !connection.windows_reset {
+                // SAFETY: terminal admission fenced this QP and the lane is its only native poster.
+                let code = unsafe { (self.verbs.reset_qp)(&mut connection.handles) };
+                if code != 0 {
+                    return Err(("ibv_modify_qp RESET", code));
+                }
+                connection.windows_reset = true;
+            }
+            grant.detach_window(self.verbs)?;
+        }
+        owner.host_windows.store(false, Ordering::Release);
+        Ok(())
+    }
+
     fn close_request(
         &self,
         record: &Arc<Record>,
+        records: &[Arc<Record>],
     ) -> std::result::Result<bool, (&'static str, i32)> {
         if record.actions.load(Ordering::Acquire) & CLOSE == 0 {
             return Ok(false);
         }
-        let mut request = record.state.lock().unwrap_or_else(|p| p.into_inner());
+        let request = record.state.lock().unwrap_or_else(|p| p.into_inner());
         if !request.close_requested || matches!(request.phase, Phase::Closed | Phase::Retained) {
             return Ok(false);
         }
@@ -320,6 +368,9 @@ impl ProgressState {
             });
             return Ok(false);
         }
+        drop(request);
+        self.detach_host_windows(&record.connection, records)?;
+        let mut request = record.state.lock().unwrap_or_else(|p| p.into_inner());
         let resources = request
             .resources
             .as_mut()
@@ -362,6 +413,10 @@ impl ProgressState {
         for record in records {
             #[cfg(test)]
             tests::before_abort_lock(self, record);
+            if let Err((operation, code)) = self.detach_host_windows(&record.connection, records) {
+                self.retain(operation, code);
+                return;
+            }
             let mut request = record.state.lock().unwrap_or_else(|p| p.into_inner());
             if let Err(Error::Unquiesced { operation, code }) = self.asynchronous.check() {
                 drop(request);
@@ -511,7 +566,7 @@ impl ProgressState {
         }
         let mut index = 0;
         while index < records.len() {
-            match self.close_request(&records[index]) {
+            match self.close_request(&records[index], records) {
                 Ok(true) => {
                     records.swap_remove(index);
                 }

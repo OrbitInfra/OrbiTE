@@ -42,11 +42,12 @@ class InstalledMemoryEvidence(unittest.TestCase):
                 supervisor['fault_library_sha256'] = 'a' * 64
                 record['maps.txt'] += '/tmp/liborbite_cq_fault.so\n'
                 native = [dict(kind='context', context=i, provider='/lib/libmlx5.so.1') for i in (0, 1)]
-                native += [dict(kind='memory_arm', context=0, resource=resource, source=int(role == 'source'), address=1024)]
+                address = 1024 + (65536 + 128 if resource == 2 else 0)
+                native += [dict(kind='memory_arm', context=0, resource=resource, source=int(role == 'source'), address=address)]
                 if resource == 2:
                     native += [dict(kind='memory_bind', context=0, mr=101, mw=102, qpn=8, wr_id=9, key=10, code=0)]
                 identity = dict(resource=resource, context=0, mr=101, mw=102 if resource == 2 else 0, pd=103)
-                native += [dict(identity, kind='memory_error', address=1024, length=131264, lkey=7, rkey=9, bound_key=10 if resource == 2 else 0,
+                native += [dict(identity, kind='memory_error', address=address, length=65536 if resource == 2 else 131264, lkey=7, rkey=9, bound_key=10 if resource == 2 else 0,
                                 code=5, attempts=1, syscall_fault=True),
                            dict(identity, kind='memory_retained', code=16, keys_intact=True),
                            dict(identity, kind='memory_retained', code=16, keys_intact=True)]
@@ -76,7 +77,7 @@ class InstalledMemoryEvidence(unittest.TestCase):
                 ('native-eio', 'cq-fault-0.jsonl', '"code": 5', '"code": 0'),
                 ('native-probe', 'cq-fault-0.jsonl', '"code": 16', '"code": 0'),
                 ('native-retry', 'cq-fault-0.jsonl', '"attempts": 1', '"attempts": 2'),
-                ('native-allocation', 'cq-fault-0.jsonl', '"address": 1024', '"address": 4096'),
+                ('native-allocation', 'cq-fault-0.jsonl', f'"address": {66688 if kind == "mw" else 1024}', '"address": 4096'),
                 ('native-owner', 'cq-fault-0.jsonl', '"mr": 101', '"mr": 104'),
                 ('released-key', 'cq-fault-0.jsonl', '"keys_intact": true', '"keys_intact": false'),
                 ('reaped', 'result.json', '"child_reaped": true', '"child_reaped": false'),

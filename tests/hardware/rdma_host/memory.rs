@@ -20,7 +20,7 @@ struct Snapshot {
     rkey: u64,
     sequence: u64,
 }
-type Command = unsafe extern "C" fn(u32, u32, u32, u64, *const c_char, *mut Snapshot) -> i32;
+type Command = unsafe extern "C" fn(u32, u32, u32, u64, u64, *const c_char, *mut Snapshot) -> i32;
 // SAFETY: dlsym uses the platform loader ABI with an opaque handle and a NUL-terminated C name.
 #[link(name = "dl")]
 unsafe extern "C" {
@@ -44,12 +44,18 @@ impl MemoryFault {
                 1,
                 if window { 2 } else { 1 },
                 u32::from(case.source),
-                memory.base_address(),
+                memory.base_address()
+                    + if window {
+                        if case.read { GUARD } else { case.destination() }
+                    } else {
+                        0
+                    } as u64,
+                if window { case.payload } else { case.length() } as u64,
                 rail.as_ptr(),
                 &mut snapshot,
             )
         };
-        if code != 0 || snapshot.version != 1 || snapshot.armed != 1 || snapshot.attempts != 0 {
+        if code != 0 || snapshot.version != 2 || snapshot.armed != 1 || snapshot.attempts != 0 {
             return Err(format!("native memory arm failed ({code}): {snapshot:?}").into());
         }
         Ok(fault)
@@ -57,8 +63,8 @@ impl MemoryFault {
     fn retained(&self) -> Result<Snapshot> {
         let mut snapshot = Snapshot::default();
         // SAFETY: command 2 ignores input selectors and writes one ABI-sized snapshot.
-        let code = unsafe { (self.0)(2, 0, 0, 0, std::ptr::null(), &mut snapshot) };
-        if code != 0 || snapshot.version != 1 || snapshot.attempts != 1 || snapshot.code != 5 {
+        let code = unsafe { (self.0)(2, 0, 0, 0, 0, std::ptr::null(), &mut snapshot) };
+        if code != 0 || snapshot.version != 2 || snapshot.attempts != 1 || snapshot.code != 5 {
             return Err(format!("native memory retention failed ({code}): {snapshot:?}").into());
         }
         Ok(snapshot)
@@ -155,6 +161,7 @@ fn retain(
                 || rdma.retained_grants != 1
                 || rdma.direct_bytes != case.payload
                 || rdma.persistent_source_mrs == 0
+                || rdma.active_windows != 1
                 || rdma.window_key_indices == 0
                 || rdma.burned_window_keys == 0
         } else {
