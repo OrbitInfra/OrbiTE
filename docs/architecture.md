@@ -396,6 +396,8 @@ slots, a direct READ of at least 2 MiB can request 2 MiB-aligned pageable
 scratch and advise transparent huge pages on complete units. If the larger
 alignment exhausts resources, preflight retries with the descriptor's
 required alignment. Both attempts share one outstanding byte charge.
+The [scalar READ experiment](benchmarks.md#preparing-reclaimed-pages)
+measures the cost of recycling that storage across requests.
 The real-ring control
 `aligned_file_batches_use_one_ring_and_only_direct_reads_require_scratch`
 checks allocation failure before submission, bytes, guards and ring count.

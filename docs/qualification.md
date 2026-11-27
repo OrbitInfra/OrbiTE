@@ -777,6 +777,10 @@ both guards and the released staging and admission budgets.
 The companion 64 MiB READ truncates after admission at 16 MiB minus one byte,
 16 MiB plus 511 bytes and 64 MiB minus one byte. It compares the reported
 prefix with the file and every remaining byte with the original destination.
+The [two-extent experiment](benchmarks.md#preparing-reclaimed-pages) also
+checked out-of-order completion on x86 ext4. A successful tail followed by
+a head error preserved the entire destination. A missing drain receipt kept
+the single 64 MiB charge and its backing.
 For external registrations, the 64 MiB vector control holds a real CQE
 after the kernel writes and unregisters each destination. Its ranges stay
 inaccessible and the batch retains its byte charge until completion. It checks

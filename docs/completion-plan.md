@@ -226,8 +226,11 @@ Done:
   Peak RSS exceeded the fixed OrbiTE baseline by about 20%, against a 10% limit.
   At the peak, 64 MiB of retired destination pages overlapped the caller's
   file verification buffers. Discarding 36 MiB after drain left 28 MiB
-  resident, but the next prepared request took about 3.6 ms longer to
-  return with 18 additional minor faults. The step remains open until a
+  resident. [Phase measurements](benchmarks.md#preparing-reclaimed-pages) place
+  the extra process CPU in page preparation (2.06 / 3.76 ms on the stable /
+  1.85 hosts). Splitting at the reclaimed boundary improved throughput over a
+  single demand-paged READ but missed the CPU limit against frozen TENT on
+  both hosts. The step remains open until a
   protected implementation meets all four limits against both frozen references.
   The [external-vector controls](qualification.md#local-file-segments) cover
   a separate consumer shape with independent registrations and a readable tail.

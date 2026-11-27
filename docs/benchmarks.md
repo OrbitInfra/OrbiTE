@@ -537,6 +537,33 @@ Full reuse reached 6.44 GiB/s at 387.57 MiB. Its 11.28 ms p99 also
 exceeded the limit against fixed OrbiTE on this runner.
 [Independent stable repeat](https://github.com/OrbitInfra/OrbiTE/actions/runs/45962090941)
 
+#### Preparing reclaimed pages
+
+A paired x86-64 experiment used the same executable for both 64 MiB scalar
+READ configurations. One kept all private pages resident between requests. The other
+released 36 MiB after drain. Both prepared the same address range before
+one `READV`. Independent residency checks found 36 MiB present before and
+after preparation in the hot case, and 0 then 36 MiB in the reclaimed case.
+The table gives process CPU milliseconds per READ, as the median of three
+process means with 100 timed reads each. The second interval starts just
+before native submission and ends when the owner observes the CQE. The process clock includes polling and worker handoff. Each compiler
+ran on its own host. [Measurements and native controls](https://github.com/OrbitInfra/OrbiTE/actions/runs/46004984057)
+
+| Rust | Prepare, hot / reclaimed (ms) | Submit to CQE, hot / reclaimed (ms) |
+| --- | ---: | ---: |
+| stable | 0.012 / 2.071 | 0.835 / 0.808 |
+| 1.85 | 0.015 / 3.775 | 6.820 / 6.811 |
+
+A separate candidate issued the retained prefix first and let direct I/O
+fault in the remaining pages. Both extents drained before publication.
+Compared with one `READV` using demand paging, candidate goodput increased
+12.5% on stable and 32.9% on 1.85. CPU per byte also rose by 1.6% and 8.4%.
+These are implementation-level comparisons across two experimental revisions.
+Peak RSS fell by 36.00 and 34.30 MiB against full reuse. On stable, CPU per
+byte exceeded the TENT limit. On 1.85, goodput and CPU per byte missed both
+frozen references, and p99 missed the fixed OrbiTE reference. The candidate
+remains experimental.
+
 #### Consumer file vectors
 
 An x86-64 ext4 comparison on `ad18ae1` used the public
