@@ -790,6 +790,10 @@ a second range. The full extent exceeds the slot capacity. The ext4 direct
 READ acquires zero slots. The buffered tmpfs READ and each WRITE acquire one.
 The test checks the reported byte count, the entire destination including guards,
 the zero-filled gap on disk after WRITE, and the released byte and slot charges.
+A separate selector test supplies 8 KiB memory alignment and 4 KiB file
+alignment. Two consecutive 4 KiB gaps let the direct READ use its aligned
+aggregate buffer, while the WRITE requires the buffered descriptor for its
+packed padding addresses. Tagged file contents identify the submitted fd.
 
 Scratch allocation failure must leave the ring untouched and return the
 pageable charge. A 2 MiB direct READ control rejects the optional huge-page
