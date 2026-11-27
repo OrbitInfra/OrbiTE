@@ -473,6 +473,70 @@ passed against both references. Peak RSS exceeded the fixed engine by
 The production path continues to use fresh private storage and copy the
 confirmed prefix.
 
+On x86-64 ext4 the 64 MiB reuse experiment reached its peak after the
+batch had drained. Across three fresh processes per compiler, current
+RSS on stable / Rust 1.85 was 259.68 / 259.70 MiB at the terminal CQE,
+259.67 / 259.69 MiB after freeing the batch, and 387.69 / 387.71 MiB
+while comparing the file. Six buffers of about 64 MiB each were resident
+together. They held the local and remote registrations, generated input,
+expected file, file readback and the engine's recycled destination pages.
+The subsequent remote check replaced the readback with a registration
+snapshot while the expected file was still live. Closing the engine
+released the recycled pages. The same caller with fixed OrbiTE peaked at
+323.66 / 323.71 MiB in the remote check. These instrumented readings
+locate the overlap. The performance limits use uninstrumented GNU time
+process peaks. [Stage and live-buffer measurements](https://github.com/OrbitInfra/OrbiTE/actions/runs/45956869132)
+
+Returning 36 MiB of old destination pages to Linux after drain left 28 MiB
+resident in one 64 MiB private mapping. Both x86-64 compilers confirmed
+the reduction with `mincore` and passed the exact-prefix and late-error
+controls. A second implementation moved only the retained prefix into an
+empty mapping. A third used four independent direct reads into one private
+mapping and waited for all four results before changing the logical target.
+[Native correctness and residency controls](https://github.com/OrbitInfra/OrbiTE/actions/runs/45958855686)
+
+In separate instrumented runs, retiring the scratch slot, including the
+discard, took 0.10 / 0.12 ms on stable / Rust 1.85. After moving the old
+pages aside, publishing a full result took 0.038 / 0.037 ms. On the next READ,
+from prepared request to result, the process incurred 18 additional minor
+faults. That interval grew from 8.85 to 12.45 ms on stable and from 8.85
+to 12.50 ms on Rust 1.85. Its process CPU time rose from 6.97 to 10.65 ms
+and from 7.06 to 10.76 ms, respectively.
+[Owner timings and minor faults](https://github.com/OrbitInfra/OrbiTE/actions/runs/45959535285)
+
+The following uninstrumented trials used the original common caller. Values
+in each cell are stable / Rust 1.85. Each implementation ran as three fresh
+processes with 100 measured batches each per compiler.
+[Public workload and raw trial samples](https://github.com/OrbitInfra/OrbiTE/actions/runs/45958282248)
+
+| Implementation | GiB/s | p99 ms | CPU ns/byte | Peak RSS MiB |
+|---|---:|---:|---:|---:|
+| Fixed OrbiTE | 0.55 / 6.18 | 126.90 / 11.61 | 0.097 / 0.145 | 323.43 / 323.49 |
+| Frozen TENT | 0.56 / 6.50 | 115.53 / 11.49 | 0.090 / 0.139 | 337.87 / 336.97 |
+| Full reuse | 0.54 / 6.56 | 129.30 / 11.22 | 0.058 / 0.112 | 387.62 / 387.50 |
+| Discard 36 MiB | 0.54 / 4.52 | 222.39 / 16.94 | 0.080 / 0.171 | 351.39 / 351.45 |
+| Recycle only the prefix | 0.55 / 4.41 | 124.13 / 16.93 | 0.086 / 0.177 | 349.54 / 349.59 |
+| Four extents, discard 36 MiB | 0.55 / 4.77 | 116.57 / 15.16 | 0.083 / 0.186 | 351.48 / 353.33 |
+
+The stable runner's frozen engines measured 0.55–0.56 GiB/s. The four-extent
+variant met the relative limits there. The Rust 1.85 runner's references
+measured 6.18–6.50 GiB/s. On that runner all three bounded variants met
+the RSS limit and missed throughput, p99 and CPU against both references.
+The timed workflow's log matcher rejected a multiline test result. The
+ratio verdicts above come from the archived samples. The separate
+[correctness run](https://github.com/OrbitInfra/OrbiTE/actions/runs/45958855686)
+checked the same engine commits and all four native cases per configuration.
+
+One independent stable repeat used identical executables. Fixed OrbiTE and
+TENT reached 6.51 and 6.65 GiB/s on that runner. Discarding 36 MiB,
+recycling only the prefix and using four extents reached 4.74, 4.57 and
+4.86 GiB/s at 351.52, 351.41 and 353.21 MiB peak RSS. All three passed RSS
+and missed throughput, p99 and CPU against both references. The four-extent
+read, the fastest bounded candidate, took 13.41 ms p99 and 0.184 ns/byte.
+Full reuse reached 6.44 GiB/s at 387.57 MiB. Its 11.28 ms p99 also
+exceeded the limit against fixed OrbiTE on this runner.
+[Independent stable repeat](https://github.com/OrbitInfra/OrbiTE/actions/runs/45962090941)
+
 ### Singleton tmpfs tail latency
 
 The `tmpfs_tail_only` input of the native CPU workflow measures warmed, buffered

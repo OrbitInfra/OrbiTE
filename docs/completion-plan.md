@@ -224,7 +224,10 @@ Done:
   In a separate paired test, moving confirmed pages into the destination and
   reusing 64 MiB restored throughput, p99 and CPU per byte on both toolchains.
   Peak RSS exceeded the fixed OrbiTE baseline by about 20%, against a 10% limit.
-  With 32 MiB of reuse only peak RSS passed. The step remains open until a
+  At the peak, 64 MiB of retired destination pages overlapped the caller's
+  file verification buffers. Discarding 36 MiB after drain left 28 MiB
+  resident, but the next prepared request took about 3.6 ms longer to
+  return with 18 additional minor faults. The step remains open until a
   protected implementation meets all four limits against both frozen references.
 
 - **S16 — reference fixtures.** Retain the CPU trace contract and three frozen
