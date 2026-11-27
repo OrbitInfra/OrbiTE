@@ -283,6 +283,17 @@ impl CallerClock {
     }
 }
 
+fn process_usage() -> Result<(i64, i64)> {
+    let mut r = std::mem::MaybeUninit::<libc::rusage>::uninit();
+    // SAFETY: getrusage writes a valid rusage on success.
+    if unsafe { libc::getrusage(libc::RUSAGE_SELF, r.as_mut_ptr()) } != 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
+    // SAFETY: the successful getrusage initialized the structure.
+    let r = unsafe { r.assume_init() };
+    let us = |v: libc::timeval| v.tv_sec * 1_000_000 + v.tv_usec;
+    Ok((us(r.ru_utime), us(r.ru_stime)))
+}
 fn run(p: &Parameters, caller: &CallerClock) -> Result<()> {
     if p.backend == "cpu" {
         return cpu(p);
@@ -409,6 +420,7 @@ fn run(p: &Parameters, caller: &CallerClock) -> Result<()> {
             0
         };
         let c = cpu_ns()?;
+        let usage_start = process_usage()?;
         let caller_start = clock_ns(caller.id)?;
         let start = Instant::now();
         let mut batch = requester.allocate_batch(p.batch)?;
@@ -456,11 +468,12 @@ fn run(p: &Parameters, caller: &CallerClock) -> Result<()> {
         batch.free()?;
         let elapsed = start.elapsed().as_nanos() as u64;
         let caller_cpu = clock_ns(caller.id)? - caller_start;
+        let usage_end = process_usage()?;
         let c = cpu_ns()? - c;
         // No worker remains in a measured phase; formatting is outside the timed window.
         eprintln!(
             "CALLER_SAMPLE {}",
-            serde_json::json!({"index":i,"pid":caller.pid,"caller_tid":caller.tid,"caller_cpu_ns":caller_cpu,"public_cpu_ns":c,"public_wall_ns":elapsed})
+            serde_json::json!({"index":i,"pid":caller.pid,"caller_tid":caller.tid,"public_user_us":usage_end.0-usage_start.0,"public_system_us":usage_end.1-usage_start.1,"caller_cpu_ns":caller_cpu,"public_cpu_ns":c,"public_wall_ns":elapsed})
         );
 
         if trace {

@@ -34,16 +34,25 @@ pub(super) fn execute(
     if !request.lease.is_direct_read(TransferOp::Read, &file) || address % alignment as u64 != 0 {
         return Ok(false);
     }
-    let (task, iov) = Task::new(TransferOp::Read, request, transport)?;
+    let (mut task, iov) = Task::new(TransferOp::Read, request, transport)?;
     // On a scalar fallback Task::entry may reference the caller-supplied iovec.
     // Its stable address follows the task into quarantine if a receipt is lost.
+    let retired = task.retired_read_boundary();
+    phases.mark(1);
+    if let Some((base, offset)) = retired {
+        if let Err(error) = phases::prepare_range(base.wrapping_add(offset)) {
+            task.finish_staging()?;
+            return Err(error.into());
+        }
+    }
+    phases.mark(2);
     let scalar_iov = Box::new(iov);
     // A single READV on the original private iovec also covers a fresh mapping
     // and any geometry for which the exact discard boundary is not legal.
     let mut lengths = [request.length, 0];
     let mut first = task.entry(TransferOp::Read, &scalar_iov, 0);
     let mut second = None;
-    if let Some((scratch, prefix)) = task.retired_read_boundary() {
+    if let Some((scratch, prefix)) = retired {
         let tail = request.length - prefix;
         let tail_address = scratch.wrapping_add(prefix);
         let views = [
@@ -91,14 +100,14 @@ pub(super) fn execute(
     ring.push(std::slice::from_ref(&first))?;
     let mut live = ManuallyDrop::new((ring, task, scalar_iov));
     let mut receipts = [None; 2];
-    phases.mark(1);
+    phases.mark(3);
     let mut drain_result = submit_ring(&mut *live.0, 1, deadline);
     if drain_result.consumed != 0 {
         if let Some((attempts, index)) = progress {
             attempts.posted(index);
         }
     }
-    phases.mark(2);
+    phases.mark(4);
     if let Some(second) =
         second.filter(|_| drain_result.status.is_ok() && drain_result.consumed == 1)
     {
@@ -124,7 +133,7 @@ pub(super) fn execute(
         }
     }
     if count == 2 {
-        phases.mark(3);
+        phases.mark(5);
     } else {
         phases.skip_second();
     }
@@ -138,7 +147,7 @@ pub(super) fn execute(
             },
         );
     }
-    phases.mark(4);
+    phases.mark(6);
     let mut bytes = 0;
     let mut locally_drained = drain_result.status.is_ok();
     let error = if let Err(code) = drain_result.status {
@@ -179,7 +188,7 @@ pub(super) fn execute(
             TransferOp::Read,
             result,
             Instant::now() >= deadline,
-            || phases.mark(5),
+            || phases.mark(7),
         ) {
             // A partially completed page move may still own both mappings.
             // Keep the destination loan, scratch, descriptor and ring fenced.
@@ -189,7 +198,7 @@ pub(super) fn execute(
         bytes = task.bytes();
         task.observed_error(TransferOp::Read)
     };
-    phases.mark(6);
+    phases.mark(8);
     if error.is_none() {
         phases.emit(count);
     }

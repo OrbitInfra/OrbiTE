@@ -87,6 +87,9 @@ impl Bounce {
 
     #[allow(unsafe_code)]
     pub(super) fn discard_idle_pages(&self) -> bool {
+        if super::parallel_read::phases::idle_mode() == "hot" {
+            return true;
+        }
         // SAFETY: only a drained or never-submitted charge can return a buffer
         // to its pool. The aligned range is strictly inside its exclusive,
         // writable payload, whose previous bytes have no consumer.
