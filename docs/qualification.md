@@ -764,6 +764,9 @@ destination before replacing the completion that crosses 8 MiB with `-EIO`.
 It checks the public task and batch receipts, every original destination byte,
 both guards and the released staging and admission budgets.
 [Protected READ and rolling-window negative control](https://github.com/OrbitInfra/OrbiTE/actions/runs/45623648564)
+The companion 64 MiB READ truncates after admission at 16 MiB minus one byte,
+16 MiB plus 511 bytes and 64 MiB minus one byte. It compares the reported
+prefix with the file and every remaining byte with the original destination.
 
 Scratch allocation failure must leave the ring untouched and return the
 pageable charge. A 2 MiB direct READ control rejects the optional huge-page

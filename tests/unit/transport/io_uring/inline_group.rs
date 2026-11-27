@@ -38,6 +38,20 @@ fn direct_fixture(
 
 #[test]
 fn large_direct_read_with_negative_cqe_preserves_the_entire_destination() -> Result<()> {
+    check_large_direct_read(None)
+}
+
+#[test]
+fn large_direct_read_after_truncate_publishes_only_the_confirmed_prefix() -> Result<()> {
+    for prefix in [(16 << 20) - 1, (16 << 20) + 511, (64 << 20) - 1] {
+        check_large_direct_read(Some(prefix))?;
+    }
+    Ok(())
+}
+
+// Truncation is applied after admission, before kernel submission. The negative
+// receipt is injected only after the kernel has already written into its iovec.
+fn check_large_direct_read(truncate: Option<usize>) -> Result<()> {
     let Some(dir) = directory("ORBITE_EXT4_DIR") else {
         return Ok(());
     };
@@ -45,18 +59,22 @@ fn large_direct_read_with_negative_cqe_preserves_the_entire_destination() -> Res
         return Ok(());
     }
     const SIZE: usize = 64 << 20;
-    let (f, trace, start) = direct_fixture(&dir, &vec![0xe7; SIZE], true)?;
-    // The registered destination includes both guards; every old byte differs from the file.
-    let expected: Vec<_> = (0..64 * 1024)
+    let image: Vec<_> = (0..SIZE)
+        .map(|i| 0x80 | (((i >> 12) ^ i) & 0x7f) as u8)
+        .collect();
+    let (f, trace, start) = direct_fixture(&dir, &image, true)?;
+    let original: Vec<_> = (0..64 * 1024)
         .map(|i: usize| ((i ^ (i >> 8)) & 0x7f) as u8)
         .collect();
-    for at in (0..f.memory.len()).step_by(expected.len()) {
+    for at in (0..f.memory.len()).step_by(original.len()) {
         f.memory
-            .write(at, &expected[..expected.len().min(f.memory.len() - at)])?;
+            .write(at, &original[..original.len().min(f.memory.len() - at)])?;
     }
-    // One 64 MiB SQE yields -EIO. Smaller native reads can finish 8 MiB
-    // before the injected failure in this same public task.
-    trace.lock().unwrap().read_bytes_before_eio = Some(8 << 20);
+    if let Some(prefix) = truncate {
+        trace.lock().unwrap().truncate_to = Some(prefix as u64);
+    } else {
+        trace.lock().unwrap().read_bytes_before_eio = Some(8 << 20);
+    }
     let mut batch = f.engine.submit_async(
         TransferOp::Read,
         &f.segment,
@@ -71,20 +89,39 @@ fn large_direct_read_with_negative_cqe_preserves_the_entire_destination() -> Res
     )?;
     let status = batch.wait(TIMEOUT)?;
     let task = batch.task_status(0)?;
-    assert!(trace.lock().unwrap().read_bytes_before_eio.is_none());
+    let prefix = truncate.unwrap_or(0);
     assert_eq!(
         f.engine.file_segment_info(&f.segment)?.direct_io,
         Some(true)
     );
     assert!(status.locally_drained && task.locally_drained);
-    assert_eq!((task.state, task.transferred_bytes), (TaskState::Failed, 0));
-    assert_eq!((status.completed_tasks, status.transferred_bytes), (0, 0));
-    assert!(
-        matches!(&task.failure.unwrap().error, Error::Backend { code, .. } if *code == -libc::EIO)
+    assert_eq!(
+        (task.state, task.transferred_bytes),
+        (TaskState::Failed, prefix)
     );
-    let mut actual = vec![0; expected.len()];
-    for at in (0..f.memory.len()).step_by(expected.len()) {
+    assert_eq!(
+        (status.completed_tasks, status.transferred_bytes),
+        (0, prefix)
+    );
+    let failure = task.failure.unwrap();
+    let error = &failure.error;
+    if truncate.is_some() {
+        assert!(trace.lock().unwrap().truncate_to.is_none());
+        assert!(matches!(error, Error::Io(e) if e.kind() == io::ErrorKind::UnexpectedEof));
+    } else {
+        assert!(trace.lock().unwrap().read_bytes_before_eio.is_none());
+        assert!(matches!(error, Error::Backend { code, .. } if *code == -libc::EIO));
+    }
+    let mut actual = vec![0; original.len()];
+    let mut expected = original.clone();
+    for at in (0..f.memory.len()).step_by(original.len()) {
         let len = actual.len().min(f.memory.len() - at);
+        expected[..len].copy_from_slice(&original[..len]);
+        let lo = at.max(start);
+        let hi = (at + len).min(start + prefix);
+        if lo < hi {
+            expected[lo - at..hi - at].copy_from_slice(&image[lo - start..hi - start]);
+        }
         f.memory.read(at, &mut actual[..len])?;
         assert!(
             actual[..len] == expected[..len],
