@@ -12,8 +12,18 @@ use crate::{Error, Result, TransferOp};
 
 pub(super) struct Bounce {
     pub(super) ptr: NonNull<u8>,
-    layout: Layout,
+    storage: Allocation,
 }
+
+enum Allocation {
+    Heap(Layout),
+    Mapping {
+        base: NonNull<libc::c_void>,
+        capacity: usize,
+    },
+}
+
+const HUGE_PAGE: usize = 2 << 20;
 
 #[allow(unsafe_code)]
 // SAFETY: Bounce uniquely owns stable aligned bytes. Moving it never moves those
@@ -25,7 +35,54 @@ impl Bounce {
         let layout = Layout::from_size_align(length, alignment).map_err(|_| Error::InvalidRange)?;
         // SAFETY: file admission validated nonzero length, and Layout checked alignment.
         let ptr = NonNull::new(unsafe { alloc(layout) }).ok_or(Error::ResourceExhausted)?;
-        Ok(Self { ptr, layout })
+        Ok(Self {
+            ptr,
+            storage: Allocation::Heap(layout),
+        })
+    }
+
+    // Match the destination's offset within a huge page so whole PMDs can
+    // move even when the transfer starts inside its registered allocation.
+    #[allow(unsafe_code)]
+    fn mapped(length: usize, destination: usize) -> Result<Self> {
+        let capacity = length.checked_add(HUGE_PAGE).ok_or(Error::InvalidRange)?;
+        // SAFETY: private, writable anonymous memory, with no caller-supplied address.
+        let raw = unsafe {
+            libc::mmap(
+                std::ptr::null_mut(),
+                capacity,
+                libc::PROT_READ | libc::PROT_WRITE,
+                libc::MAP_ANONYMOUS | libc::MAP_PRIVATE,
+                -1,
+                0,
+            )
+        };
+        if raw == libc::MAP_FAILED {
+            return Err(Error::ResourceExhausted);
+        }
+        let Some(base) = NonNull::new(raw) else {
+            // SAFETY: undo only the mapping just obtained at virtual address zero.
+            unsafe { libc::munmap(raw, capacity) };
+            return Err(Error::ResourceExhausted);
+        };
+        let offset = destination.wrapping_sub(raw as usize) % HUGE_PAGE;
+        // SAFETY: offset is strictly less than the extra space reserved above.
+        let ptr = unsafe { base.cast::<u8>().add(offset) };
+        let head = (ptr.as_ptr() as usize).wrapping_neg() % HUGE_PAGE;
+        let whole = length.saturating_sub(head) / HUGE_PAGE * HUGE_PAGE;
+        if whole != 0 {
+            // SAFETY: advise only whole huge pages strictly inside the owned payload.
+            unsafe { libc::madvise(ptr.as_ptr().add(head).cast(), whole, libc::MADV_HUGEPAGE) };
+        }
+        Ok(Self {
+            ptr,
+            storage: Allocation::Mapping { base, capacity },
+        })
+    }
+
+    fn matches_destination(&self, destination: usize) -> bool {
+        matches!(self.storage, Allocation::Mapping { .. })
+            && self.ptr.as_ptr() as usize % HUGE_PAGE == destination % HUGE_PAGE
     }
 
     fn pageable(
@@ -66,9 +123,15 @@ impl Bounce {
 impl Drop for Bounce {
     #[allow(unsafe_code)]
     fn drop(&mut self) {
-        // SAFETY: same allocation and layout, dropped only before submission or after drain.
-        unsafe {
-            dealloc(self.ptr.as_ptr(), self.layout);
+        match self.storage {
+            Allocation::Heap(layout) => {
+                // SAFETY: exact allocator, pointer and layout, before submit or after drain.
+                unsafe { dealloc(self.ptr.as_ptr(), layout) };
+            }
+            Allocation::Mapping { base, capacity } => {
+                // SAFETY: the full VMA remains owned even after individual pages move.
+                unsafe { libc::munmap(base.as_ptr(), capacity) };
+            }
         }
     }
 }
@@ -114,22 +177,59 @@ impl Scratch {
 // Keep at most one prefix per engine. The rest of a large scalar READ is
 // pageable and drops as soon as this request has its one CQE.
 pub(super) const READ_PREFIX_BYTES: usize = 24 << 20;
+#[cfg(test)]
+pub(super) static PUBLISHED_BY_MOVE: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+#[cfg(test)]
+pub(super) static RECYCLED_BY_MOVE: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
 
 struct SplitRead {
     iovecs: [libc::iovec; 2],
     _tail: Bounce,
-    _charge: super::pool::Charge,
+    charge: super::pool::Charge,
+    spare: Option<Bounce>,
+    move_pages: bool,
 }
 
 impl SplitRead {
-    fn new(transport: &super::IoUringTransport, length: usize, alignment: usize) -> Result<Self> {
+    fn new(
+        transport: &super::IoUringTransport,
+        memory: &DmaLease,
+        length: usize,
+        alignment: usize,
+    ) -> Result<Self> {
         let mut charge = transport.pool.charge_read(length, Some(alignment))?;
-        let prefix = match charge.prefix.take() {
+        let destination = memory.address().as_ptr() as usize;
+        let move_pages = memory.can_publish_file_pages() && destination % alignment == 0;
+        let cached = charge
+            .prefix
+            .take()
+            .filter(|b| !move_pages || b.matches_destination(destination));
+        let allocate = |length, offset| {
+            if move_pages {
+                if let Ok(mapping) = Bounce::mapped(length, destination + offset) {
+                    return Ok(mapping);
+                }
+            }
+            Bounce::pageable(transport, length, alignment, true)
+        };
+        let prefix = match cached {
             Some(prefix) => prefix,
-            None => Bounce::pageable(transport, READ_PREFIX_BYTES, alignment, true)?,
+            None => allocate(READ_PREFIX_BYTES, 0)?,
         };
         let remaining = length - READ_PREFIX_BYTES;
-        let tail = Bounce::pageable(transport, remaining, alignment, true)?;
+        let tail = allocate(remaining, READ_PREFIX_BYTES)?;
+        let move_pages = move_pages
+            && prefix.matches_destination(destination)
+            && tail.matches_destination(destination + READ_PREFIX_BYTES);
+        // These initially absent pages receive only an existing resident prefix
+        // from the destination after a full completion. No copy populates them.
+        let spare = if move_pages {
+            Bounce::mapped(READ_PREFIX_BYTES, destination).ok()
+        } else {
+            None
+        };
         let iovecs = [
             libc::iovec {
                 iov_base: prefix.ptr.as_ptr().cast(),
@@ -144,29 +244,53 @@ impl SplitRead {
         Ok(Self {
             iovecs,
             _tail: tail,
-            _charge: charge,
+            charge,
+            spare,
+            move_pages,
         })
     }
 
     #[allow(unsafe_code)]
-    fn publish(&self, memory: &DmaLease, length: usize) {
+    fn publish(&mut self, memory: &DmaLease, length: usize) -> Result<()> {
+        if length == memory.len() {
+            if let Some(spare) = &self.spare {
+                // SAFETY: the CQE confirmed every old destination byte is replaceable.
+                // The fresh spare and destination are exclusive private CPU mappings.
+                let moved = unsafe {
+                    super::page_publish::recycle(memory.address(), spare.ptr, READ_PREFIX_BYTES)?
+                };
+                #[cfg(test)]
+                RECYCLED_BY_MOVE.fetch_add(moved, std::sync::atomic::Ordering::Relaxed);
+                if moved != 0 {
+                    // Keep the old iovec source until its authoritative bytes are published.
+                    // Only the spare, containing old pages, can return to the cache.
+                    std::mem::swap(&mut self.spare, &mut self.charge.prefix);
+                }
+            }
+        }
         let mut copied = 0;
         for span in self.iovecs.iter() {
             let n = span.iov_len.min(length - copied);
             if n == 0 {
                 break;
             }
-            // SAFETY: the single CQE covers this range of the private iovec.
-            // The exclusive destination loan covers the whole contiguous request.
-            unsafe {
-                std::ptr::copy_nonoverlapping(
-                    span.iov_base.cast::<u8>(),
-                    memory.address().as_ptr().add(copied),
-                    n,
-                );
+            let source = NonNull::new(span.iov_base.cast::<u8>())
+                .ok_or(Error::Internal("missing direct read buffer"))?;
+            // SAFETY: the confirmed prefix fits in the exclusive destination loan.
+            let dest = unsafe { memory.address().add(copied) };
+            if self.move_pages {
+                // SAFETY: both addresses belong to disjoint owned private CPU
+                // mappings. Only the single terminal CQE's prefix is published.
+                let _moved = unsafe { super::page_publish::publish(source, dest, n)? };
+                #[cfg(test)]
+                PUBLISHED_BY_MOVE.fetch_add(_moved, std::sync::atomic::Ordering::Relaxed);
+            } else {
+                // SAFETY: this CQE initialized n bytes in the disjoint scratch range.
+                unsafe { std::ptr::copy_nonoverlapping(source.as_ptr(), dest.as_ptr(), n) };
             }
             copied += n;
         }
+        Ok(())
     }
 }
 
@@ -323,6 +447,7 @@ impl Task {
         {
             let private = Box::new(SplitRead::new(
                 transport,
+                &memory,
                 request.length,
                 staging_alignment,
             )?);
@@ -407,18 +532,20 @@ impl Task {
     }
     #[allow(unsafe_code)]
     pub(super) fn complete(&mut self, operation: TransferOp, result: i32, late: bool) -> bool {
-        let Some(memory) = &self.memory else {
+        let Some(memory) = &mut self.memory else {
             return false;
         };
         if result > 0 && result as usize > self.length {
             return false;
         }
-        self.result = Some(result);
-        self.late = late;
         if operation == TransferOp::Read && result > 0 {
             let length = result as usize;
             match (memory, &self.bounce) {
-                (HostMemory::SplitRead { memory, private }, _) => private.publish(memory, length),
+                (HostMemory::SplitRead { memory, private }, _) => {
+                    if private.publish(memory, length).is_err() {
+                        return false;
+                    }
+                }
                 (HostMemory::One(memory), Some(bounce)) => {
                     // SAFETY: this CQE initialized length disjoint scratch bytes.
                     // The exclusive destination loan covers the checked prefix.
@@ -454,6 +581,8 @@ impl Task {
                 (_, None) => (),
             }
         }
+        self.result = Some(result);
+        self.late = late;
         // Publish only after releasing this CQE's exclusive range. Another task
         // in the same ring can still be using its own disjoint range.
         self.bounce.take();

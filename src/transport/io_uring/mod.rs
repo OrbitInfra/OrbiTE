@@ -1,5 +1,6 @@
 //! Single-issuer file sub-batches. The caller or existing batch worker owns the ring.
 mod config;
+mod page_publish;
 pub(crate) mod pool;
 pub use config::IoUringConfig;
 pub use pool::IoUringStats;
