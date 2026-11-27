@@ -792,13 +792,10 @@ fn abort_rechecks_async_consumer_after_waiting_for_an_accepted_constructor() {
 }
 
 pub(super) fn before_abort_lock(shared: &ProgressState, record: &Record) {
-    let device = shared.config.device.as_deref();
-    if !matches!(
-        device,
-        Some("batch_bad_first_abort_pause" | "wc_sibling_pause")
-    ) && !(device == Some("async_abort_lock_pause") && record.tag == 1)
-    {
-        return;
+    match shared.config.device.as_deref() {
+        Some("async_abort_lock_pause") if record.tag == 1 => {}
+        Some("batch_bad_first_abort_pause" | "wc_sibling_pause") => {}
+        _ => return,
     }
     let device = Arc::clone(&shared.control.lock().unwrap().cq.as_ref().unwrap()._device);
     let pause = crate::transport::rdma::context::tests::pause_device(&device);
