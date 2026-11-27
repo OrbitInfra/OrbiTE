@@ -221,8 +221,11 @@ Done:
   6.6 ms to populate its pages and 7.9 ms to copy the 64 MiB confirmed by
   a full CQE. The default path pays the population cost during the READ.
   Retaining a full-size slot pushed peak RSS from about 323.5 to 387.5 MiB.
-  The performance step remains open until a protected implementation meets
-  the large-read guards.
+  In a separate paired test, moving confirmed pages into the destination and
+  reusing 64 MiB restored throughput, p99 and CPU per byte on both toolchains.
+  Peak RSS exceeded the fixed OrbiTE baseline by about 20%, against a 10% limit.
+  With 32 MiB of reuse only peak RSS passed. The step remains open until a
+  protected implementation meets all four limits against both frozen references.
 
 - **S16 — reference fixtures.** Retain the CPU trace contract and three frozen
   request prefixes used by native-listener rejection. Compatibility inventories

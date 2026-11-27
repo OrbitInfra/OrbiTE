@@ -427,6 +427,52 @@ logical READ failed. On the same file the protected single READ reported
 zero bytes and preserved the destination. The windowed prototype is excluded
 from the production path. [Public window experiment](https://github.com/OrbitInfra/OrbiTE/actions/runs/45621030185)
 
+A second experiment submitted eight disjoint 8 MiB reads into one private
+allocation. The public request waited for every native completion before any
+bytes became visible. Both toolchains passed the post-I/O error and truncation
+controls. On x86-64 ext4, three fresh processes each measured 100 batches per
+implementation and toolchain. Stable reached 2.64 GiB/s against 2.61 for the
+protected scalar path, 6.44 for the fixed OrbiTE baseline and 6.70 for TENT.
+Rust 1.85 reached 2.63 against 2.61, 6.29 and 6.53 GiB/s, respectively.
+CPU time per byte grew on both compilers. Only peak RSS passed both comparisons.
+[Concurrent private reads and fault receipts](https://github.com/OrbitInfra/OrbiTE/actions/runs/45946952377)
+
+A single-`READV` experiment used separate private mappings for large,
+engine-owned `LocalOnly` destinations in the Linux CPU build. A positive
+CQE allowed whole pages to move into the registered address and a byte copy
+published the remaining tail.
+It retained up to 24 MiB of old destination pages for the next read. Both
+compilers exercised the page moves and passed the nonuniform short-read and
+late-error controls. Stable reached 4.47 GiB/s against 2.71 for the protected
+PR, 6.64 for the fixed engine and 6.67 for TENT. Rust 1.85 reached 4.54
+against 2.76, 6.53 and 6.55 GiB/s. Peak RSS was 347.5 MiB on both and met
+the limit. CPU time per byte was 37% above the fixed engine on both compilers.
+The dedicated mapping also required an initial copy at registration. In a
+separate aarch64 test, registering 64 MiB plus guards took 2.42 ms on stable
+and 2.18 ms on Rust 1.85, up from 0.005 and 0.008 ms. The paired READ
+timings exclude registration.
+[Single-completion page publication and matched results](https://github.com/OrbitInfra/OrbiTE/actions/runs/45948500929)
+
+The same public workload compared two reuse limits on a single x86-64 ext4
+boot. Each row is the median of three processes with 100 timed READs each.
+Both toolchains verified that a full READ recycled the configured number of
+bytes and that short and negative completions preserved the destination contract.
+[Page movement controls and paired capacity trials](https://github.com/OrbitInfra/OrbiTE/actions/runs/45951160596)
+
+| Engine or reuse limit | GiB/s (stable / 1.85) | p99 ms (stable / 1.85) | CPU ns/byte (stable / 1.85) | Peak RSS MiB (stable / 1.85) |
+|---|---:|---:|---:|---:|
+| Fixed OrbiTE | 6.58 / 6.58 | 10.51 / 10.83 | 0.142 / 0.142 | 323.42 / 323.32 |
+| Frozen TENT | 6.84 / 6.80 | 10.84 / 9.61 | 0.134 / 0.136 | 336.95 / 336.98 |
+| 32 MiB of resident scratch | 4.83 / 4.84 | 13.39 / 13.32 | 0.183 / 0.181 | 355.58 / 355.47 |
+| 64 MiB of resident scratch | 6.62 / 6.63 | 10.19 / 9.93 | 0.112 / 0.111 | 389.36 / 387.67 |
+
+At 32 MiB only peak RSS passed. It was already 9.94% above the fixed
+engine on both toolchains. At 64 MiB the throughput, p99 and CPU limits
+passed against both references. Peak RSS exceeded the fixed engine by
+20.39% on stable and 19.90% on Rust 1.85, above the 10% limit.
+The production path continues to use fresh private storage and copy the
+confirmed prefix.
+
 ### Singleton tmpfs tail latency
 
 The `tmpfs_tail_only` input of the native CPU workflow measures warmed, buffered
