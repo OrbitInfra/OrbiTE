@@ -37,10 +37,7 @@ fn connections(engine: &TransferEngine, round: usize) -> Vec<Observation> {
                 .cast::<crate::transport::rdma::sys::ffi::ibv_qp>()
         };
         assert_eq!(native.qp_num, connection.local.qpn);
-        assert_eq!(
-            native.state,
-            crate::transport::rdma::sys::ffi::ibv_qp_state::IBV_QPS_RTS
-        );
+        assert_eq!(native.state, crate::transport::rdma::sys::ffi::IBV_QPS_RTS);
         let remote = connection.remote.unwrap();
         rows.push((
             record.tag,

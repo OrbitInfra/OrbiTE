@@ -298,7 +298,7 @@ See [shared memory](shm.md).
 
 ## Native verbs loading
 
-`transport/rdma/sys/native.rs` resolves the host's `libibverbs.so.1` on RDMA
+`orbit_rdma::provider` resolves the host's `libibverbs.so.1` on RDMA
 install, before any native owner exists. A process-lifetime table retains the
 library through every context and cleanup callback. Private header-generated
 layouts and the port inline bridge carry no link-time verbs dependency. The
@@ -306,10 +306,10 @@ existing fallible `Verbs` table still owns operation injection, and post/poll
 still use provider context operations. This follows frozen TENT's
 `transport/rdma/ibv_loader.cpp`. Unlike its static destructor, OrbiTE never unloads
 a successfully installed table, so retained cleanup owners cannot outlive its
-code. `optional_exports_and_loaded_code_follow_the_retained_library` checks that
+code. OrbitRDMA’s `table_retains_loaded_code_with_and_without_optional_port_speed` checks that
 the loaded code remains callable after its file is removed. This changes no
 transfer, registration or retirement contract.
-`missing_library_and_each_required_export_are_unavailable_before_a_native_call`
+`missing_library_and_each_missing_export_return_typed_errors`
 rejects each incomplete table, and the clean-container gate runs the full
 feature suite and an installed wheel without any verbs/CUDA/cuFile runtime.
 Its ELF negative control rejects a library linked to libibverbs. Explicit GDS
@@ -579,6 +579,21 @@ header and the `regex-lite` dependency are removed. The packaged CLI control
 checks its identity and verifies the absence of network/thread syscalls.
 
 ## RDMA resource owners
+
+OrbitRDMA owns the native ABI, device and port queries, protection domains, RC
+transitions, Linux GID inventory, per-PD key history, host MR/MW operations, async and CQ events, dma-buf registration,
+mlx5 DevX keys and native destruction. OrbiTE retains CUDA export FDs and
+arbitrates loans across transports. It submits READ/WRITE and completion-message SEND/RECV
+through OrbitRDMA's `verbs::post`. The progress lane uses `verbs::poll` on the
+same CQ it already owns. A known accepted prefix charges exactly those WRs.
+A contradictory successful window bind or invalidation also retains its range
+until the QP drains. A missing, foreign or contradictory first-failure pointer retains every possible
+WR until completion or QP drain. Grants retain their actual registrations,
+cross-transport DMA loans and protocol authority. A source configured with
+`host_source_reuse = false` isolates each direct host grant using the same
+private-PD lifetime as a non-reused direct GPU grant. The installed host gate
+checks the creation and retirement of that PD after each guarded transfer.
+[Private host grants](installed-host.md#private-host-grants) · [OrbitRDMA](https://github.com/OrbitInfra/OrbitRDMA)
 
 CUDA registration adds a deliberate extension to frozen TENT's XPU dma-buf
 exporter in `rdma/context.cpp`; TENT's NVIDIA availability check uses peermem.
@@ -902,7 +917,7 @@ or string work, preserving TENT's `CudaProbe → Topology → DeviceSelector` ch
 | --- | --- |
 | `quota/scheduling.rs::SchedulingParams`, `quota/bandwidth.rs::DeviceInfo` | Bandwidth policy, selection EWMA and busy-time meter (`setDeviceBandwidth`, `noteCompleted`, `maybeSampleTransmit`, `getNicLoadStats`) |
 | `quota/allocation.rs` | `buildCandidates`, `selectSinglePath`, `selectMultiPath` |
-| `sys/port.c`, `sys/port.rs`, `RdmaContext` | `recordPortSpeed`, `queryEffectiveSpeed`, `refreshPortAttributes` |
+| `orbit_rdma::provider::port`, `RdmaContext` | `recordPortSpeed`, `queryEffectiveSpeed`, `refreshPortAttributes` |
 | `workers/post_queue.rs`, `bw_arbitration.rs`, `promotion_policy.rs` | Priority tiers, `OrderByUrgency`, request promotion |
 | `shared_quota.rs::SharedSlotManager` | Mapped current priority slot and joined monotonic publisher; per-NIC leases remain in DeviceSelector |
 

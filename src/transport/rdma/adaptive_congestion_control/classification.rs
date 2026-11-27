@@ -35,7 +35,7 @@ pub struct Classification {
 pub fn classify_completion(status: u32, vendor_error: u32) -> Classification {
     use FailureScope::*;
     use Outcome::*;
-    use ffi::ibv_wc_status::*;
+    use ffi::*;
     let (outcome, scope) = match status {
         IBV_WC_SUCCESS => (Success, Operation),
         IBV_WC_RNR_RETRY_EXC_ERR => (ReceiverPressure, Qp),

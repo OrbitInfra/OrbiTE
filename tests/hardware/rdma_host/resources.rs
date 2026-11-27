@@ -19,6 +19,7 @@ pub(super) fn idle(engine: &TransferEngine) -> Result<RdmaStats> {
             && stats.inflight_batches == 0
             && stats.requester_workers == 0
             && rdma.active_grants == 0
+            && rdma.active_grant_pds == 0
             && rdma.grant_credits == 0
             && rdma.receive_credits == 0
             && rdma.work_requests == 0
@@ -58,6 +59,7 @@ fn clean(engine: &TransferEngine) -> Result<()> {
         rdma.active_grants,
         rdma.grant_credits,
         rdma.retained_grants,
+        rdma.active_grant_pds,
         rdma.persistent_mrs,
         rdma.persistent_mr_bytes,
         rdma.retained_persistent_mrs,
@@ -89,6 +91,7 @@ fn clean(engine: &TransferEngine) -> Result<()> {
     .iter()
     .any(|n| *n != 0)
         || rdma.opened_connections != rdma.closed_connections
+        || rdma.opened_grant_pds != rdma.closed_grant_pds
         || rdma.progress_failures != rdma.progress_recoveries
         || (!matches!(
             env::var("ORBITE_HOST_MODE").as_deref(),
@@ -163,6 +166,7 @@ pub(super) fn engine(case: &Case, bind: SocketAddr) -> Result<TransferEngine> {
         };
         config.rdma = Some({
             let mut config = RdmaConfig::default();
+            config.host_source_reuse = !case.private_host;
             config.rail_cooldown = Duration::from_secs(2);
             config.rail_probe_interval = Duration::from_secs(1);
             config.rail_topology = rail_topology;
@@ -235,6 +239,38 @@ pub(super) fn engine(case: &Case, bind: SocketAddr) -> Result<TransferEngine> {
     }
     let engine = TransferEngine::new(config)?;
     Ok(engine)
+}
+
+pub(super) fn private_grant(case: &Case, round: usize, stats: &RdmaStats) -> Result<()> {
+    let grants = (round + 1) as u64;
+    let pds = if case.source { grants } else { 0 };
+    if stats.opened_grant_pds != pds
+        || stats.closed_grant_pds != pds
+        || stats.active_grant_pds != 0
+        || stats.active_endpoints != 0
+        || stats.opened_connections != grants
+        || stats.closed_connections != grants
+        || stats.reused_connections != 0
+        || stats.completed_reusable_grants != 0
+        || stats.opened_windows != 0
+        || stats.opened_source_mrs != 0
+        || stats.persistent_mrs != 2
+        || stats.opened_persistent_mrs != 2
+    {
+        return Err(
+            format!("private host grant did not retire its native owners: {stats:?}").into(),
+        );
+    }
+    println!(
+        "ORBITE_PRIVATE_GRANT {{\"round\":{round},\"opened_pds\":{},\"closed_pds\":{},\"active_pds\":{},\"active_qps\":{},\"windows\":{},\"source_parents\":{}}}",
+        stats.opened_grant_pds,
+        stats.closed_grant_pds,
+        stats.active_grant_pds,
+        stats.active_endpoints,
+        stats.opened_windows,
+        stats.opened_source_mrs
+    );
+    Ok(())
 }
 
 pub(super) fn inventory(case: &Case, engine: &TransferEngine) -> Result<()> {

@@ -117,13 +117,18 @@ impl GrantConstruction {
             };
 
             let gpu_source = is_direct && memory.is_cuda() && permission != 0;
-            let remote_mr = gpu_source && matches!(connection, Connection::Fresh(None));
+            let remote_mr = permission != 0
+                && matches!(connection, Connection::Fresh(None))
+                && transport.private_source_mr(memory);
             let grant = GrantResources {
                 _worker: worker_lease,
                 device,
                 handles: sys::MemoryHandles {
-                    remote_mr,
-                    gpu_parent: gpu_source && !remote_mr,
+                    native: orbit_rdma::provider::Memory {
+                        remote_mr,
+                        gpu_parent: gpu_source && !remote_mr,
+                        ..Default::default()
+                    },
                     ..Default::default()
                 },
                 cached_mr: None,

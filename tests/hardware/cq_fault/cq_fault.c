@@ -60,11 +60,13 @@ static void receipt(const char *format, ...) {
     if (size < 0 || (size_t)size >= sizeof(line) || write(log_fd, line, (size_t)size) != size) fail();
 }
 
+static void *native_verb(const char *name);
+
 static void resolve(void) {
-    *(void **)(&native_open) = dlsym(RTLD_NEXT, "ibv_open_device");
-    *(void **)(&native_close) = dlsym(RTLD_NEXT, "ibv_close_device");
-    *(void **)(&native_destroy_qp) = dlsym(RTLD_NEXT, "ibv_destroy_qp");
-    *(void **)(&native_query_qp) = dlsym(RTLD_NEXT, "ibv_query_qp");
+    *(void **)(&native_open) = native_verb("ibv_open_device");
+    *(void **)(&native_close) = native_verb("ibv_close_device");
+    *(void **)(&native_destroy_qp) = native_verb("ibv_destroy_qp");
+    *(void **)(&native_query_qp) = native_verb("ibv_query_qp");
     if (!native_open || !native_close || !native_destroy_qp || !native_query_qp) fail();
 }
 
@@ -226,7 +228,7 @@ static void attach(struct ibv_context *context) {
  * verbs and precedes MR registration, QP creation and data posting. */
 struct ibv_pd *ibv_alloc_pd(struct ibv_context *context) {
     struct ibv_pd *(*native)(struct ibv_context *);
-    *(void **)(&native) = dlsym(RTLD_NEXT, "ibv_alloc_pd");
+    *(void **)(&native) = native_verb("ibv_alloc_pd");
     if (!native) fail();
     if (gdr_observe()) attach(context);
     return native(context);
@@ -345,3 +347,5 @@ int orbite_cleanup_fault(unsigned command, struct cleanup_snapshot *output) {
     pthread_mutex_unlock(&lock);
     return error;
 }
+
+#include "lookup.c"

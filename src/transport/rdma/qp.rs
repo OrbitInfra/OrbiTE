@@ -48,7 +48,7 @@ impl ConnectionResources {
             return Ok(());
         }
         if !self.closed {
-            return Err(("GPU grant PD before QP drain", libc::EBUSY));
+            return Err(("grant PD before QP drain", libc::EBUSY));
         }
         let mut device = sys::DeviceHandles {
             pd: self.handles.private_pd,
@@ -58,7 +58,7 @@ impl ConnectionResources {
         // attempt.
         let code = unsafe { (verbs.dealloc_pd)(&mut device) };
         if code != 0 {
-            return Err(("ibv_dealloc_pd GPU grant", code));
+            return Err(("ibv_dealloc_pd private grant", code));
         }
         self.handles.private_pd = device.pd;
         if let Some(lease) = &self.lease {

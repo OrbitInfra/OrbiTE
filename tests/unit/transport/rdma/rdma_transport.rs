@@ -62,6 +62,77 @@ fn send_frame(channel: &mut ControlChannel<'_>, phase: u8, bytes: &[u8; BINDING_
 }
 
 #[test]
+fn private_host_source_grants_retire_their_pd_and_preserve_adjacent_bytes() {
+    use crate::engine::tests::rdma_fixture_with_runtime;
+    let mut runtime = crate::transport::rdma::tests::runtime("direct:copy");
+    runtime.config.host_source_reuse = false;
+    let source = rdma_fixture_with_runtime(runtime);
+    let requester = rdma_fixture("direct:copy");
+    let exported = source
+        .register_memory(
+            vec![0xe1; 24].into_boxed_slice(),
+            Permission::RemoteReadWrite,
+        )
+        .unwrap();
+    let local = requester
+        .register_memory(vec![0x5a; 16].into_boxed_slice(), Permission::LocalOnly)
+        .unwrap();
+    let peer = requester
+        .open_segment(source.endpoint(), source.source_epoch(), TIMEOUT)
+        .unwrap();
+    for op in [TransferOp::Read, TransferOp::Write] {
+        if op == TransferOp::Write {
+            local.write(2, b"host").unwrap();
+        }
+        let request = TransferRequest::new(
+            Transport::Rdma,
+            local.base_address() + 2,
+            exported.base_address() + 7,
+            4,
+        );
+        let report = requester
+            .submit_and_wait(op, &peer, &[request], TIMEOUT)
+            .unwrap();
+        assert!(report.failure.is_none(), "{:?}", report.failure);
+        assert_eq!(report.transferred_bytes, 4);
+        let mut actual = [0; 16];
+        local.read(0, &mut actual).unwrap();
+        let mut expected = [0x5a; 16];
+        expected[2..6].copy_from_slice(if op == TransferOp::Read {
+            &[0xe1; 4]
+        } else {
+            b"host"
+        });
+        assert_eq!(actual, expected);
+    }
+    let mut actual = [0; 24];
+    exported.read(0, &mut actual).unwrap();
+    let mut expected = [0xe1; 24];
+    expected[7..11].copy_from_slice(b"host");
+    assert_eq!(actual, expected);
+    requester.close(TIMEOUT).unwrap();
+    source.close(TIMEOUT).unwrap();
+    let stats = source.stats().unwrap().rdma.unwrap();
+    let requester_stats = requester.stats().unwrap().rdma.unwrap();
+    for (node, private_pds) in [(&stats, 2), (&requester_stats, 0)] {
+        assert_eq!(
+            (node.opened_grant_pds, node.closed_grant_pds),
+            (private_pds, private_pds)
+        );
+        assert_eq!((node.active_grant_pds, node.active_endpoints), (0, 0));
+        assert_eq!((node.opened_connections, node.closed_connections), (2, 2));
+        assert_eq!((node.reused_connections, node.opened_windows), (0, 0));
+    }
+    // The shared PD keeps only the eagerly published local registration.
+    assert_eq!(stats.opened_persistent_mrs, 1);
+    assert_eq!(stats.opened_source_mrs, 0);
+    assert_eq!(
+        (stats.persistent_mrs, stats.retained_persistent_mrs),
+        (0, 0)
+    );
+}
+
+#[test]
 fn identical_requests_on_identical_connections_cannot_replay_an_old_grant_receipt() {
     let source = identity(1, 2, 3);
     let requester = identity(4, 5, 6);
@@ -301,7 +372,7 @@ fn requester_checks_source_offer_and_each_bound_phase_before_data_or_read_copyba
                     nic_id: 0,
                     name: "copy".into(),
                     domain: [8; 16],
-                    gid_type: crate::transport::rdma::discovery::GidType::Ib,
+                    gid_type: crate::transport::rdma::discovery::GidType::InfiniBand,
                     descriptor: Descriptor {
                         lid: 1,
                         mtu: 3,

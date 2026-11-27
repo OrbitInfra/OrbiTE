@@ -4,9 +4,10 @@ use std::sync::{Arc, Mutex};
 
 use super::{
     ConnectionId, Descriptor, RdmaConfig, RdmaStats, Resources as EndpointResources, check,
-    discovery::RdmaAddress, events, keys, sys,
+    discovery::RdmaAddress, events, sys,
 };
 use crate::{Error, RegisteredMemory, Result};
+use orbit_rdma::provider::KeyHistory;
 
 mod gpu_keys;
 mod key_domain;
@@ -44,7 +45,7 @@ struct Resources {
     next_grant: u64,
     next_gpu_key: u64,
     gpu_index_limit: usize,
-    keys: keys::Keys,
+    keys: KeyHistory,
     exhausted_windows: Vec<ExhaustedWindow>,
     address: RdmaAddress,
     gid_index: Option<u8>,
@@ -119,7 +120,7 @@ impl RdmaContext {
                 next_grant: 1,
                 next_gpu_key: 0,
                 gpu_index_limit: config.max_window_key_indices,
-                keys: keys::Keys::new(config.max_window_key_indices),
+                keys: KeyHistory::new(config.max_window_key_indices),
                 exhausted_windows: Vec::new(),
                 address,
                 gid_index: config.gid_index,

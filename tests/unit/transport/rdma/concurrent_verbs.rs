@@ -253,7 +253,7 @@ unsafe extern "C" fn register(
     if code == 0 {
         // SAFETY: The registration retains this native ibv_mr until the deregistration call
         // returns.
-        let mr = unsafe { &*(*h).mr.cast::<ffi::ibv_mr>() };
+        let mr = unsafe { &*(*h).native.mr.cast::<ffi::ibv_mr>() };
         // SAFETY: The callback borrows the live protection-domain handle from its device owner.
         assert_eq!(mr.pd.cast::<std::ffi::c_void>(), unsafe { (*device).pd });
         let mut trace = TRACE.get().unwrap().lock().unwrap();
@@ -278,7 +278,9 @@ unsafe extern "C" fn post(
     // SAFETY: The connection owns the native ibv_qp while the fixture inspects its fields.
     let qp = unsafe { &*(*h).qp.cast::<ffi::ibv_qp>() };
     // SAFETY: The registration retains this native ibv_mr until the deregistration call returns.
-    assert_eq!(qp.pd, unsafe { (*(*memory).mr.cast::<ffi::ibv_mr>()).pd });
+    assert_eq!(qp.pd, unsafe {
+        (*(*memory).native.mr.cast::<ffi::ibv_mr>()).pd
+    });
     // SAFETY: The live verbs context retains its device and the provider-owned NUL-terminated
     // name during inspection.
     let name = unsafe { CStr::from_ptr(ffi::ibv_get_device_name((*qp.context).device)) }
@@ -370,18 +372,14 @@ unsafe extern "C" fn post(
             .ends_with("qp-error")
     {
         let mut attributes = ffi::ibv_qp_attr {
-            qp_state: ffi::ibv_qp_state::IBV_QPS_ERR,
+            qp_state: ffi::IBV_QPS_ERR,
             ..Default::default()
         };
         assert_eq!(
             // SAFETY: The connection retains the native QP and the fixture supplies initialized
             // attribute storage for this call.
             unsafe {
-                ffi::ibv_modify_qp(
-                    (*h).qp.cast(),
-                    &mut attributes,
-                    ffi::ibv_qp_attr_mask::IBV_QP_STATE.0 as c_int,
-                )
+                ffi::ibv_modify_qp((*h).qp.cast(), &mut attributes, ffi::IBV_QP_STATE as c_int)
             },
             0
         );
@@ -394,13 +392,13 @@ unsafe extern "C" fn post(
                 ffi::ibv_query_qp(
                     (*h).qp.cast(),
                     &mut observed,
-                    ffi::ibv_qp_attr_mask::IBV_QP_STATE.0 as c_int,
+                    ffi::IBV_QP_STATE as c_int,
                     &mut initial,
                 )
             },
             0
         );
-        assert_eq!(observed.qp_state, ffi::ibv_qp_state::IBV_QPS_ERR);
+        assert_eq!(observed.qp_state, ffi::IBV_QPS_ERR);
         TRACE.get().unwrap().lock().unwrap().qp_errors += 1;
     }
     let bad_key = inject
@@ -666,9 +664,9 @@ fn delivered(trace: &mut Trace, cq: usize, completion: &sys::Completion) {
                 assert_eq!(
                     completion.status,
                     if trace.mode.ends_with("qp-error") {
-                        ffi::ibv_wc_status::IBV_WC_WR_FLUSH_ERR
+                        ffi::IBV_WC_WR_FLUSH_ERR
                     } else {
-                        ffi::ibv_wc_status::IBV_WC_REM_ACCESS_ERR
+                        ffi::IBV_WC_REM_ACCESS_ERR
                     },
                     "the injected WR must receive its own native error"
                 );
@@ -981,7 +979,7 @@ unsafe extern "C" fn destroy_cq(h: *mut sys::CqHandles) -> c_int {
 
 unsafe extern "C" fn deregister(h: *mut sys::MemoryHandles) -> c_int {
     // SAFETY: The registration owner keeps its MR handle slot valid through the callback.
-    let mr = unsafe { (*h).mr } as usize;
+    let mr = unsafe { (*h).native.mr } as usize;
     // SAFETY: The registration owner retains the MR and backing through the deregistration
     // attempt.
     let code = unsafe { (sys::REAL.deregister)(h) };

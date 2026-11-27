@@ -28,7 +28,7 @@ unsafe extern "C" fn register(
     if code == 0 {
         // SAFETY: The registration retains this native ibv_mr until the deregistration call
         // returns.
-        let mr = unsafe { &*(*memory).mr.cast::<ffi::ibv_mr>() };
+        let mr = unsafe { &*(*memory).native.mr.cast::<ffi::ibv_mr>() };
         // SAFETY: The callback borrows the live protection-domain handle from its device owner.
         assert_eq!(mr.pd.cast::<std::ffi::c_void>(), unsafe { (*device).pd });
         // SAFETY: The device owner keeps this context handle slot valid through the callback.
@@ -45,7 +45,7 @@ unsafe extern "C" fn register(
 
 unsafe extern "C" fn deregister(memory: *mut sys::MemoryHandles) -> i32 {
     // SAFETY: The registration owner keeps its MR handle slot valid through the callback.
-    let handle = unsafe { (*memory).mr } as usize;
+    let handle = unsafe { (*memory).native.mr } as usize;
     // SAFETY: The registration owner retains the MR and backing through the deregistration
     // attempt.
     let code = unsafe { (sys::REAL.deregister)(memory) };
@@ -95,6 +95,7 @@ pub(super) fn registration() {
         rejected.publish(
             &owners,
             std::slice::from_ref(&memory),
+            true,
             Instant::now() + TIMEOUT
         ),
         Err(Error::ResourceExhausted)
@@ -106,6 +107,7 @@ pub(super) fn registration() {
         .publish(
             &owners,
             std::slice::from_ref(&memory),
+            true,
             Instant::now() + TIMEOUT,
         )
         .unwrap();

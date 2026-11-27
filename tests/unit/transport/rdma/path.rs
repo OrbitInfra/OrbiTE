@@ -9,7 +9,7 @@ fn path(id: usize, name: &str, kind: GidType, gid: &str) -> NicPath {
         descriptor: Descriptor {
             lid: 1,
             mtu: 3,
-            link_layer: if kind == GidType::Ib { 1 } else { 2 },
+            link_layer: if kind == GidType::InfiniBand { 1 } else { 2 },
             gid: gid.parse::<Ipv6Addr>().unwrap().octets(),
             ..Default::default()
         },
@@ -19,7 +19,7 @@ fn path(id: usize, name: &str, kind: GidType, gid: &str) -> NicPath {
 #[test]
 fn rail_mask_keeps_family_type_and_name_affinity_without_compacting_ids() {
     let local = vec![
-        path(0, "a", GidType::Ib, "::"),
+        path(0, "a", GidType::InfiniBand, "::"),
         path(2, "b", GidType::RoceV2, "::ffff:10.0.0.1"),
         path(5, "c", GidType::RoceV2, "2001:db8::1"),
     ];

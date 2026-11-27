@@ -22,15 +22,14 @@ fn main() {
     }
     build_identity();
     println!("cargo:rustc-check-cfg=cfg(unsupported_native_target)");
-    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux") {
-        #[cfg(feature = "rdma")]
-        build_port_shim();
-    } else if cfg!(any(
-        feature = "cuda",
-        feature = "rdma",
-        feature = "io-uring",
-        feature = "gds"
-    )) {
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("linux")
+        && cfg!(any(
+            feature = "cuda",
+            feature = "rdma",
+            feature = "io-uring",
+            feature = "gds"
+        ))
+    {
         println!("cargo:rustc-cfg=unsupported_native_target");
     }
 }
@@ -89,66 +88,4 @@ fn build_identity() {
         "cargo:rustc-env=ORBITE_BUILD_COMPILER={}",
         compiler.as_deref().unwrap_or("unknown")
     );
-}
-
-#[cfg(feature = "rdma")]
-fn build_port_shim() {
-    use std::{env, fs, path::PathBuf};
-
-    const HEADER: &str = "src/transport/rdma/sys/port.h";
-    const SOURCE: &str = "src/transport/rdma/sys/port.c";
-    println!("cargo:rerun-if-changed={HEADER}");
-    println!("cargo:rerun-if-changed={SOURCE}");
-    let output = PathBuf::from(env::var_os("OUT_DIR").expect("Cargo supplies OUT_DIR"));
-    let probe = output.join("port_speed_ex.c");
-    fs::write(
-        &probe,
-        "#include <infiniband/verbs.h>\nint orbite_speed_ex(struct ibv_port_attr *a) { return a->active_speed_ex; }\n",
-    )
-    .expect("write port capability probe");
-    let mut native = cc::Build::new();
-    #[cfg(feature = "cuda")]
-    native.define("ORBITE_GPU_KEYS", None);
-    let compiler = native.get_compiler();
-    let extended = compiler
-        .to_command()
-        .arg("-c")
-        .arg(&probe)
-        .arg("-o")
-        .arg(output.join("port_speed_ex.o"))
-        .output()
-        .expect("run port capability probe")
-        .status
-        .success();
-    if extended {
-        native.define("ORBITE_HAVE_ACTIVE_SPEED_EX", None);
-    }
-    println!("cargo:rustc-env=ORBITE_RDMA_ACTIVE_SPEED_EX={extended}");
-    native.file(SOURCE).compile("orbite_port");
-    bindgen::Builder::default()
-        .header(HEADER)
-        .allowlist_function("orbite_query_port")
-        .allowlist_type("orbite_port_attr")
-        .allowlist_type("ibv_.*")
-        .allowlist_type("_compat_ibv_port_attr")
-        .allowlist_var("IBV_.*")
-        .bitfield_enum("ibv_access_flags")
-        .bitfield_enum("ibv_qp_attr_mask")
-        .bitfield_enum("ibv_wc_flags")
-        .bitfield_enum("ibv_send_flags")
-        .bitfield_enum("ibv_port_cap_flags")
-        .constified_enum_module("ibv_qp_type")
-        .constified_enum_module("ibv_qp_state")
-        .constified_enum_module("ibv_port_state")
-        .constified_enum_module("ibv_wc_opcode")
-        .constified_enum_module("ibv_wr_opcode")
-        .constified_enum_module("ibv_wc_status")
-        .prepend_enum_name(false)
-        .size_t_is_usize(true)
-        .derive_default(true)
-        .parse_callbacks(Box::new(bindgen::CargoCallbacks::new()))
-        .generate()
-        .expect("generate verbs layouts and the port shim ABI")
-        .write_to_file(output.join("verbs.rs"))
-        .expect("write verbs layouts and the port shim ABI");
 }

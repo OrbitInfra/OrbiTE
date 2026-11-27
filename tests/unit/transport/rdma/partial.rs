@@ -71,7 +71,7 @@ unsafe extern "C" fn post_send(
         assert!((*third).next.is_null());
         assert!(matches!(
             (*first).opcode,
-            ffi::ibv_wr_opcode::IBV_WR_RDMA_READ | ffi::ibv_wr_opcode::IBV_WR_RDMA_WRITE
+            ffi::IBV_WR_RDMA_READ | ffi::IBV_WR_RDMA_WRITE
         ));
         assert_eq!((*second).num_sge, 1);
         // mlx5 checks max SGEs before reading the SGE list. Its real post_send

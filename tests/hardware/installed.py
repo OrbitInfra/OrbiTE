@@ -23,10 +23,13 @@ def validate_nodes(profile):
             identities.append(identity)
         if any(left == right for left, right in zip(*identities)):
             raise ValueError('installed host requires distinct physical hosts and boot IDs')
+    private_operations = {case['operation'] for case in cases if case['mode'] == 'installed-private-host'}
+    if private_operations and private_operations != {'read', 'write'}:
+        raise ValueError('the private host gate requires both READ and WRITE cases')
 
 
 def validate(case):
-    if (case.get('mode') not in ('installed-host', 'installed-selector', 'installed-selective', 'installed-rail-health', 'installed-rail-accounting', 'installed-restart', 'installed-interruption', 'installed-lost-completion', 'installed-cleanup-failure', 'installed-inflight-dma', 'installed-memory-cleanup') or case.get('transport') != 'rdma'
+    if (case.get('mode') not in ('installed-host', 'installed-private-host', 'installed-selector', 'installed-selective', 'installed-rail-health', 'installed-rail-accounting', 'installed-restart', 'installed-interruption', 'installed-lost-completion', 'installed-cleanup-failure', 'installed-inflight-dma', 'installed-memory-cleanup') or case.get('transport') != 'rdma'
             or case.get('source_kind') != 'cpu' or case.get('requester_kind') != 'cpu'
             or case.get('source') == case.get('requester')
             or case.get('operation') not in ('read', 'write')
@@ -58,6 +61,9 @@ def validate(case):
     if case['mode'] == 'installed-inflight-dma' and (case['parents'] != 1 or case['num_lanes'] != 1
             or case['mask'] not in (1, 2) or case['payload'] != case['block']):
         raise ValueError('in-flight DMA requires one parent, QP and payload WR')
+    if case['mode'] == 'installed-private-host' and (case['parents'] != 1 or case['num_lanes'] != 1
+            or case['mask'] not in (1, 2) or case['payload'] > case['block']):
+        raise ValueError('private host requires one grant on one rail per round')
     if case['mode'] == 'installed-cleanup-failure':
         kind = case.get('cleanup_kind', 'qp')
         if kind not in ('qp', 'cq', 'channel', 'pd') or (kind == 'channel' and not case['rdma_events']):
@@ -159,14 +165,27 @@ def verify(profile, case, evidence):
         rounds = records('ORBITE_INSTALLED_ROUND ')
         if len(rounds) != 3 or [(r['phase'], r['round']) for r in rounds] != [(0, i) for i in range(3)]:
             raise ValueError('installed peer omitted or duplicated a round')
+        private = case['mode'] == 'installed-private-host'
+        if private:
+            expected = []
+            for index in range(3):
+                pds = index + 1 if role == 'source' else 0
+                expected.append(dict(round=index, opened_pds=pds, closed_pds=pds, active_pds=0,
+                                     active_qps=0, windows=0, source_parents=0))
+            if records('ORBITE_PRIVATE_GRANT ') != expected:
+                raise ValueError('private source PD creation and retirement evidence disagrees')
         for index, row in enumerate(rounds):
             bound = case['mask'].bit_count() * case['num_lanes']
-            if (not 1 <= row['opened_qps'] <= bound or row['opened_mrs'] != 4
+            if private:
+                if (row['opened_qps'] != index + 1 or row['closed_qps'] != index + 1
+                        or row['opened_mrs'] != 2 or row['reused_qps'] != 0 or row['completed_grants'] != 0):
+                    raise ValueError('private host retained or reused QPs or registered extra parent MRs')
+            elif (not 1 <= row['opened_qps'] <= bound or row['opened_mrs'] != 4
                     or row['closed_qps'] != 0):
                 raise ValueError('installed QP/MR bound was violated')
-            if row['completed_grants'] <= (rounds[index - 1]['completed_grants'] if index else 0):
+            elif row['completed_grants'] <= (rounds[index - 1]['completed_grants'] if index else 0):
                 raise ValueError('installed peer made no native grant progress')
-            if index and row['reused_qps'] <= rounds[index - 1]['reused_qps']:
+            elif index and row['reused_qps'] <= rounds[index - 1]['reused_qps']:
                 raise ValueError('installed peer did not reuse native QPs')
             expected = (index + 1) * case['parents'] * case['payload']
             for operation in ('read', 'write'):

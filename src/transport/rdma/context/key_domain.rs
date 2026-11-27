@@ -38,13 +38,13 @@ impl Resources {
                     usage.burned_window_keys += 1;
                     return Ok(key);
                 }
-                Err(error) => {
+                Err(_) => {
                     let index = memory.window_key & !255;
                     if !self.keys.exhausted(memory.window_key)
                         || self.exhausted_windows.len() >= config.max_window_key_indices
                     {
                         usage.window_key_exhaustions += 1;
-                        return Err(error);
+                        return Err(Error::ResourceExhausted);
                     }
                     if self.exhausted_windows.try_reserve(1).is_err() {
                         usage.window_key_exhaustions += 1;
@@ -77,7 +77,10 @@ impl Resources {
     pub(super) fn close_exhausted_windows(&mut self, verbs: &sys::Verbs) -> Result<()> {
         while let Some(window) = self.exhausted_windows.last() {
             let mut memory = sys::MemoryHandles {
-                mw: window.handle.as_ptr(),
+                native: orbit_rdma::provider::Memory {
+                    mw: window.handle.as_ptr(),
+                    ..Default::default()
+                },
                 ..Default::default()
             };
             // SAFETY: this MW was never bound; only its retained PD is required.

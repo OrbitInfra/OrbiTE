@@ -21,6 +21,28 @@ the host provider and devices. All engine, protocol,
 progress and resource owners are Rust. A small C shim only queries port rates
 from the installed libibverbs headers.
 
+The `rdma` feature uses OrbitRDMA 0.1.1 for every native verbs operation. The
+combined `rdma,cuda` build also selects its dma-buf and mlx5 provider support.
+OrbiTE retains CUDA allocation/export lifetimes, peer grants, rail selection
+and progress scheduling.
+
+For a direct host source, `RdmaConfig.host_source_reuse` defaults to `true`.
+Each reused QP requires a per-grant memory window and an exact remote-invalidation
+receipt. Set it to `false` on a source whose provider cannot report that
+receipt. OrbiTE registers only the granted byte range with its requested
+permission on a fresh QP and private PD. The peer sends the existing plain
+completion message. QP drain, MR deregistration and PD cleanup retire the
+authority. The requester learns the grant profile during the handshake.
+
+The Debian 12 RXE provider on Linux 6.1 reports flags `0x5` for a receive
+with invalidation. Its checksum bit cannot establish invalidation through the
+userspace verbs ABI. Use the private source profile on this stack. With an
+active software device, run
+`cargo run --locked --features rdma --example rdma_roundtrip -- orbit_rxe 1 1`
+using the actual device, port and GID index. The example checks host READ and
+WRITE, all guard bytes, and both engines' shutdown.
+[Kernel RXE completions](https://github.com/torvalds/linux/blob/v6.1/drivers/infiniband/sw/rxe/rxe_resp.c#L898-L920) · [rdma-core WC flags](https://github.com/linux-rdma/rdma-core/blob/v44.0/libibverbs/verbs.h#L547-L568)
+
 A request names `Transport::Tcp`, `Transport::Rdma` or `Transport::Nvlink`, or
 uses `Transport::Unspec` for [transport selection](transport-selection.md). Each
 peer's memory policy then picks the backing:

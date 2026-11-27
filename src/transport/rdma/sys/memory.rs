@@ -1,8 +1,30 @@
-//! Native MR registration and exact-range MW commands.
-
+//! Adapt engine-owned registration backing to the provider for each native call.
 use super::*;
 
-// All native CUDA MRs, including private-PD grants, pass this boundary.
+impl MemoryHandles {
+    fn source(&self) -> provider::RegistrationSource {
+        #[cfg(feature = "cuda")]
+        {
+            if let Some(buf) = &self.dmabuf {
+                return match self.dmabuf_verb {
+                    Some(register) => provider::RegistrationSource::DmaBuf {
+                        base: buf.base,
+                        size: buf.length,
+                        fd: buf.fd,
+                        register,
+                    },
+                    None => provider::RegistrationSource::Unavailable,
+                };
+            }
+            if self.gpu_route == 1 {
+                return provider::RegistrationSource::Unavailable;
+            }
+        }
+        provider::RegistrationSource::Host
+    }
+}
+
+#[cfg(all(test, feature = "cuda"))]
 pub(in crate::transport::rdma) unsafe fn register_on_pd(
     memory: &MemoryHandles,
     pd: *mut c_void,
@@ -10,194 +32,51 @@ pub(in crate::transport::rdma) unsafe fn register_on_pd(
     length: usize,
     access: c_int,
 ) -> *mut c_void {
-    #[cfg(feature = "cuda")]
-    if let Some(export) = &memory.dmabuf {
-        let Some(verb) = memory.dmabuf_verb else {
-            return std::ptr::null_mut();
-        };
-        let Some(offset) = (buffer as u64).checked_sub(export.base) else {
-            return std::ptr::null_mut();
-        };
-        if offset
-            .checked_add(length as u64)
-            .is_none_or(|end| end > export.length as u64)
-        {
-            return std::ptr::null_mut();
-        }
-        // SAFETY: the CUDA owner verified the containing allocation; the grant retains
-        // its exact subrange, descriptor and PD until deregistration succeeds.
-        return unsafe { verb(pd, offset, length, buffer as u64, export.fd, access) };
-    }
-    #[cfg(feature = "cuda")]
-    if memory.gpu_route == 1 {
-        return std::ptr::null_mut();
-    }
-    let _ = memory;
-    // SAFETY: host backing or a positively selected peermem route is retained by
-    // the registration owner. Export errors never reach this branch.
-    unsafe { ffi::ibv_reg_mr(pd.cast(), buffer, length, access).cast() }
+    // SAFETY: the caller retains the PD, buffer and optional CUDA export throughout registration.
+    unsafe { provider::register_on_pd(memory.source(), pd, buffer, length, access) }
 }
-
 pub(super) unsafe extern "C" fn register_memory(
-    handles: *mut MemoryHandles,
+    memory: *mut MemoryHandles,
     device: *const DeviceHandles,
     buffer: *mut c_void,
     length: usize,
     window_bind: bool,
 ) -> c_int {
-    // SAFETY: the MR owner retains the device and entire host registration.
-    // Window-bind capability never grants access through the parent MR rkey.
+    // SAFETY: the engine owns the memory, export and PD, including every partial result on error.
     unsafe {
-        (*handles).mr = register_on_pd(
-            &*handles,
-            (*device).pd,
-            buffer,
-            length,
-            (ffi::ibv_access_flags::IBV_ACCESS_LOCAL_WRITE.0
-                | if window_bind {
-                    ffi::ibv_access_flags::IBV_ACCESS_MW_BIND.0
-                } else {
-                    0
-                }) as c_int,
-        )
-        .cast();
-        if (*handles).mr.is_null() {
-            failure()
-        } else {
-            0
-        }
+        let m = &mut *memory;
+        let source = m.source();
+        provider::register_memory(&mut m.native, device, buffer, length, window_bind, source)
     }
 }
-
 pub(super) unsafe extern "C" fn prepare_grant(
-    handles: *mut ConnectionHandles,
+    h: *mut ConnectionHandles,
     memory: *mut MemoryHandles,
     device: *const DeviceHandles,
     buffer: *mut c_void,
     length: usize,
     permission: u32,
 ) -> c_int {
-    // SAFETY: one exclusive grant claim owns these bytes and the actual PD/QP.
-    // This never resets/reconnects an existing QP or publishes its parent key.
+    // SAFETY: the grant holds these exclusive slots and the actual subrange until teardown.
     unsafe {
-        let memory = &mut *memory;
-        let device = &*device;
-        if !(*handles).qp.is_null() && (*(*handles).qp.cast::<ffi::ibv_qp>()).pd != device.pd.cast()
-        {
-            return libc::EINVAL;
-        }
-        if memory.gpu_parent {
-            // The local GPU MR was registered once on this PD. Authority is
-            // created only after the peer accepts the connection and generation.
-            if memory.mr.is_null() || permission == 0 || memory.remote_mr {
-                return libc::EINVAL;
-            }
-            let parent = &*memory.mr.cast::<ffi::ibv_mr>();
-            if parent.pd != device.pd.cast()
-                || (buffer as usize)
-                    .checked_sub(parent.addr as usize)
-                    .and_then(|n| n.checked_add(length))
-                    .is_none_or(|end| end > parent.length)
-            {
-                return libc::EINVAL;
-            }
-            return 0;
-        }
-        if memory.remote_mr {
-            if permission == 0 || !(*handles).qp.is_null() || !memory.mr.is_null() {
-                return libc::EINVAL;
-            }
-            (*handles).private_pd = ffi::ibv_alloc_pd(device.context.cast()).cast();
-            if (*handles).private_pd.is_null() {
-                return failure();
-            }
-            let mut access = ffi::ibv_access_flags::IBV_ACCESS_LOCAL_WRITE.0;
-            if permission & 1 != 0 {
-                access |= ffi::ibv_access_flags::IBV_ACCESS_REMOTE_READ.0;
-            }
-            if permission & 2 != 0 {
-                access |= ffi::ibv_access_flags::IBV_ACCESS_REMOTE_WRITE.0;
-            }
-            memory.mr = register_on_pd(
-                memory,
-                (*handles).private_pd,
-                buffer,
-                length,
-                access as c_int,
-            )
-            .cast();
-            if memory.mr.is_null() {
-                return failure();
-            }
-            memory.window_key = (*memory.mr.cast::<ffi::ibv_mr>()).rkey;
-            return 0;
-        }
-        let access = ffi::ibv_access_flags::IBV_ACCESS_LOCAL_WRITE.0
-            | if permission != 0 {
-                ffi::ibv_access_flags::IBV_ACCESS_MW_BIND.0
-            } else {
-                0
-            };
-        if memory.mr.is_null() {
-            memory.mr = register_on_pd(memory, device.pd, buffer, length, access as c_int);
-            if memory.mr.is_null() {
-                return failure();
-            }
-        } else {
-            let mr = &*memory.mr.cast::<ffi::ibv_mr>();
-            if mr.pd != device.pd.cast()
-                || (buffer as usize)
-                    .checked_sub(mr.addr as usize)
-                    .and_then(|offset| offset.checked_add(length))
-                    .is_none_or(|end| end > mr.length)
-            {
-                return libc::EINVAL;
-            }
-        }
-        if permission != 0 {
-            return allocate_window(memory, device);
-        }
-        0
+        let m = &mut *memory;
+        let source = m.source();
+        provider::prepare_grant(h, &mut m.native, device, buffer, length, permission, source)
     }
 }
-
 pub(super) unsafe extern "C" fn allocate_window(
     memory: *mut MemoryHandles,
     device: *const DeviceHandles,
 ) -> c_int {
-    // SAFETY: the caller owns the empty slot and retains its PD. A newly
-    // allocated, never-bound MW has no parent MR or QP dependency.
-    unsafe {
-        let memory = &mut *memory;
-        let device = &*device;
-        if !memory.mw.is_null() {
-            return libc::EINVAL;
-        }
-        let mut caps: ffi::ibv_device_attr = std::mem::zeroed();
-        let code = ffi::ibv_query_device(device.context.cast(), &mut caps);
-        if code != 0 {
-            return code;
-        }
-        if caps.device_cap_flags & ffi::IBV_DEVICE_MEM_WINDOW_TYPE_2B == 0 {
-            return libc::EOPNOTSUPP;
-        }
-        let context = &*device.context.cast::<ffi::ibv_context>();
-        let Some(allocate) = context.ops.alloc_mw else {
-            return libc::EOPNOTSUPP;
-        };
-        memory.mw = allocate(device.pd.cast(), ffi::IBV_MW_TYPE_2).cast();
-        if memory.mw.is_null() {
-            return failure();
-        }
-        let key = (*memory.mw.cast::<ffi::ibv_mw>()).rkey;
-        // RdmaContext selects and permanently burns a fresh full key in its PD.
-        memory.window_key = key;
-        0
-    }
+    // SAFETY: the engine owns this empty window slot and its retained device.
+    unsafe { provider::allocate_window(&mut (*memory).native, device) }
 }
-
+pub(super) unsafe extern "C" fn dealloc_window(memory: *mut MemoryHandles) -> c_int {
+    // SAFETY: the engine has drained all access and retains the slot and PD across failed destruction.
+    unsafe { provider::dealloc_window(&mut (*memory).native) }
+}
 pub(super) unsafe extern "C" fn window(
-    handles: *mut ConnectionHandles,
+    h: *mut ConnectionHandles,
     memory: *mut MemoryHandles,
     id: u64,
     address: u64,
@@ -206,71 +85,46 @@ pub(super) unsafe extern "C" fn window(
     bind: bool,
     result: *mut PostResult,
 ) -> c_int {
-    // The record retains the MW, parent MR and exact DMA loan through CQ or teardown.
-    // SAFETY: The grant owns the QP, MR and window; result is writable and the provider
-    // consumes the stack WR during post.
+    // SAFETY: the grant owns every native handle and the loan through the reported CQ receipt or drain.
     unsafe {
-        *result = PostResult::default();
-        let h = &mut *handles;
-        let memory = &mut *memory;
-        if h.qp.is_null() || memory.mw.is_null() || memory.mr.is_null() || id == 0 {
-            return libc::EINVAL;
-        }
-        let qp = h.qp.cast::<ffi::ibv_qp>();
-        let Some(post) = (*(*qp).context).ops.post_send else {
-            return libc::EOPNOTSUPP;
-        };
-        let mut request: ffi::ibv_send_wr = std::mem::zeroed();
-        request.wr_id = id;
-        request.send_flags = ffi::ibv_send_flags::IBV_SEND_SIGNALED.0;
-        if bind {
-            request.opcode = ffi::ibv_wr_opcode::IBV_WR_BIND_MW;
-            let mut access = 0;
-            if permission & 1 != 0 {
-                access |= ffi::ibv_access_flags::IBV_ACCESS_REMOTE_READ.0;
-            }
-            if permission & 2 != 0 {
-                access |= ffi::ibv_access_flags::IBV_ACCESS_REMOTE_WRITE.0;
-            }
-            request.__bindgen_anon_2.bind_mw.mw = memory.mw.cast();
-            request.__bindgen_anon_2.bind_mw.rkey = memory.window_key;
-            request.__bindgen_anon_2.bind_mw.bind_info = ffi::ibv_mw_bind_info {
-                mr: memory.mr.cast(),
-                addr: address,
-                length: length as u64,
-                mw_access_flags: access,
-            };
-        } else {
-            request.opcode = ffi::ibv_wr_opcode::IBV_WR_LOCAL_INV;
-            request.__bindgen_anon_1.invalidate_rkey = memory.window_key;
-        }
-        let mut bad = std::ptr::null_mut();
-        let code = post(qp, &mut request, &mut bad);
-        if code == 0 {
-            (*result).accepted = 1;
-        } else if !std::ptr::eq(bad, &request) {
-            (*result).uncertain = true;
-        }
-        code
+        provider::window(
+            h,
+            &mut (*memory).native,
+            id,
+            address,
+            length,
+            permission,
+            bind,
+            result,
+        )
     }
 }
-
-pub(super) unsafe extern "C" fn dealloc_window(handles: *mut MemoryHandles) -> c_int {
-    // SAFETY: The grant exclusively owns the window handle and keeps its PD live through
-    // deallocation.
+pub(super) unsafe extern "C" fn deregister(memory: *mut MemoryHandles) -> c_int {
+    // SAFETY: the retirement owner issues this call once and keeps backing and FD after failure.
+    unsafe { provider::deregister(&mut (*memory).native) }
+}
+#[cfg(feature = "cuda")]
+pub(super) unsafe extern "C" fn create_gpu_key(
+    h: *const DeviceHandles,
+    memory: *mut MemoryHandles,
+    qpn: u32,
+    addr: u64,
+    length: u32,
+    permission: u32,
+    rkey: u32,
+    probe: bool,
+) -> c_int {
+    // SAFETY: the engine retains this parent MR and each partially created DevX object for cleanup.
     unsafe {
-        let h = &mut *handles;
-        if h.mw.is_null() {
-            return 0;
-        }
-        let mw = h.mw.cast::<ffi::ibv_mw>();
-        let Some(close) = (*(*mw).context).ops.dealloc_mw else {
-            return libc::EOPNOTSUPP;
-        };
-        let code = close(mw);
-        if code == 0 {
-            h.mw = std::ptr::null_mut();
-        }
-        code
+        provider::mlx5::create(
+            h,
+            &mut (*memory).native,
+            qpn,
+            addr,
+            length,
+            permission,
+            rkey,
+            probe,
+        )
     }
 }
