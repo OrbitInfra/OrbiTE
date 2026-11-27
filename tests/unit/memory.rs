@@ -41,6 +41,55 @@ fn ranges_reject_empty_overflow_and_out_of_bounds() {
     assert_eq!(checked_range(4, 4, 8).unwrap(), 4..8);
 }
 
+#[cfg(all(
+    target_os = "linux",
+    feature = "io-uring",
+    not(any(feature = "cuda", feature = "rdma"))
+))]
+#[test]
+fn file_page_publication_requires_dedicated_aligned_local_storage() -> Result<()> {
+    let page = crate::platform::numa::page_round(1)?;
+    let large = 64 << 20;
+    for (size, permission, enabled, eligible) in [
+        (large, Permission::LocalOnly, true, true),
+        (large, Permission::RemoteRead, true, false),
+        (large, Permission::LocalOnly, false, false),
+        (3 * page, Permission::LocalOnly, true, false),
+    ] {
+        let mut input = vec![0x5b; size].into_boxed_slice();
+        input[size - 1] = 0xe7;
+        let original = input.as_ptr() as u64;
+        let host = Arc::new(HostMemory::for_file_registration(
+            input, permission, enabled,
+        )?);
+        let base = host.base_address();
+        assert_eq!(original != base, eligible);
+        let registry = MemoryRegistry::new(SourceEpoch([1; 16]), 1, size);
+        let memory = registry.register_host(host, 0, size, permission)?;
+        let offset = (base.next_multiple_of(page as u64) - base) as usize;
+        let loan = memory.dma_lease(offset, page)?;
+        assert_eq!(loan.can_publish_file_pages(), eligible);
+        assert_eq!(memory.base_address(), base);
+        assert_eq!(loan.address().as_ptr() as u64, base + offset as u64);
+        assert!(memory.write(offset, &[0]).is_err());
+        drop(loan);
+        assert!(!memory.dma_lease(offset + 1, page)?.can_publish_file_pages());
+        assert!(!memory.dma_lease(offset, page - 1)?.can_publish_file_pages());
+        for (at, expected) in [(0, 0x5b), (size - 1, 0xe7)] {
+            let mut byte = [0];
+            memory.read(at, &mut byte)?;
+            assert_eq!(byte[0], expected);
+        }
+    }
+    let fixture = common::external_memory(&vec![0xa5; 3 * page]);
+    let base = fixture.memory.base_address();
+    let registry = MemoryRegistry::new(SourceEpoch([2; 16]), 1, 3 * page);
+    let external = registry.register_host(fixture.memory, 0, 3 * page, Permission::LocalOnly)?;
+    let offset = (base.next_multiple_of(page as u64) - base) as usize;
+    assert!(!external.dma_lease(offset, page)?.can_publish_file_pages());
+    Ok(())
+}
+
 #[test]
 fn retired_memory_keeps_budget_until_all_owners_release_it() {
     let registry = MemoryRegistry::new(SourceEpoch([1; 16]), 1, 8);

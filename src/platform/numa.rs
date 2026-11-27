@@ -145,6 +145,20 @@ pub(crate) struct MappedMemory {
 
 impl MappedMemory {
     pub(crate) fn new(length: usize, node: u32, numa: &'static Numa) -> Result<Self> {
+        let mut mapping = Self::anonymous(length, numa)?;
+        if let Err(error) = (numa.bind)(mapping.address, mapping.length, node) {
+            mapping.close()?;
+            return Err(error);
+        }
+        // Fault fresh private pages only after their range policy is installed.
+        // SAFETY: the mapping is exclusively owned and writable for its entire rounded length.
+        unsafe {
+            std::ptr::write_bytes(mapping.address.as_ptr(), 0, mapping.length);
+        }
+        Ok(mapping)
+    }
+
+    pub(crate) fn anonymous(length: usize, numa: &'static Numa) -> Result<Self> {
         let length = page_round(length)?;
         // SAFETY: The anonymous private mapping uses no input buffer or file descriptor;
         // MAP_FAILED is checked below.
@@ -162,24 +176,13 @@ impl MappedMemory {
             return Err(Error::Io(std::io::Error::last_os_error()));
         }
         let address = NonNull::new(raw.cast()).ok_or(Error::Internal("null host mapping"))?;
-        let mut mapping = Self {
+        Ok(Self {
             address,
             length,
             numa,
             close_attempted: false,
             close_error: None,
-        };
-        if let Err(error) = (numa.bind)(address, length, node) {
-            mapping.close()?;
-            return Err(error);
-        }
-        // Fault fresh private pages only after their range policy is installed.
-        // SAFETY: The newly mapped length is private, writable and still exclusively owned for
-        // first touch.
-        unsafe {
-            std::ptr::write_bytes(address.as_ptr(), 0, length);
-        }
-        Ok(mapping)
+        })
     }
 
     pub(crate) fn close(&mut self) -> Result<()> {

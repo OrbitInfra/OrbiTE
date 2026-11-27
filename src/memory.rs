@@ -162,6 +162,12 @@ impl HostAccess {
 }
 
 enum HostBacking {
+    #[cfg(all(
+        feature = "io-uring",
+        not(any(feature = "cuda", feature = "rdma")),
+        target_os = "linux"
+    ))]
+    FileDestination(crate::platform::numa::MappedMemory),
     #[cfg(target_os = "linux")]
     Numa(crate::platform::numa::MappedMemory),
     #[cfg(target_os = "linux")]
@@ -198,6 +204,12 @@ impl HostBacking {
     }
     fn address(&self) -> NonNull<u8> {
         match self {
+            #[cfg(all(
+                feature = "io-uring",
+                not(any(feature = "cuda", feature = "rdma")),
+                target_os = "linux"
+            ))]
+            Self::FileDestination(mapping) => mapping.address,
             #[cfg(target_os = "linux")]
             Self::Shared(local) => local.address(),
             #[cfg(target_os = "linux")]
@@ -245,6 +257,45 @@ impl fmt::Debug for HostMemory {
 }
 
 impl HostMemory {
+    /// Adopt bytes for a CPU engine that can submit direct file I/O. Only this
+    /// constructor creates the private mapping used to publish confirmed pages.
+    #[cfg(all(
+        feature = "io-uring",
+        not(any(feature = "cuda", feature = "rdma")),
+        target_os = "linux"
+    ))]
+    #[allow(unsafe_code)]
+    pub(crate) fn for_file_registration(
+        bytes: Box<[u8]>,
+        permission: Permission,
+        enabled: bool,
+    ) -> Result<Self> {
+        if !enabled || permission != Permission::LocalOnly || bytes.len() < 64 << 20 {
+            return Self::new(bytes);
+        }
+        let length = bytes.len();
+        let Ok(mapping) =
+            crate::platform::numa::MappedMemory::anonymous(length, &crate::platform::numa::NATIVE)
+        else {
+            return Self::new(bytes);
+        };
+        // SAFETY: this is a dedicated, freshly mapped private region with capacity
+        // for all input bytes. No part of it is exposed until the copy finishes.
+        unsafe {
+            libc::madvise(
+                mapping.address.as_ptr().cast(),
+                mapping.length,
+                libc::MADV_HUGEPAGE,
+            );
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), mapping.address.as_ptr(), length);
+        }
+        Ok(Self::owned(
+            HostBacking::FileDestination(mapping),
+            length,
+            None,
+        ))
+    }
+
     /// Inspect a bounded range without touching payload bytes or waiting for
     /// producers. Ordinary/external DRAM placement remains unknown; CUDA-pinned
     /// memory is still CPU memory and only a bound mapping claims a NUMA node.
@@ -552,13 +603,16 @@ impl HostMemory {
         #[cfg(target_os = "linux")]
         let mut owned = self;
         #[cfg(target_os = "linux")]
-        if let HostBacking::Numa(mapping) = &mut owned
+        match &mut owned
             .backing
             .get_mut()
             .map_err(|_| Error::Internal("host owner lock poisoned"))?
             .bytes
         {
-            mapping.close()?;
+            HostBacking::Numa(mapping) => mapping.close()?,
+            #[cfg(all(feature = "io-uring", not(any(feature = "cuda", feature = "rdma"))))]
+            HostBacking::FileDestination(mapping) => mapping.close()?,
+            _ => {}
         }
         Ok(())
     }
@@ -731,6 +785,27 @@ pub(crate) struct DmaLease {
 
 #[cfg(native_dma_lease)]
 impl DmaLease {
+    #[cfg(feature = "io-uring")]
+    pub(crate) fn can_publish_file_pages(&self) -> bool {
+        #[cfg(all(target_os = "linux", not(any(feature = "cuda", feature = "rdma"))))]
+        {
+            let MemoryBacking::Host(allocation) = &self.allocation;
+            let Ok(page) = crate::platform::numa::page_round(1) else {
+                return false;
+            };
+            self.address.as_ptr() as usize % page == 0
+                && self.range.len() % page == 0
+                && self._registration.permission() == Permission::LocalOnly
+                && allocation
+                    .backing
+                    .lock()
+                    .is_ok_and(|access| matches!(access.bytes, HostBacking::FileDestination(_)))
+        }
+        #[cfg(not(all(target_os = "linux", not(any(feature = "cuda", feature = "rdma")))))]
+        {
+            false
+        }
+    }
     #[cfg(feature = "rdma")]
     pub(crate) fn registration(&self) -> RegisteredMemory {
         self._registration.clone()

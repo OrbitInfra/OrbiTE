@@ -1165,6 +1165,8 @@ impl TransferEngine {
     }
     /// Registers owned host bytes, preparing configured host Direct RDMA MRs
     /// in every usable context, including paused ports, before exposing the range.
+    /// A CPU-only Linux file engine can move a large local-only allocation to
+    /// private pages during registration. Use the returned range's base address.
     ///
     /// # Errors
     /// Returns [`Error::SourceClosed`] after source fencing, [`Error::InvalidRange`]
@@ -1199,13 +1201,27 @@ impl TransferEngine {
             shm.sweep()?;
         }
         let length = bytes.len();
+        #[cfg(all(
+            feature = "io-uring",
+            not(any(feature = "cuda", feature = "rdma")),
+            target_os = "linux"
+        ))]
+        let memory = HostMemory::for_file_registration(
+            bytes,
+            permission,
+            self.io_uring.is_some() && length <= self.config.max_registered_bytes,
+        )?;
+        #[cfg(not(all(
+            feature = "io-uring",
+            not(any(feature = "cuda", feature = "rdma")),
+            target_os = "linux"
+        )))]
+        let memory = HostMemory::new(bytes)?;
         self.source
             .registry
-            .register_host_batch(
-                &[(Arc::new(HostMemory::new(bytes)?), 0, length)],
-                permission,
-                |memory| self.register_native(memory),
-            )?
+            .register_host_batch(&[(Arc::new(memory), 0, length)], permission, |memory| {
+                self.register_native(memory)
+            })?
             .pop()
             .ok_or(Error::Internal("single registration returned no handle"))
     }
