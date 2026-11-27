@@ -40,7 +40,7 @@ fn partial_direct_read_with_failed_unmap_keeps_every_owner() -> Result<()> {
     if let Ok(case) = std::env::var(CASE) {
         return check_failed_scratch_unmap(Some(&case));
     }
-    for case in ["rejected-push", "zero-enter", "short-enter"] {
+    for case in ["rejected-push", "zero-enter", "one-consumed"] {
         let status = std::process::Command::new(std::env::current_exe()?)
             .args(["--exact", "transport::io_uring::tests::inline::group::partial_direct_read_with_failed_unmap_keeps_every_owner", "--nocapture"])
             .env(CASE, case)
@@ -93,7 +93,7 @@ fn check_failed_scratch_unmap(partial: Option<&str>) -> Result<()> {
             trace.lock().unwrap().submit_limit = Some(0);
             0
         }
-        Some("short-enter") => {
+        Some("one-consumed") => {
             trace.lock().unwrap().submit_limit = Some(1);
             1
         }
@@ -123,11 +123,11 @@ fn check_failed_scratch_unmap(partial: Option<&str>) -> Result<()> {
     assert_eq!((file.pageable_bytes, file.idle_read_bytes), (SIZE, 0));
     {
         let observed = trace.lock().unwrap();
-        assert!(observed.alive.upgrade().is_some());
-        assert_eq!(
-            observed.pushes,
-            if partial.is_some() { vec![2] } else { vec![1] }
-        );
+        // An unsubmitted Task retains its failed mapping and loan on its own.
+        // A consumed entry whose completion cannot retire keeps the whole ring.
+        assert_eq!(observed.alive.upgrade().is_some(), expected_receipts == 1);
+        assert_eq!(observed.pushes, [1]);
+        assert_eq!(observed.submits, usize::from(partial != Some("rejected-push")));
         assert_eq!(observed.reaps, expected_receipts);
     }
     assert!(f.memory.read(start, &mut [0]).is_err());
