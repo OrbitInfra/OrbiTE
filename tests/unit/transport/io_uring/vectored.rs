@@ -247,6 +247,83 @@ fn vectored_padding_uses_private_scratch_and_counts_eof_inside_a_gap() -> Result
 }
 
 #[test]
+fn padded_file_vectors_borrow_a_slot_only_when_the_kernel_uses_it() -> Result<()> {
+    if !kernel() {
+        return Ok(());
+    }
+    const PAGE: usize = 4096;
+    let image: Vec<_> = (0..3 * PAGE).map(|i| (1 + i % 251) as u8).collect();
+    for (variable, direct) in [("ORBITE_EXT4_DIR", true), ("ORBITE_TMPFS_DIR", false)] {
+        let Some(dir) = std::env::var_os(variable) else {
+            assert!(
+                !required(),
+                "required filesystem fixture {variable} missing"
+            );
+            eprintln!("skipping file vector control without {variable}");
+            continue;
+        };
+        let f = Fixture::new(
+            Path::new(&dir),
+            &image,
+            TransferEngine::new(EngineConfig {
+                io_uring: crate::IoUringConfig {
+                    pinned_staging: true,
+                    staging_slot_kb: 4,
+                    staging_slots: 1,
+                },
+                ..Default::default()
+            })?,
+        )?;
+        let base = f.memory.base_address();
+        let address = base.next_multiple_of(PAGE as u64) + PAGE as u64;
+        let start = (address - base) as usize;
+        let req = TransferRequest::file_vectored(
+            Transport::IoUring,
+            0,
+            &[
+                (address, PAGE).into(),
+                crate::FileIoElement::Padding(PAGE),
+                (address + (2 * PAGE) as u64, PAGE).into(),
+            ],
+        )?;
+        let request = std::slice::from_ref(&req);
+        let read = f.run(TransferOp::Read, request)?;
+        assert!(read.is_complete() && read.locally_drained);
+        assert_eq!(read.transferred_bytes, image.len());
+        let mut expected = vec![0x9a; f.memory.len()];
+        expected[start..start + PAGE].copy_from_slice(&image[..PAGE]);
+        expected[start + 2 * PAGE..start + 3 * PAGE].copy_from_slice(&image[2 * PAGE..]);
+        let mut got = vec![0; expected.len()];
+        f.memory.read(0, &mut got)?;
+        assert_eq!(got, expected);
+        // The 12 KiB private direct-read buffer cannot use a 4 KiB slot.
+        // Buffered READ needs the slot as the native destination for its gap.
+        let stats = f.engine.stats()?.io_uring.unwrap();
+        assert_eq!(
+            stats.slot_acquisitions,
+            u64::from(!direct),
+            "{variable} READ"
+        );
+        assert_eq!((stats.active_slots, stats.pageable_bytes), (0, 0));
+
+        let write = f.run(TransferOp::Write, request)?;
+        assert!(write.is_complete() && write.locally_drained);
+        assert_eq!(write.transferred_bytes, image.len());
+        let mut expected_file = image.clone();
+        expected_file[PAGE..2 * PAGE].fill(0);
+        assert_eq!(fs::read(&f.path)?, expected_file);
+        let stats = f.engine.stats()?.io_uring.unwrap();
+        assert_eq!(
+            stats.slot_acquisitions,
+            1 + u64::from(!direct),
+            "{variable} WRITE"
+        );
+        assert_eq!((stats.active_slots, stats.pageable_bytes), (0, 0));
+    }
+    Ok(())
+}
+
+#[test]
 fn vectored_padding_counts_toward_byte_and_descriptor_admission() -> Result<()> {
     use crate::FileIoElement::{self, Padding};
     if !kernel() {
