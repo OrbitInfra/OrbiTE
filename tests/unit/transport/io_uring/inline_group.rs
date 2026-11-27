@@ -21,6 +21,143 @@ fn warm(f: &Fixture, trace: &Mutex<Trace>) -> Result<()> {
 
 const PAGE: usize = 4096;
 
+#[cfg(not(any(feature = "cuda", feature = "rdma")))]
+#[path = "rollback.rs"]
+mod rollback;
+
+#[cfg(not(any(feature = "cuda", feature = "rdma")))]
+#[test]
+fn large_direct_read_with_failed_scratch_unmap_retains_admission_and_mapping() -> Result<()> {
+    check_failed_scratch_unmap(None)
+}
+
+#[cfg(not(any(feature = "cuda", feature = "rdma")))]
+#[test]
+fn partial_direct_read_with_failed_unmap_keeps_every_owner() -> Result<()> {
+    // Each failed native unmap deliberately retains a full mapping and charge.
+    // Reap a separate process for each scenario to bound the test suite's RSS.
+    const CASE: &str = "ORBITE_TEST_PARTIAL_READ_UNMAP";
+    if let Ok(case) = std::env::var(CASE) {
+        return check_failed_scratch_unmap(Some(&case));
+    }
+    for case in ["rejected-push", "zero-enter", "short-enter"] {
+        let status = std::process::Command::new(std::env::current_exe()?)
+            .args(["--exact", "transport::io_uring::tests::inline::group::partial_direct_read_with_failed_unmap_keeps_every_owner", "--nocapture"])
+            .env(CASE, case)
+            .status()?;
+        assert!(status.success(), "{case}");
+    }
+    Ok(())
+}
+
+#[cfg(not(any(feature = "cuda", feature = "rdma")))]
+fn check_failed_scratch_unmap(partial: Option<&str>) -> Result<()> {
+    use crate::platform::numa::{NATIVE, Numa};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static CALLS: AtomicUsize = AtomicUsize::new(0);
+    static FAIL: Numa = Numa {
+        unmap: |_, _| {
+            CALLS.fetch_add(1, Ordering::SeqCst);
+            Err(Error::Io(std::io::Error::from_raw_os_error(libc::EIO)))
+        },
+        ..NATIVE
+    };
+    let Some(dir) = directory("ORBITE_EXT4_DIR") else {
+        return Ok(());
+    };
+    if !kernel() {
+        return Ok(());
+    }
+    const SIZE: usize = 64 << 20;
+    let (mut f, trace, start) = direct_fixture(&dir, &vec![0x39; SIZE], true)?;
+    if partial.is_some() {
+        assert!(
+            f.run(TransferOp::Read, &[f.request(start, 0, SIZE)])?
+                .is_complete()
+        );
+        assert_eq!(trace.lock().unwrap().pushes, [1]);
+        *trace.lock().unwrap() = Trace::default();
+    }
+    Arc::get_mut(&mut f.engine)
+        .unwrap()
+        .io_uring
+        .as_mut()
+        .unwrap()
+        .mappings = &FAIL;
+    let expected_receipts = match partial {
+        Some("rejected-push") => {
+            trace.lock().unwrap().reject_push = Some((1, libc::ENOSPC));
+            0
+        }
+        Some("zero-enter") => {
+            trace.lock().unwrap().submit_limit = Some(0);
+            0
+        }
+        Some("short-enter") => {
+            trace.lock().unwrap().submit_limit = Some(1);
+            1
+        }
+        None => 1,
+        Some(other) => panic!("unknown partial unmap scenario: {other}"),
+    };
+    let mut batch = f.engine.submit_async(
+        TransferOp::Read,
+        &f.segment,
+        &[f.request(start, 0, SIZE)],
+        None,
+        TIMEOUT,
+    )?;
+    let state = batch.wait(TIMEOUT)?;
+    let task = batch.task_status(0)?;
+    assert!(!state.locally_drained && !task.locally_drained);
+    assert_eq!((state.completed_tasks, state.transferred_bytes), (0, 0));
+    assert!(matches!(
+        task.failure.unwrap().error,
+        Error::Unquiesced { .. }
+    ));
+    assert!(matches!(batch.free(), Err(Error::BatchBusy)));
+    drop(batch);
+    let stats = f.engine.stats()?;
+    assert_eq!(stats.inflight_bytes, SIZE);
+    let file = stats.io_uring.unwrap();
+    assert_eq!((file.pageable_bytes, file.idle_read_bytes), (SIZE, 0));
+    {
+        let observed = trace.lock().unwrap();
+        assert!(observed.alive.upgrade().is_some());
+        assert_eq!(
+            observed.pushes,
+            if partial.is_some() { vec![2] } else { vec![1] }
+        );
+        assert_eq!(observed.reaps, expected_receipts);
+    }
+    assert!(f.memory.read(start, &mut [0]).is_err());
+    assert!(f.memory.write(start, &[1]).is_err());
+    f.memory.write(0, &[1])?;
+    let pool = &f.engine.io_uring.as_ref().unwrap().pool;
+    for _ in 0..2 {
+        assert!(matches!(
+            pool.charge(1),
+            Err(Error::Unquiesced {
+                code: libc::EIO,
+                ..
+            })
+        ));
+        assert!(matches!(
+            pool.close(),
+            Err(Error::Unquiesced {
+                code: libc::EIO,
+                ..
+            })
+        ));
+        assert_eq!(CALLS.load(Ordering::SeqCst), 1);
+    }
+    assert!(matches!(
+        f.engine.close_file_segment(&f.segment, Duration::ZERO),
+        Err(Error::Timeout)
+    ));
+    Ok(())
+}
+
 fn direct_fixture(
     dir: &Path,
     image: &[u8],
@@ -135,6 +272,82 @@ fn check_large_direct_read(truncate: Option<usize>) -> Result<()> {
         (stats.inflight_bytes, file.pageable_bytes, file.active_slots),
         (0, 0, 0)
     );
+    Ok(())
+}
+
+#[test]
+fn large_direct_read_reuses_only_one_private_prefix_and_publishes_exact_short_cqes() -> Result<()> {
+    let Some(dir) = directory("ORBITE_EXT4_DIR") else {
+        return Ok(());
+    };
+    if !kernel() {
+        return Ok(());
+    }
+    const SIZE: usize = 64 << 20;
+    const SPLIT: usize = task::READ_PREFIX_BYTES;
+    let image: Vec<_> = (0..SIZE).map(|i| ((i ^ (i >> 8)) & 127) as u8).collect();
+    let (f, trace, start) = direct_fixture(&dir, &image, true)?;
+    let sentinel = vec![0xa5; f.memory.len()];
+    let mut actual = vec![0; sentinel.len()];
+    let mut receipts = Vec::new();
+    let mut enters = Vec::new();
+    let destination = f.memory.base_address() as usize + start;
+    let boundary = SIZE - task::IDLE_DISCARD_BYTES - destination % (2 << 20);
+    let moved_before = task::PUBLISHED_BY_MOVE.load(std::sync::atomic::Ordering::Relaxed);
+    let recycled_before = task::RECYCLED_BY_MOVE.load(std::sync::atomic::Ordering::Relaxed);
+    let pool = &f.engine.io_uring.as_ref().unwrap().pool;
+    for prefix in [SIZE, boundary - 11, boundary, boundary + 511, SIZE - 1] {
+        *trace.lock().unwrap() = Trace::default();
+        fs::write(&f.path, &image)?;
+        f.memory.write(0, &sentinel)?;
+        trace.lock().unwrap().truncate_to = Some(prefix as u64);
+        let mut batch = f.engine.submit_async(
+            TransferOp::Read,
+            &f.segment,
+            &[f.request(start, 0, SIZE)],
+            None,
+            TIMEOUT,
+        )?;
+        let status = batch.wait(TIMEOUT)?;
+        assert!(status.locally_drained);
+        assert_eq!(status.completed_tasks, usize::from(prefix == SIZE));
+        assert_eq!(status.transferred_bytes, prefix);
+        batch.free()?;
+        f.memory.read(0, &mut actual)?;
+        assert!(actual[..start] == sentinel[..start]);
+        assert!(actual[start..start + prefix] == image[..prefix]);
+        assert!(actual[start + prefix..] == sentinel[start + prefix..]);
+        let observed = trace.lock().unwrap();
+        assert_eq!(observed.pushes, [1]);
+        assert_eq!((observed.submits, observed.reaps), (1, 1));
+        receipts.push(observed.reaps);
+        enters.push(observed.submits);
+        drop(observed);
+        let stats = f.engine.stats()?.io_uring.unwrap();
+        assert_eq!((stats.pageable_bytes, stats.idle_read_bytes), (0, SPLIT));
+        let (before, resident, discarded_resident) = pool.idle_read_residency()?;
+        assert_eq!(discarded_resident, 0);
+        assert!(resident <= SPLIT - task::IDLE_DISCARD_BYTES + 65536);
+        if prefix == SIZE {
+            eprintln!("idle direct READ pages: {before} -> {resident} resident bytes");
+            if std::env::var_os("ORBITE_REQUIRE_TRIM_RECEIPT").is_some() {
+                assert!(before >= SIZE && resident <= 32 << 20);
+            }
+        }
+    }
+    let moved = task::PUBLISHED_BY_MOVE.load(std::sync::atomic::Ordering::Relaxed) - moved_before;
+    let recycled =
+        task::RECYCLED_BY_MOVE.load(std::sync::atomic::Ordering::Relaxed) - recycled_before;
+    eprintln!(
+        "direct READ page publication: {moved} confirmed bytes moved; {recycled} old bytes recycled"
+    );
+    if std::env::var_os("ORBITE_REQUIRE_PAGE_MOVE").is_some() {
+        assert!(moved >= SIZE && recycled >= SPLIT);
+    }
+    eprintln!("private READ receipts {receipts:?}; hot prefix {boundary} bytes; enters {enters:?}");
+    assert_eq!(receipts, [1; 5]);
+    let _competing = pool.charge(EngineConfig::default().max_inflight_bytes)?;
+    assert_eq!(pool.stats().idle_read_bytes, 0);
     Ok(())
 }
 

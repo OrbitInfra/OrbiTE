@@ -157,6 +157,7 @@ impl Fixture {
         let observed = Arc::clone(&trace);
         let pool = self.engine.io_uring.as_ref().unwrap().pool.clone();
         Arc::get_mut(&mut self.engine).unwrap().io_uring = Some(IoUringTransport {
+            mappings: &crate::platform::numa::NATIVE,
             idle_read: Arc::default(),
             available: Arc::new(true.into()),
             pool,
@@ -399,6 +400,7 @@ fn truncate_on_ring_creation(depth: u32) -> Result<Fixture> {
     )?;
     let path = f.path.clone();
     Arc::get_mut(&mut f.engine).unwrap().io_uring = Some(IoUringTransport {
+        mappings: &crate::platform::numa::NATIVE,
         idle_read: Arc::default(),
         available: Arc::new(true.into()),
         pool: pool::Pool::new(Default::default(), 1 << 30).unwrap(),
@@ -669,6 +671,7 @@ impl FaultRing {
 fn fault_fixture(fault: Fault) -> Result<Fixture> {
     let mut engine = TransferEngine::new(EngineConfig::default())?;
     engine.io_uring = Some(IoUringTransport {
+        mappings: &crate::platform::numa::NATIVE,
         idle_read: Arc::default(),
         available: Arc::new(true.into()),
         pool: pool::Pool::new(Default::default(), 1 << 30).unwrap(),
@@ -833,6 +836,7 @@ fn held_file(
         .pool
         .clone();
     engine.io_uring = Some(IoUringTransport {
+        mappings: &crate::platform::numa::NATIVE,
         idle_read: Arc::default(),
         available: Arc::new(true.into()),
         pool,
@@ -1144,6 +1148,7 @@ fn file_selection_and_preflight_have_no_effects_on_rejection() -> Result<()> {
 fn failed_second_bounce_releases_first_loan_before_any_ring_is_created() -> Result<()> {
     let mut engine = TransferEngine::new(EngineConfig::default())?;
     engine.io_uring = Some(IoUringTransport {
+        mappings: &crate::platform::numa::NATIVE,
         idle_read: Arc::default(),
         available: Arc::new(true.into()),
         pool: pool::Pool::new(Default::default(), 1 << 30).unwrap(),

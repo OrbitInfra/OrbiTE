@@ -8,6 +8,7 @@ use std::cell::RefCell;
 #[derive(Default)]
 struct Outcome {
     posted: bool,
+    locally_drained: bool,
     bytes: usize,
     error: Option<Error>,
     effect: Option<RemoteEffect>,
@@ -84,6 +85,7 @@ impl FileAttempts<'_> {
         if let Some(v) = &self.outcomes {
             let mut list = v.borrow_mut();
             let t = &mut list[i];
+            t.locally_drained = drained;
             t.bytes = bytes;
             t.effect = Some(effect);
             if drained && effect == RemoteEffect::None && retryable_file(&error) {
@@ -216,7 +218,7 @@ impl TransferEngine {
                             t.bytes,
                             e,
                             t.effect.unwrap_or(RemoteEffect::None),
-                            false,
+                            t.locally_drained,
                         );
                     }
                 }
@@ -471,7 +473,9 @@ impl TransferEngine {
                     requests.len(),
                     owner.deadline,
                     true,
+                    Some((&attempts, 0)),
                 )
+                .map_err(|f| f.error)
         };
         let mut consumed = None;
         match run() {

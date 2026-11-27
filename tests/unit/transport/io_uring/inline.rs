@@ -7,6 +7,8 @@ struct Trace {
     truncate_before_push: Option<(PathBuf, u64)>,
     submitter: Option<std::thread::ThreadId>,
     submits: usize,
+    pushes: Vec<usize>,
+    reject_push: Option<(usize, i32)>,
     peeks: usize,
     reaps: usize,
     waits: Vec<Instant>,
@@ -46,7 +48,17 @@ impl Ring for Observed {
         }
     }
     fn push(&mut self, entries: &[squeue::Entry]) -> io::Result<()> {
-        if let Some((path, size)) = self.trace.lock().unwrap().truncate_before_push.take() {
+        let mut trace = self.trace.lock().unwrap();
+        trace.pushes.push(entries.len());
+        if let Some((at, code)) = trace.reject_push {
+            if trace.pushes.len() == at {
+                trace.reject_push = None;
+                return Err(io::Error::from_raw_os_error(code));
+            }
+        }
+        let truncate = trace.truncate_before_push.take();
+        drop(trace);
+        if let Some((path, size)) = truncate {
             std::fs::OpenOptions::new()
                 .write(true)
                 .open(path)?
@@ -62,7 +74,9 @@ impl Ring for Observed {
             if *left == 0 {
                 return Err(io::Error::from_raw_os_error(libc::EIO));
             }
-            count.min(std::mem::take(left))
+            let allowed = count.min(*left);
+            *left -= allowed;
+            allowed
         } else {
             count
         };
@@ -142,7 +156,8 @@ fn observed_at(
     no_space: bool,
 ) -> Result<(Fixture, Arc<Mutex<Trace>>)> {
     let mut config = EngineConfig::default();
-    config.max_transfer_bytes = config.max_transfer_bytes.max(image.len());
+    config.max_transfer_bytes = config.max_transfer_bytes.max(image.len().min(64 << 20));
+    config.max_inflight_bytes = config.max_inflight_bytes.max(image.len());
     let mut f = Fixture::new(directory, image, TransferEngine::new(config)?)?;
     let path = f.path.clone();
     let trace = Arc::new(Mutex::new(Trace::default()));

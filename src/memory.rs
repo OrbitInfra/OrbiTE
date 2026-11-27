@@ -161,7 +161,25 @@ impl HostAccess {
     }
 }
 
+#[cfg(all(
+    feature = "io-uring",
+    not(any(feature = "cuda", feature = "rdma")),
+    target_os = "linux"
+))]
+struct FileDestination {
+    mapping: crate::platform::numa::MappedMemory,
+    // The original registration charge lives with this dedicated mapping,
+    // including when an internal owner outlives its registration.
+    charge: Option<(Arc<Mutex<MemoryUsage>>, usize)>,
+}
+
 enum HostBacking {
+    #[cfg(all(
+        feature = "io-uring",
+        not(any(feature = "cuda", feature = "rdma")),
+        target_os = "linux"
+    ))]
+    FileDestination(std::mem::ManuallyDrop<Box<FileDestination>>),
     #[cfg(target_os = "linux")]
     Numa(crate::platform::numa::MappedMemory),
     #[cfg(target_os = "linux")]
@@ -198,6 +216,12 @@ impl HostBacking {
     }
     fn address(&self) -> NonNull<u8> {
         match self {
+            #[cfg(all(
+                feature = "io-uring",
+                not(any(feature = "cuda", feature = "rdma")),
+                target_os = "linux"
+            ))]
+            Self::FileDestination(owner) => owner.mapping.address,
             #[cfg(target_os = "linux")]
             Self::Shared(local) => local.address(),
             #[cfg(target_os = "linux")]
@@ -218,6 +242,39 @@ unsafe impl Send for HostBacking {}
 impl Drop for HostBacking {
     #[allow(unsafe_code)]
     fn drop(&mut self) {
+        #[cfg(all(
+            feature = "io-uring",
+            not(any(feature = "cuda", feature = "rdma")),
+            target_os = "linux"
+        ))]
+        if let Self::FileDestination(owner) = self {
+            // A failed unmap may have partially completed. Retain this Box, its
+            // immutable mapping receipt and its budget. No destructor retries it.
+            let retired = owner.mapping.close();
+            if let Some((budget, length)) = &owner.charge {
+                let mut usage = budget.lock().unwrap_or_else(|p| p.into_inner());
+                match &retired {
+                    Ok(()) => {
+                        usage.regions -= 1;
+                        usage.bytes -= length;
+                    }
+                    Err(error) => {
+                        usage
+                            .file_mapping_fault
+                            .get_or_insert_with(|| error.for_report());
+                    }
+                }
+            }
+            if let Err(error) = retired {
+                log::error!("retaining dedicated file destination: {error}");
+            } else {
+                // SAFETY: the unique Box remains initialized until this terminal
+                // Drop path. The successful mapping.close() is cached inside it.
+                unsafe {
+                    std::mem::ManuallyDrop::drop(owner);
+                }
+            }
+        }
         if let Self::Owned { address, length } = self {
             // SAFETY: this exact Box was consumed by HostMemory::new. Native
             // leases retain their actual owner until successful QP/MR teardown.
@@ -245,6 +302,48 @@ impl fmt::Debug for HostMemory {
 }
 
 impl HostMemory {
+    /// Adopt bytes for a CPU engine that can submit direct file I/O. Only this
+    /// constructor creates the private mapping used to publish confirmed pages.
+    #[cfg(all(
+        feature = "io-uring",
+        not(any(feature = "cuda", feature = "rdma")),
+        target_os = "linux"
+    ))]
+    #[allow(unsafe_code)]
+    pub(crate) fn for_file_registration(
+        bytes: Box<[u8]>,
+        permission: Permission,
+        enabled: bool,
+    ) -> Result<Self> {
+        if !enabled || permission != Permission::LocalOnly || bytes.len() < 64 << 20 {
+            return Self::new(bytes);
+        }
+        let length = bytes.len();
+        let Ok(mapping) =
+            crate::platform::numa::MappedMemory::anonymous(length, &crate::platform::numa::NATIVE)
+        else {
+            return Self::new(bytes);
+        };
+        // SAFETY: this is a dedicated, freshly mapped private region with capacity
+        // for all input bytes. No part of it is exposed until the copy finishes.
+        unsafe {
+            libc::madvise(
+                mapping.address.as_ptr().cast(),
+                mapping.length,
+                libc::MADV_HUGEPAGE,
+            );
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), mapping.address.as_ptr(), length);
+        }
+        Ok(Self::owned(
+            HostBacking::FileDestination(std::mem::ManuallyDrop::new(Box::new(FileDestination {
+                mapping,
+                charge: None,
+            }))),
+            length,
+            None,
+        ))
+    }
+
     /// Inspect a bounded range without touching payload bytes or waiting for
     /// producers. Ordinary/external DRAM placement remains unknown; CUDA-pinned
     /// memory is still CPU memory and only a bound mapping claims a NUMA node.
@@ -552,13 +651,16 @@ impl HostMemory {
         #[cfg(target_os = "linux")]
         let mut owned = self;
         #[cfg(target_os = "linux")]
-        if let HostBacking::Numa(mapping) = &mut owned
+        match &mut owned
             .backing
             .get_mut()
             .map_err(|_| Error::Internal("host owner lock poisoned"))?
             .bytes
         {
-            mapping.close()?;
+            HostBacking::Numa(mapping) => mapping.close()?,
+            #[cfg(all(feature = "io-uring", not(any(feature = "cuda", feature = "rdma"))))]
+            HostBacking::FileDestination(owner) => owner.mapping.close()?,
+            _ => {}
         }
         Ok(())
     }
@@ -731,6 +833,27 @@ pub(crate) struct DmaLease {
 
 #[cfg(native_dma_lease)]
 impl DmaLease {
+    #[cfg(feature = "io-uring")]
+    pub(crate) fn can_publish_file_pages(&self) -> bool {
+        #[cfg(all(target_os = "linux", not(any(feature = "cuda", feature = "rdma"))))]
+        {
+            let MemoryBacking::Host(allocation) = &self.allocation;
+            let Ok(page) = crate::platform::numa::page_round(1) else {
+                return false;
+            };
+            self.address.as_ptr() as usize % page == 0
+                && self.range.len() % page == 0
+                && self._registration.permission() == Permission::LocalOnly
+                && allocation
+                    .backing
+                    .lock()
+                    .is_ok_and(|access| matches!(access.bytes, HostBacking::FileDestination(_)))
+        }
+        #[cfg(not(all(target_os = "linux", not(any(feature = "cuda", feature = "rdma")))))]
+        {
+            false
+        }
+    }
     #[cfg(feature = "rdma")]
     pub(crate) fn registration(&self) -> RegisteredMemory {
         self._registration.clone()
@@ -1123,7 +1246,7 @@ pub(crate) struct Registration {
     allocation_offset: usize,
     #[cfg(feature = "rdma")]
     active: AtomicBool,
-    budget: Arc<Mutex<MemoryUsage>>,
+    budget: Option<Arc<Mutex<MemoryUsage>>>,
 }
 
 impl Drop for Registration {
@@ -1148,19 +1271,43 @@ impl Drop for Registration {
             std::mem::forget(self.allocation.clone());
             return;
         }
-        let mut usage = self
-            .budget
-            .lock()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
-        usage.regions -= 1;
-        usage.bytes -= self.descriptor.length;
+        if let Some(budget) = &self.budget {
+            let mut usage = budget.lock().unwrap_or_else(|p| p.into_inner());
+            usage.regions -= 1;
+            usage.bytes -= self.descriptor.length;
+        }
     }
 }
 
 #[derive(Debug, Default)]
 struct MemoryUsage {
+    #[cfg(all(
+        feature = "io-uring",
+        not(any(feature = "cuda", feature = "rdma")),
+        target_os = "linux"
+    ))]
+    file_mapping_fault: Option<Error>,
     regions: usize,
     bytes: usize,
+}
+
+/// Held before an owned allocation is constructed, or while a batch prepares
+/// to publish new ranges. Published registrations take over its charges.
+struct PendingRegistration<'a> {
+    backing_charged: bool,
+    usage: &'a Mutex<MemoryUsage>,
+    regions: usize,
+    bytes: usize,
+}
+
+impl Drop for PendingRegistration<'_> {
+    fn drop(&mut self) {
+        if self.regions != 0 && !self.backing_charged {
+            let mut usage = self.usage.lock().unwrap_or_else(|p| p.into_inner());
+            usage.regions -= self.regions;
+            usage.bytes -= self.bytes;
+        }
+    }
 }
 
 pub(crate) struct MemoryRegistry {
@@ -1214,6 +1361,82 @@ impl MemoryRegistry {
                 retained: Vec::new(),
             }),
         }
+    }
+
+    fn reserve(&self, regions: usize, bytes: usize) -> Result<PendingRegistration<'_>> {
+        let mut usage = self
+            .budget
+            .lock()
+            .map_err(|_| Error::Internal("memory budget lock poisoned"))?;
+        let total_regions = usage
+            .regions
+            .checked_add(regions)
+            .filter(|&v| v <= self.max_regions)
+            .ok_or(Error::ResourceExhausted)?;
+        let total_bytes = usage
+            .bytes
+            .checked_add(bytes)
+            .filter(|&v| v <= self.max_bytes)
+            .ok_or(Error::ResourceExhausted)?;
+        usage.regions = total_regions;
+        usage.bytes = total_bytes;
+        Ok(PendingRegistration {
+            backing_charged: false,
+            usage: &self.budget,
+            regions,
+            bytes,
+        })
+    }
+
+    pub(crate) fn register_owned(
+        &self,
+        length: usize,
+        permission: Permission,
+        create: impl FnOnce() -> Result<HostMemory>,
+        publish: impl FnOnce(&[RegisteredMemory]) -> Result<()>,
+    ) -> Result<RegisteredMemory> {
+        checked_range(0, length, length)?;
+        // A new, exclusively owned allocation cannot share another entry.
+        let reservation = self.reserve(1, length)?;
+        let host = create()?;
+        #[cfg(all(
+            feature = "io-uring",
+            not(any(feature = "cuda", feature = "rdma")),
+            target_os = "linux"
+        ))]
+        let (host, reservation) = {
+            let mut host = host;
+            let mut reservation = reservation;
+            let backing = host
+                .backing
+                .get_mut()
+                .map_err(|_| Error::Internal("host backing lock"))?;
+            if let HostBacking::FileDestination(owner) = &mut backing.bytes {
+                owner.charge = Some((Arc::clone(&self.budget), length));
+                reservation.backing_charged = true;
+            }
+            (host, reservation)
+        };
+        let memory = MemoryBacking::Host(Arc::new(host));
+        let result = self.register_reserved_batch(
+            &[(memory, 0, length)],
+            permission,
+            crate::Transport::Unspec,
+            false,
+            Some(reservation),
+            publish,
+        );
+        #[cfg(all(
+            feature = "io-uring",
+            not(any(feature = "cuda", feature = "rdma")),
+            target_os = "linux"
+        ))]
+        if result.is_err() {
+            self.check_file_mapping_retirements()?;
+        }
+        result?
+            .pop()
+            .ok_or(Error::Internal("single registration returned no handle"))
     }
 
     pub(crate) fn register_host_batch(
@@ -1275,6 +1498,18 @@ impl MemoryRegistry {
         permission: Permission,
         route: crate::Transport,
         internal: bool,
+        publish: impl FnOnce(&[RegisteredMemory]) -> Result<()>,
+    ) -> Result<Vec<RegisteredMemory>> {
+        self.register_reserved_batch(ranges, permission, route, internal, None, publish)
+    }
+
+    fn register_reserved_batch(
+        &self,
+        ranges: &[(MemoryBacking, usize, usize)],
+        permission: Permission,
+        route: crate::Transport,
+        internal: bool,
+        reserved: Option<PendingRegistration<'_>>,
         publish: impl FnOnce(&[RegisteredMemory]) -> Result<()>,
     ) -> Result<Vec<RegisteredMemory>> {
         let mut plans: Vec<RegistrationPlan> = Vec::new();
@@ -1373,31 +1608,23 @@ impl MemoryRegistry {
                 references,
             });
         }
-        let mut usage = self
-            .budget
-            .lock()
-            .map_err(|_| Error::Internal("memory budget lock poisoned"))?;
-        let new_regions = usage
-            .regions
-            .checked_add(added_regions)
-            .ok_or(Error::ResourceExhausted)?;
-        let new_bytes = usage
-            .bytes
-            .checked_add(added_bytes)
-            .ok_or(Error::ResourceExhausted)?;
-        if new_regions > self.max_regions || new_bytes > self.max_bytes {
-            return Err(Error::ResourceExhausted);
-        }
+        let mut pending = match reserved {
+            Some(reservation)
+                if reservation.regions == added_regions && reservation.bytes == added_bytes =>
+            {
+                reservation
+            }
+            Some(_) => return Err(Error::Internal("owned registration changed extent")),
+            None => self.reserve(added_regions, added_bytes)?,
+        };
         entries
             .retained
             .try_reserve(added_regions)
             .map_err(|_| Error::ResourceExhausted)?;
 
         // Unpublished owners are charged too: failed native cleanup can retain them.
-        usage.regions = new_regions;
-        usage.bytes = new_bytes;
+        pending.regions = 0;
         entries.next_id = next_id;
-        drop(usage);
         for plan in &plans {
             if let Some(entry) = entries.regions.get(&plan.id) {
                 registered.push(entry.memory.clone());
@@ -1444,7 +1671,7 @@ impl MemoryRegistry {
                     allocation_offset: *offset,
                     #[cfg(feature = "rdma")]
                     active: AtomicBool::new(true),
-                    budget: Arc::clone(&self.budget),
+                    budget: (!pending.backing_charged).then(|| Arc::clone(&self.budget)),
                 }));
                 entries.retained.push(RetainedRange {
                     registration: Arc::downgrade(&memory.0),
@@ -1611,6 +1838,22 @@ impl MemoryRegistry {
             result = result.and(crate::transport::gds::BufferLease::retire(&memory));
         }
         result
+    }
+
+    #[cfg(all(
+        feature = "io-uring",
+        not(any(feature = "cuda", feature = "rdma")),
+        target_os = "linux"
+    ))]
+    pub(crate) fn check_file_mapping_retirements(&self) -> Result<()> {
+        let usage = self
+            .budget
+            .lock()
+            .map_err(|_| Error::Internal("memory budget lock poisoned"))?;
+        match &usage.file_mapping_fault {
+            Some(error) => Err(error.for_report()),
+            None => Ok(()),
+        }
     }
 
     pub(crate) fn usage(&self) -> Result<(usize, usize)> {

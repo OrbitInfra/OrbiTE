@@ -12,8 +12,15 @@ use crate::{Error, Result, TransferOp};
 
 pub(super) struct Bounce {
     pub(super) ptr: NonNull<u8>,
-    layout: Layout,
+    storage: Allocation,
 }
+
+enum Allocation {
+    Heap(Layout),
+    Mapping(std::mem::ManuallyDrop<Box<crate::platform::numa::MappedMemory>>),
+}
+
+const HUGE_PAGE: usize = 2 << 20;
 
 #[allow(unsafe_code)]
 // SAFETY: Bounce uniquely owns stable aligned bytes. Moving it never moves those
@@ -25,16 +32,152 @@ impl Bounce {
         let layout = Layout::from_size_align(length, alignment).map_err(|_| Error::InvalidRange)?;
         // SAFETY: file admission validated nonzero length, and Layout checked alignment.
         let ptr = NonNull::new(unsafe { alloc(layout) }).ok_or(Error::ResourceExhausted)?;
-        Ok(Self { ptr, layout })
+        Ok(Self {
+            ptr,
+            storage: Allocation::Heap(layout),
+        })
+    }
+
+    // Match the destination's offset within a huge page so whole PMDs can
+    // move even when the transfer starts inside its registered allocation.
+    #[allow(unsafe_code)]
+    pub(super) fn mapped(
+        length: usize,
+        destination: usize,
+        native: &'static crate::platform::numa::Numa,
+    ) -> Result<Self> {
+        let capacity = length.checked_add(HUGE_PAGE).ok_or(Error::InvalidRange)?;
+        let mapping = crate::platform::numa::MappedMemory::anonymous(capacity, native)?;
+        let base = mapping.address;
+        let raw = base.as_ptr().cast::<libc::c_void>();
+        let offset = destination.wrapping_sub(raw as usize) % HUGE_PAGE;
+        // SAFETY: offset is strictly less than the extra space reserved above.
+        let ptr = unsafe { base.cast::<u8>().add(offset) };
+        // SAFETY: raw and capacity are the entire private mapping. Uniform advice
+        // keeps this payload in one VMA even when its PMD offset is nonzero.
+        unsafe { libc::madvise(raw, capacity, libc::MADV_HUGEPAGE) };
+        Ok(Self {
+            ptr,
+            storage: Allocation::Mapping(std::mem::ManuallyDrop::new(Box::new(mapping))),
+        })
+    }
+
+    pub(super) fn release_mapping(&mut self) -> Result<()> {
+        if let Allocation::Mapping(owner) = &mut self.storage {
+            owner.close()?;
+        }
+        Ok(())
+    }
+
+    fn matches_destination(&self, destination: usize) -> bool {
+        matches!(self.storage, Allocation::Mapping(_))
+            && self.ptr.as_ptr() as usize % HUGE_PAGE == destination % HUGE_PAGE
+    }
+
+    // The cache holds one scalar iovec even when part of it is nonresident.
+    // Discard only whole 2 MiB units inside this retired buffer. Its ends
+    // may be offset relative to the PMD containing the destination address.
+    fn idle_discard_start(&self) -> *mut u8 {
+        let start = self.ptr.as_ptr() as usize;
+        let end = (start + READ_PREFIX_BYTES) & !(HUGE_PAGE - 1);
+        self.ptr
+            .as_ptr()
+            .wrapping_add(end - IDLE_DISCARD_BYTES - start)
+    }
+
+    #[allow(unsafe_code)]
+    pub(super) fn discard_idle_pages(&self) -> bool {
+        // SAFETY: only a drained or never-submitted charge can return a buffer
+        // to its pool. The aligned range is strictly inside its exclusive,
+        // writable payload, whose previous bytes have no consumer.
+        unsafe {
+            libc::madvise(
+                self.idle_discard_start().cast(),
+                IDLE_DISCARD_BYTES,
+                libc::MADV_DONTNEED,
+            ) == 0
+        }
+    }
+
+    #[cfg(test)]
+    #[allow(unsafe_code)]
+    pub(super) fn idle_residency(&self) -> std::io::Result<(usize, usize)> {
+        // SAFETY: sysconf reads the process-wide page size without a user pointer.
+        let page = usize::try_from(unsafe { libc::sysconf(libc::_SC_PAGESIZE) })
+            .map_err(std::io::Error::other)?;
+        let addr = self.ptr.as_ptr() as usize;
+        let base = addr & !(page - 1);
+        let len = (addr - base + READ_PREFIX_BYTES).next_multiple_of(page);
+        let mut vec = vec![0u8; len / page];
+        // SAFETY: base and len cover the live cache allocation rounded to OS
+        // pages. vec contains one output byte per page. The pool lock prevents reuse.
+        if unsafe { libc::mincore(base as *mut _, len, vec.as_mut_ptr()) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let first = (self.idle_discard_start() as usize - base) / page;
+        let resident = |pages: &[u8]| pages.iter().filter(|v| **v & 1 != 0).count() * page;
+        Ok((
+            resident(&vec),
+            resident(&vec[first..first + IDLE_DISCARD_BYTES / page]),
+        ))
+    }
+
+    fn pageable(
+        transport: &super::IoUringTransport,
+        length: usize,
+        alignment: usize,
+        direct_read: bool,
+    ) -> Result<Self> {
+        // Faulting every base page during GUP dominates a large, fresh direct
+        // READ buffer. Only advise complete 2 MiB units of private scratch.
+        // The kernel can always satisfy this hint with ordinary pages.
+        const HUGE: usize = 2 << 20;
+        let advise = direct_read && length >= HUGE;
+        let buffer = if advise && alignment < HUGE {
+            match (transport.allocate)(length, HUGE) {
+                Err(Error::ResourceExhausted) => (transport.allocate)(length, alignment)?,
+                result => result?,
+            }
+        } else {
+            (transport.allocate)(length, alignment)?
+        };
+        if advise && buffer.ptr.as_ptr() as usize % HUGE == 0 {
+            // SAFETY: the pointer is huge-page aligned and exclusively owned.
+            // The hinted extent only includes complete units inside the allocation.
+            #[allow(unsafe_code)]
+            unsafe {
+                libc::madvise(
+                    buffer.ptr.as_ptr().cast(),
+                    length / HUGE * HUGE,
+                    libc::MADV_HUGEPAGE,
+                );
+            }
+        }
+        Ok(buffer)
     }
 }
 
 impl Drop for Bounce {
     #[allow(unsafe_code)]
     fn drop(&mut self) {
-        // SAFETY: same allocation and layout, dropped only before submission or after drain.
-        unsafe {
-            dealloc(self.ptr.as_ptr(), self.layout);
+        match &mut self.storage {
+            Allocation::Heap(layout) => {
+                // SAFETY: exact allocator, pointer and layout, before submit or after drain.
+                unsafe { dealloc(self.ptr.as_ptr(), *layout) };
+            }
+            Allocation::Mapping(owner) => {
+                if let Err(error) = owner.close() {
+                    // Keep the original mapping owner. Its cached result forbids
+                    // retrying a partially successful native release.
+                    log::error!("retaining direct read staging mapping: {error}");
+                } else {
+                    // SAFETY: this Box has a unique owner. close() records its
+                    // terminal outcome, so dropping it will not unmap twice.
+                    unsafe {
+                        std::mem::ManuallyDrop::drop(owner);
+                    }
+                }
+            }
         }
     }
 }
@@ -62,31 +205,7 @@ impl Scratch {
             return Ok(Self::Slot(slot));
         }
         let charge = transport.pool.charge(length)?;
-        // Faulting every base page during GUP dominates a large, fresh direct
-        // READ buffer. Only advise complete 2 MiB units of private scratch.
-        // The kernel can always satisfy this hint with ordinary pages.
-        const HUGE: usize = 2 << 20;
-        let advise = direct_read && length >= HUGE;
-        let buffer = if advise && alignment < HUGE {
-            match (transport.allocate)(length, HUGE) {
-                Err(Error::ResourceExhausted) => (transport.allocate)(length, alignment)?,
-                result => result?,
-            }
-        } else {
-            (transport.allocate)(length, alignment)?
-        };
-        if advise && buffer.ptr.as_ptr() as usize % HUGE == 0 {
-            // SAFETY: the pointer is huge-page aligned and exclusively owned.
-            // The hinted extent only includes complete units inside the allocation.
-            #[allow(unsafe_code)]
-            unsafe {
-                libc::madvise(
-                    buffer.ptr.as_ptr().cast(),
-                    length / HUGE * HUGE,
-                    libc::MADV_HUGEPAGE,
-                );
-            }
-        }
+        let buffer = Bounce::pageable(transport, length, alignment, direct_read)?;
         Ok(Self::Pageable {
             buffer,
             _charge: charge,
@@ -132,8 +251,154 @@ impl Scratch {
     }
 }
 
+// Keep at most one prefix per engine. The rest of a large scalar READ is
+// pageable and drops as soon as this request has its one CQE.
+pub(super) const READ_PREFIX_BYTES: usize = 64 << 20;
+pub(super) const IDLE_DISCARD_BYTES: usize = 36 << 20;
+#[cfg(test)]
+pub(super) static PUBLISHED_BY_MOVE: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+#[cfg(test)]
+pub(super) static RECYCLED_BY_MOVE: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+struct SplitRead {
+    iovecs: [libc::iovec; 2],
+    charge: super::pool::Charge,
+    move_pages: bool,
+}
+
+impl SplitRead {
+    fn new(
+        transport: &super::IoUringTransport,
+        memory: &DmaLease,
+        length: usize,
+        alignment: usize,
+    ) -> Result<Self> {
+        let mut charge = transport.pool.charge_read(length, Some(alignment))?;
+        let destination = memory.address().as_ptr() as usize;
+        // Mapped scratch only guarantees congruence modulo a huge page.
+        let move_pages = alignment <= HUGE_PAGE
+            && memory.can_publish_file_pages()
+            && destination % alignment == 0;
+        if move_pages
+            && charge
+                .prefix
+                .as_ref()
+                .is_some_and(|p| !p.matches_destination(destination))
+        {
+            charge.evict_prefix()?;
+        }
+        let allocate = |length, offset| {
+            if move_pages {
+                if let Ok(mapping) =
+                    Bounce::mapped(length, destination + offset, transport.mappings)
+                {
+                    return Ok(mapping);
+                }
+            }
+            Bounce::pageable(transport, length, alignment, true)
+        };
+        if charge.prefix.is_none() {
+            charge.prefix = Some(allocate(READ_PREFIX_BYTES, 0)?);
+        }
+        let remaining = length - READ_PREFIX_BYTES;
+        if remaining != 0 {
+            match allocate(remaining, READ_PREFIX_BYTES) {
+                Ok(tail) => charge.tail = Some(tail),
+                Err(error) => {
+                    charge.finish()?;
+                    return Err(error);
+                }
+            }
+        }
+        let prefix = charge
+            .prefix
+            .as_ref()
+            .ok_or(Error::Internal("missing direct read staging"))?;
+        let move_pages = move_pages
+            && prefix.matches_destination(destination)
+            && charge
+                .tail
+                .as_ref()
+                .is_none_or(|b| b.matches_destination(destination + READ_PREFIX_BYTES));
+        // These initially absent pages receive only an existing resident prefix
+        // from the destination after a full completion. No copy populates them.
+        charge.spare = if move_pages {
+            Bounce::mapped(READ_PREFIX_BYTES, destination, transport.mappings).ok()
+        } else {
+            None
+        };
+        let iovecs = [
+            libc::iovec {
+                iov_base: prefix.ptr.as_ptr().cast(),
+                iov_len: READ_PREFIX_BYTES,
+            },
+            libc::iovec {
+                iov_base: charge
+                    .tail
+                    .as_ref()
+                    .map_or(std::ptr::null_mut(), |b| b.ptr.as_ptr().cast()),
+                iov_len: remaining,
+            },
+        ];
+        Ok(Self {
+            iovecs,
+            charge,
+            move_pages,
+        })
+    }
+
+    #[allow(unsafe_code)]
+    fn publish(&mut self, memory: &DmaLease, length: usize) -> Result<()> {
+        if length == memory.len() {
+            if let Some(spare) = &self.charge.spare {
+                // SAFETY: the CQE confirmed every old destination byte is replaceable.
+                // The fresh spare and destination are exclusive private CPU mappings.
+                let moved = unsafe {
+                    super::page_publish::recycle(memory.address(), spare.ptr, READ_PREFIX_BYTES)?
+                };
+                #[cfg(test)]
+                RECYCLED_BY_MOVE.fetch_add(moved, std::sync::atomic::Ordering::Relaxed);
+                if moved != 0 {
+                    // Keep the old iovec source until its authoritative bytes are published.
+                    // Only the spare, containing old pages, can return to the cache.
+                    std::mem::swap(&mut self.charge.spare, &mut self.charge.prefix);
+                }
+            }
+        }
+        let mut copied = 0;
+        for span in self.iovecs.iter() {
+            let n = span.iov_len.min(length - copied);
+            if n == 0 {
+                break;
+            }
+            let source = NonNull::new(span.iov_base.cast::<u8>())
+                .ok_or(Error::Internal("missing direct read buffer"))?;
+            // SAFETY: the confirmed prefix fits in the exclusive destination loan.
+            let dest = unsafe { memory.address().add(copied) };
+            if self.move_pages {
+                // SAFETY: both addresses belong to disjoint owned private CPU
+                // mappings. Only the single terminal CQE's prefix is published.
+                let _moved = unsafe { super::page_publish::publish(source, dest, n)? };
+                #[cfg(test)]
+                PUBLISHED_BY_MOVE.fetch_add(_moved, std::sync::atomic::Ordering::Relaxed);
+            } else {
+                // SAFETY: this CQE initialized n bytes in the disjoint scratch range.
+                unsafe { std::ptr::copy_nonoverlapping(source.as_ptr(), dest.as_ptr(), n) };
+            }
+            copied += n;
+        }
+        Ok(())
+    }
+}
+
 enum HostMemory {
     One(DmaLease),
+    SplitRead {
+        memory: DmaLease,
+        private: Box<SplitRead>,
+    },
     Vector {
         _loans: Vec<DmaLease>,
         iovecs: Box<[libc::iovec]>,
@@ -249,6 +514,36 @@ impl Task {
         // A direct READ racing truncate can zero the rest of the last block
         // even when its CQE reports a shorter prefix. Keep that write private.
         let protect = request.lease.is_direct_read(operation, &file);
+        if protect
+            && !transport.pool.enabled
+            && request.length >= READ_PREFIX_BYTES
+            && READ_PREFIX_BYTES % staging_alignment == 0
+        {
+            let private = Box::new(SplitRead::new(
+                transport,
+                &memory,
+                request.length,
+                staging_alignment,
+            )?);
+            // Mixed host/device batches advance by this logical host span.
+            // Task::entry submits the two private iovecs for the single READV.
+            let iov = libc::iovec {
+                iov_base: std::ptr::null_mut(),
+                iov_len: request.length,
+            };
+            return Ok((
+                Self {
+                    file,
+                    memory: Some(HostMemory::SplitRead { memory, private }),
+                    length: request.length,
+                    bounce: None,
+                    offset: request.offset,
+                    result: None,
+                    late: false,
+                },
+                iov,
+            ));
+        }
         let bounce = if protect || memory.address().as_ptr() as usize % staging_alignment != 0 {
             let bounce = Scratch::acquire(transport, request.length, staging_alignment, protect)?;
             if operation == TransferOp::Write {
@@ -303,57 +598,88 @@ impl Task {
         index: usize,
     ) -> squeue::Entry {
         let iovecs = match (&self.memory, &self.bounce) {
+            (Some(HostMemory::SplitRead { private, .. }), _) => {
+                &private.iovecs[..if private.charge.tail.is_some() { 2 } else { 1 }]
+            }
             (Some(HostMemory::Vector { iovecs, .. }), None) => &**iovecs,
             _ => std::slice::from_ref(iov),
         };
         entry(&self.file, self.offset, operation, iovecs, index)
     }
+    /// Retire private staging without publishing bytes or releasing the destination loan.
+    pub(super) fn finish_staging(&mut self) -> Result<()> {
+        if let Some(HostMemory::SplitRead { private, .. }) = &mut self.memory {
+            private.charge.finish()?;
+        }
+        Ok(())
+    }
+
+    pub(super) fn retire_unsubmitted(mut self) -> Result<()> {
+        let result = self.finish_staging();
+        if result.is_err() {
+            // An uncertain mapping teardown retains its fd, loan and staging charge.
+            std::mem::forget(self);
+        }
+        result
+    }
+
     #[allow(unsafe_code)]
     pub(super) fn complete(&mut self, operation: TransferOp, result: i32, late: bool) -> bool {
-        let Some(memory) = &self.memory else {
+        let Some(memory) = &mut self.memory else {
             return false;
         };
         if result > 0 && result as usize > self.length {
             return false;
         }
-        self.result = Some(result);
-        self.late = late;
         if operation == TransferOp::Read && result > 0 {
-            if let Some(bounce) = &self.bounce {
-                let source = bounce.address().as_ptr();
-                let length = result as usize;
-                match memory {
-                    HostMemory::One(memory) => {
-                        // SAFETY: this CQE initialized length disjoint scratch bytes.
-                        // The exclusive destination loan covers the checked prefix.
-                        unsafe {
-                            std::ptr::copy_nonoverlapping(source, memory.address().as_ptr(), length)
-                        };
-                    }
-                    HostMemory::Vector { iovecs, .. } => {
-                        let mut copied = 0;
-                        for iov in iovecs {
-                            let n = iov.iov_len.min(length - copied);
-                            if n == 0 {
-                                break;
-                            }
-                            if !iov.iov_base.is_null() {
-                                // SAFETY: the CQE covers this scratch prefix and the retained
-                                // loan covers this destination. Padding has a null address.
-                                unsafe {
-                                    std::ptr::copy_nonoverlapping(
-                                        source.add(copied),
-                                        iov.iov_base.cast(),
-                                        n,
-                                    )
-                                };
-                            }
-                            copied += n;
-                        }
+            let length = result as usize;
+            match (&mut *memory, &self.bounce) {
+                (HostMemory::SplitRead { memory, private }, _) => {
+                    if private.publish(memory, length).is_err() {
+                        return false;
                     }
                 }
+                (HostMemory::One(memory), Some(bounce)) => {
+                    // SAFETY: this CQE initialized length disjoint scratch bytes.
+                    // The exclusive destination loan covers the checked prefix.
+                    unsafe {
+                        std::ptr::copy_nonoverlapping(
+                            bounce.address().as_ptr(),
+                            memory.address().as_ptr(),
+                            length,
+                        )
+                    };
+                }
+                (HostMemory::Vector { iovecs, .. }, Some(bounce)) => {
+                    let mut copied = 0;
+                    for iov in iovecs {
+                        let n = iov.iov_len.min(length - copied);
+                        if n == 0 {
+                            break;
+                        }
+                        if !iov.iov_base.is_null() {
+                            // SAFETY: the CQE covers this scratch prefix and the retained
+                            // loan covers this destination. Padding has a null address.
+                            unsafe {
+                                std::ptr::copy_nonoverlapping(
+                                    bounce.address().as_ptr().add(copied),
+                                    iov.iov_base.cast(),
+                                    n,
+                                )
+                            };
+                        }
+                        copied += n;
+                    }
+                }
+                (_, None) => (),
             }
         }
+        if self.finish_staging().is_err() {
+            // Quarantine the entire batch before returning the destination loan.
+            return false;
+        }
+        self.result = Some(result);
+        self.late = late;
         // Publish only after releasing this CQE's exclusive range. Another task
         // in the same ring can still be using its own disjoint range.
         self.bounce.take();

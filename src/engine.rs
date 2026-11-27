@@ -1165,6 +1165,8 @@ impl TransferEngine {
     }
     /// Registers owned host bytes, preparing configured host Direct RDMA MRs
     /// in every usable context, including paused ports, before exposing the range.
+    /// A CPU-only Linux file engine can move a large local-only allocation to
+    /// private pages during registration. Use the returned range's base address.
     ///
     /// # Errors
     /// Returns [`Error::SourceClosed`] after source fencing, [`Error::InvalidRange`]
@@ -1198,16 +1200,29 @@ impl TransferEngine {
         if let Some(shm) = &self.source.shm {
             shm.sweep()?;
         }
-        let length = bytes.len();
-        self.source
-            .registry
-            .register_host_batch(
-                &[(Arc::new(HostMemory::new(bytes)?), 0, length)],
-                permission,
-                |memory| self.register_native(memory),
-            )?
-            .pop()
-            .ok_or(Error::Internal("single registration returned no handle"))
+        self.source.registry.register_owned(
+            bytes.len(),
+            permission,
+            || {
+                #[cfg(all(
+                    feature = "io-uring",
+                    not(any(feature = "cuda", feature = "rdma")),
+                    target_os = "linux"
+                ))]
+                {
+                    HostMemory::for_file_registration(bytes, permission, self.io_uring.is_some())
+                }
+                #[cfg(not(all(
+                    feature = "io-uring",
+                    not(any(feature = "cuda", feature = "rdma")),
+                    target_os = "linux"
+                )))]
+                {
+                    HostMemory::new(bytes)
+                }
+            },
+            |memory| self.register_native(memory),
+        )
     }
 
     /// Registers an existing host allocation range. Exact duplicate ranges share
@@ -2707,6 +2722,12 @@ impl TransferEngine {
         if let Some(shm) = &self.source.shm {
             shm.drain_exports(deadline)?;
         }
+        #[cfg(all(
+            feature = "io-uring",
+            not(any(feature = "cuda", feature = "rdma")),
+            target_os = "linux"
+        ))]
+        self.source.registry.check_file_mapping_retirements()?;
         Ok(())
     }
 

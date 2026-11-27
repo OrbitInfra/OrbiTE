@@ -1,5 +1,6 @@
 //! Single-issuer file sub-batches. The caller or existing batch worker owns the ring.
 mod config;
+mod page_publish;
 pub(crate) mod pool;
 pub use config::IoUringConfig;
 pub use pool::IoUringStats;
@@ -34,6 +35,7 @@ pub(crate) struct IoUringTransport {
     idle_read: Arc<Mutex<ring::IdleReadRing>>,
     pool: Arc<pool::Pool>,
     allocate: fn(usize, usize) -> Result<task::Bounce>,
+    mappings: &'static crate::platform::numa::Numa,
     create: Arc<dyn Fn(u32) -> io::Result<Box<dyn Ring>> + Send + Sync>,
 }
 
@@ -45,6 +47,7 @@ impl IoUringTransport {
             pool: pool::Pool::new(config.io_uring, config.max_inflight_bytes)?,
             create: Arc::new(ring::create),
             allocate: task::Bounce::new,
+            mappings: &crate::platform::numa::NATIVE,
         }))
     }
     pub(crate) fn available(&self) -> bool {
@@ -117,15 +120,20 @@ impl IoUringTransport {
                 .execute(self, max_batch_requests, report)?;
             }
             if count != 0 && !staged {
-                *report = self
-                    .start_host(
-                        operation,
-                        &requests[..count],
-                        requests.len(),
-                        deadline,
-                        false,
-                    )?
-                    .finish(operation, progress);
+                match self.start_host(
+                    operation,
+                    &requests[..count],
+                    requests.len(),
+                    deadline,
+                    false,
+                    progress,
+                ) {
+                    Ok(submitted) => *report = submitted.finish(operation, progress),
+                    Err(failure) => {
+                        report.locally_drained = !matches!(failure.error, Error::Unquiesced { .. });
+                        report.failure = Some(failure);
+                    }
+                }
             }
             if report.failure.is_none() && count != requests.len() {
                 report.failure = Some(failure(count, Error::Cancelled, RemoteEffect::None));
@@ -145,22 +153,32 @@ impl IoUringTransport {
         capacity: usize,
         deadline: Instant,
         on_caller: bool,
-    ) -> Result<Submitted> {
+        progress: Option<(&FileAttempts<'_>, usize)>,
+    ) -> std::result::Result<Submitted, TransferFailure> {
+        let preflight_failure = |error| failure(0, error, RemoteEffect::None);
         let count = requests.len();
+        let size =
+            u32::try_from(capacity).map_err(|_| preflight_failure(Error::ResourceExhausted))?;
+        deadline
+            .checked_add(DESTRUCTION_TIMEOUT)
+            .ok_or(Error::InvalidConfig(
+                "file drain deadline overflows monotonic clock",
+            ))
+            .map_err(preflight_failure)?;
         let mut tasks = Vec::new();
         tasks
             .try_reserve_exact(count)
-            .map_err(|_| Error::ResourceExhausted)?;
+            .map_err(|_| preflight_failure(Error::ResourceExhausted))?;
         let mut iovecs = Vec::new();
         iovecs
             .try_reserve_exact(count)
-            .map_err(|_| Error::ResourceExhausted)?;
+            .map_err(|_| preflight_failure(Error::ResourceExhausted))?;
         for request in requests {
-            let (task, iov) = Task::new(operation, request, self)?;
+            let (task, iov) = Task::new(operation, request, self)
+                .map_err(|e| rollback_unsubmitted(tasks.drain(..), e, progress))?;
             tasks.push(task);
             iovecs.push(iov);
         }
-        let size = u32::try_from(capacity).map_err(|_| Error::ResourceExhausted)?;
         // Only a caller-admitted group can populate the one idle ring. The
         // existing caller admission caps its depth and validates all extents.
         let reusable = on_caller
@@ -177,10 +195,16 @@ impl IoUringTransport {
         };
         let mut ring = match idle {
             Some(ring) => ring,
-            None => self.create_ring(size)?,
+            None => self
+                .create_ring(size)
+                .map_err(|e| rollback_unsubmitted(tasks.drain(..), e.into(), progress))?,
         };
         if ring.space() < count {
-            return Err(Error::ResourceExhausted);
+            return Err(rollback_unsubmitted(
+                tasks,
+                Error::ResourceExhausted,
+                progress,
+            ));
         }
         // The iovec array is immutable after this point, separate from
         // task state the worker mutates as receipts arrive.
@@ -191,15 +215,55 @@ impl IoUringTransport {
             .enumerate()
             .map(|(index, (task, iov))| task.entry(operation, iov, index))
             .collect();
-        remaining(deadline)?;
+        remaining(deadline).map_err(|e| rollback_unsubmitted(tasks.drain(..), e, progress))?;
         let batch = LiveBatch {
             ring,
             tasks,
             iovecs,
             idle_read: reusable.then(|| Arc::downgrade(&self.idle_read)),
         };
-        batch.start(&entries, deadline)
+        batch.start(&entries, deadline, progress)
     }
+}
+
+fn rollback_unsubmitted(
+    tasks: impl IntoIterator<Item = Task>,
+    original: Error,
+    progress: Option<(&FileAttempts<'_>, usize)>,
+) -> TransferFailure {
+    let mut count = 0;
+    let mut faults = Vec::new();
+    for task in tasks {
+        if let Err(error) = task.retire_unsubmitted() {
+            faults.push((count, error));
+        }
+        count += 1;
+    }
+    if faults.is_empty() {
+        return failure(0, original, RemoteEffect::None);
+    }
+    // Preserve each prepared sibling's own retirement receipt. A group
+    // failure alone cannot describe disjoint drained and quarantined ranges.
+    let (first_fault, error) = &faults[0];
+    let group = failure(*first_fault, error.for_report(), RemoteEffect::None);
+    if let Some((p, first)) = progress {
+        let mut faults = faults.into_iter().peekable();
+        for index in 0..count {
+            match faults.next_if(|(i, _)| *i == index) {
+                Some((_, error)) => {
+                    p.fail_file_task(first + index, 0, error, RemoteEffect::None, false)
+                }
+                None => p.fail_file_task(
+                    first + index,
+                    0,
+                    original.for_report(),
+                    RemoteEffect::None,
+                    true,
+                ),
+            }
+        }
+    }
+    group
 }
 
 fn failure(index: usize, error: Error, effect: RemoteEffect) -> TransferFailure {
@@ -264,30 +328,37 @@ fn unquiesced(code: i32) -> Error {
 }
 
 impl LiveBatch {
-    fn start(self, entries: &[squeue::Entry], deadline: Instant) -> Result<Submitted> {
-        let drain_deadline =
-            deadline
-                .checked_add(DESTRUCTION_TIMEOUT)
-                .ok_or(Error::InvalidConfig(
-                    "file drain deadline overflows monotonic clock",
-                ))?;
-        let mut live = ManuallyDrop::new(self);
-        if let Err(error) = live.ring.push(entries) {
+    fn start(
+        mut self,
+        entries: &[squeue::Entry],
+        deadline: Instant,
+        progress: Option<(&FileAttempts<'_>, usize)>,
+    ) -> std::result::Result<Submitted, TransferFailure> {
+        if let Err(error) = self.ring.push(entries) {
             // push_multiple is all-or-nothing and no enter has taken place.
-            drop(ManuallyDrop::into_inner(live));
-            return Err(error.into());
+            return Err(rollback_unsubmitted(self.tasks, error.into(), progress));
         }
+        let mut live = ManuallyDrop::new(self);
         let count = live.tasks.len();
         let drain = submit_ring(&mut *live.ring, count, deadline);
         // A plain ring has one issuer. All later enters submit zero SQEs,
         // so the SQ head proves this suffix can never use its fds or buffers.
         // Invalid SQ accounting makes consumed equal to the whole batch.
-        live.tasks.truncate(drain.consumed);
+        let unsubmitted_errors = live
+            .tasks
+            .drain(drain.consumed..)
+            .enumerate()
+            .filter_map(|(offset, task)| {
+                task.retire_unsubmitted()
+                    .err()
+                    .map(|error| (drain.consumed + offset, error))
+            })
+            .collect();
         Ok(Submitted {
+            unsubmitted_errors,
             live,
             drain,
             deadline,
-            drain_deadline,
         })
     }
 }
@@ -295,10 +366,10 @@ impl LiveBatch {
 // Dropping this value without a receipt deliberately retains the native owner.
 // The batch owner must retain its admission too if a worker cannot take over.
 pub(crate) struct Submitted {
+    unsubmitted_errors: Box<[(usize, Error)]>,
     live: ManuallyDrop<LiveBatch>,
     drain: Drain,
     deadline: Instant,
-    drain_deadline: Instant,
 }
 #[allow(unsafe_code)]
 // SAFETY: the single issuer moves exclusive ownership to the batch worker only
@@ -388,7 +459,10 @@ impl Submitted {
             self.drain.status = drain(
                 &mut *live.ring,
                 self.drain.consumed,
-                self.drain_deadline,
+                // start_host rejected overflow before preparing tasks.
+                self.deadline
+                    .checked_add(DESTRUCTION_TIMEOUT)
+                    .unwrap_or(self.deadline),
                 |index, result| {
                     observe(
                         &mut live.tasks,
@@ -409,7 +483,18 @@ impl Submitted {
         operation: TransferOp,
         progress: Option<(&FileAttempts<'_>, usize)>,
     ) -> BatchReport {
-        let Self { live, drain, .. } = self;
+        let Self {
+            live,
+            drain,
+            unsubmitted_errors,
+            ..
+        } = self;
+        let retirement_error = |index| {
+            unsubmitted_errors
+                .binary_search_by_key(&index, |&(i, _)| i)
+                .ok()
+                .map(|position| &unsubmitted_errors[position].1)
+        };
         let mut report = BatchReport {
             completed_requests: 0,
             transferred_bytes: 0,
@@ -417,7 +502,7 @@ impl Submitted {
             locally_drained: true,
             notification: crate::NotificationStatus::NotRequested,
         };
-        report.locally_drained = drain.status.is_ok();
+        report.locally_drained = drain.status.is_ok() && unsubmitted_errors.is_empty();
         // CQEs already published independent task outcomes. Finish any tasks
         // without a receipt, including the tail a failed enter never consumed.
         let unsent = drain.consumed..live.iovecs.len();
@@ -435,9 +520,11 @@ impl Submitted {
                 p.fail_file_task(
                     first + index,
                     0,
-                    drain.missing_error(index),
+                    retirement_error(index)
+                        .map_or_else(|| drain.missing_error(index), Error::for_report),
                     drain.effect(operation, index),
-                    report.locally_drained || index >= drain.consumed,
+                    retirement_error(index).is_none()
+                        && (drain.status.is_ok() || index >= drain.consumed),
                 );
             }
         }
@@ -460,13 +547,14 @@ impl Submitted {
             report.transferred_bytes += task.bytes();
         }
         if report.failure.is_none() && !unsent.is_empty() {
-            report.failure = Some(failure(
-                unsent.start,
-                drain.missing_error(unsent.start),
-                RemoteEffect::None,
-            ));
+            let index = unsent.start;
+            let error = retirement_error(index)
+                .map_or_else(|| drain.missing_error(index), Error::for_report);
+            report.failure = Some(failure(index, error, RemoteEffect::None));
         }
-        if report.locally_drained {
+        // Failed retirement quarantined its unsent task separately. Drained
+        // siblings and the ring have no native references left in that case.
+        if drain.status.is_ok() {
             let batch = ManuallyDrop::into_inner(live);
             if report.failure.is_none() && drain.consumed == batch.iovecs.len() {
                 if let Some(slot) = batch.idle_read.as_ref().and_then(Weak::upgrade) {

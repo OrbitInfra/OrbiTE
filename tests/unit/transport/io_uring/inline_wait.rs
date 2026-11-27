@@ -29,6 +29,7 @@ fn caller_wait_is_bounded_by_one_window_the_request_deadline_and_three_enters() 
         let start = Instant::now();
         let deadline = start + budget;
         let mut owner = Submitted {
+            unsubmitted_errors: Default::default(),
             live: ManuallyDrop::new(live),
             drain: Drain {
                 consumed: 0,
@@ -36,7 +37,6 @@ fn caller_wait_is_bounded_by_one_window_the_request_deadline_and_three_enters() 
                 status: Ok(()),
             },
             deadline,
-            drain_deadline: deadline + DESTRUCTION_TIMEOUT,
         };
         assert!(owner.wait_small().is_none());
         let after = Instant::now();
