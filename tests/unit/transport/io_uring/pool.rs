@@ -84,7 +84,7 @@ fn drained_private_slot_reclaims_pages_in_each_quarter() -> Result<()> {
             .chunks_exact(vec.len() / 4)
             .map(|part| part.iter().filter(|v| **v & 1 == 0).count() * page)
             .collect();
-        assert_eq!(cold.iter().sum::<usize>(), 36 << 20);
+        assert_eq!(cold.iter().sum::<usize>(), 32 << 20);
         assert!(cold.iter().all(|n| (6 << 20..=12 << 20).contains(n)));
         eprintln!("discarded bytes by quarter, residue {residue}: {cold:?}");
         buffer.release_mapping()?;

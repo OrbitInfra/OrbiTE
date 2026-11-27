@@ -257,7 +257,7 @@ impl Scratch {
 // Keep at most one prefix per engine. The rest of a large scalar READ is
 // pageable and drops as soon as this request has its one CQE.
 pub(super) const READ_PREFIX_BYTES: usize = 64 << 20;
-pub(super) const IDLE_DISCARD_BYTES: usize = 36 << 20;
+pub(super) const IDLE_DISCARD_BYTES: usize = READ_PREFIX_BYTES / 2;
 #[cfg(test)]
 pub(super) static PUBLISHED_BY_MOVE: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);
