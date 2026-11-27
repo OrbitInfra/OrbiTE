@@ -82,6 +82,54 @@ impl Bounce {
             && self.ptr.as_ptr() as usize % HUGE_PAGE == destination % HUGE_PAGE
     }
 
+    // The cache holds one scalar iovec even when part of it is nonresident.
+    // Discard only whole 2 MiB units inside this retired buffer. Its ends
+    // may be offset relative to the PMD containing the destination address.
+    fn idle_discard_start(&self) -> *mut u8 {
+        let start = self.ptr.as_ptr() as usize;
+        let end = (start + READ_PREFIX_BYTES) & !(HUGE_PAGE - 1);
+        self.ptr
+            .as_ptr()
+            .wrapping_add(end - IDLE_DISCARD_BYTES - start)
+    }
+
+    #[allow(unsafe_code)]
+    pub(super) fn discard_idle_pages(&self) -> bool {
+        // SAFETY: only a drained or never-submitted charge can return a buffer
+        // to its pool. The aligned range is strictly inside its exclusive,
+        // writable payload, whose previous bytes have no consumer.
+        unsafe {
+            libc::madvise(
+                self.idle_discard_start().cast(),
+                IDLE_DISCARD_BYTES,
+                libc::MADV_DONTNEED,
+            ) == 0
+        }
+    }
+
+    #[cfg(test)]
+    #[allow(unsafe_code)]
+    pub(super) fn idle_residency(&self) -> std::io::Result<(usize, usize)> {
+        // SAFETY: sysconf reads the process-wide page size without a user pointer.
+        let page = usize::try_from(unsafe { libc::sysconf(libc::_SC_PAGESIZE) })
+            .map_err(std::io::Error::other)?;
+        let addr = self.ptr.as_ptr() as usize;
+        let base = addr & !(page - 1);
+        let len = (addr - base + READ_PREFIX_BYTES).next_multiple_of(page);
+        let mut vec = vec![0u8; len / page];
+        // SAFETY: base and len cover the live cache allocation rounded to OS
+        // pages. vec contains one output byte per page. The pool lock prevents reuse.
+        if unsafe { libc::mincore(base as *mut _, len, vec.as_mut_ptr()) } != 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        let first = (self.idle_discard_start() as usize - base) / page;
+        let resident = |pages: &[u8]| pages.iter().filter(|v| **v & 1 != 0).count() * page;
+        Ok((
+            resident(&vec),
+            resident(&vec[first..first + IDLE_DISCARD_BYTES / page]),
+        ))
+    }
+
     fn pageable(
         transport: &super::IoUringTransport,
         length: usize,
@@ -174,6 +222,7 @@ impl Scratch {
 // Keep at most one prefix per engine. The rest of a large scalar READ is
 // pageable and drops as soon as this request has its one CQE.
 pub(super) const READ_PREFIX_BYTES: usize = 64 << 20;
+pub(super) const IDLE_DISCARD_BYTES: usize = 36 << 20;
 #[cfg(test)]
 pub(super) static PUBLISHED_BY_MOVE: std::sync::atomic::AtomicUsize =
     std::sync::atomic::AtomicUsize::new(0);

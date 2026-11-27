@@ -24,7 +24,8 @@ pub struct IoUringStats {
     pub slot_misses: u64,
     /// Outstanding bytes charged for per-operation pageable fallback buffers.
     pub pageable_bytes: usize,
-    /// Pageable bytes retained for the next scalar direct file READ.
+    /// Reserved pageable capacity retained for the next scalar direct file READ.
+    /// The admission budget includes any pages discarded while the slot is idle.
     pub idle_read_bytes: usize,
 }
 
@@ -80,6 +81,8 @@ impl Slab {
 struct State {
     slab: Option<Slab>,
     read_prefix: Option<Bounce>,
+    #[cfg(test)]
+    resident_before_discard: Option<usize>,
     free: Vec<usize>,
     stats: IoUringStats,
     disabled: bool,
@@ -113,6 +116,20 @@ impl Pool {
     }
     pub(super) fn stats(&self) -> IoUringStats {
         self.state.lock().unwrap_or_else(|p| p.into_inner()).stats
+    }
+
+    #[cfg(test)]
+    pub(super) fn idle_read_residency(&self) -> std::io::Result<(usize, usize, usize)> {
+        let state = self.state.lock().unwrap_or_else(|p| p.into_inner());
+        let before = state
+            .resident_before_discard
+            .ok_or_else(|| std::io::Error::other("no residency receipt before cache return"))?;
+        let (after, discarded) = state
+            .read_prefix
+            .as_ref()
+            .ok_or_else(|| std::io::Error::other("missing idle read buffer"))?
+            .idle_residency()?;
+        Ok((before, after, discarded))
     }
 
     pub(super) fn acquire(
@@ -286,15 +303,27 @@ pub(super) struct Charge {
 }
 impl Drop for Charge {
     fn drop(&mut self) {
+        // Retire private bytes only after native I/O and publication have
+        // released the charge. Failed discard evicts the whole slot.
+        #[cfg(test)]
+        let resident_before_discard = self
+            .prefix
+            .as_ref()
+            .and_then(|prefix| prefix.idle_residency().ok().map(|(before, _)| before));
+        let reusable = self.prefix.take().filter(Bounce::discard_idle_pages);
         let mut state = self.pool.state.lock().unwrap_or_else(|p| p.into_inner());
         state.stats.pageable_bytes -= self.length;
         if !state.closed
             && state.read_prefix.is_none()
-            && self.prefix.is_some()
+            && reusable.is_some()
             && super::task::READ_PREFIX_BYTES
                 <= self.pool.fallback_limit - state.stats.pageable_bytes
         {
-            state.read_prefix = self.prefix.take();
+            state.read_prefix = reusable;
+            #[cfg(test)]
+            {
+                state.resident_before_discard = resident_before_discard;
+            }
             state.stats.idle_read_bytes = super::task::READ_PREFIX_BYTES;
         }
     }

@@ -154,6 +154,7 @@ fn large_direct_read_reuses_only_one_private_prefix_and_publishes_exact_short_cq
     let mut actual = vec![0; sentinel.len()];
     let moved_before = task::PUBLISHED_BY_MOVE.load(std::sync::atomic::Ordering::Relaxed);
     let recycled_before = task::RECYCLED_BY_MOVE.load(std::sync::atomic::Ordering::Relaxed);
+    let pool = &f.engine.io_uring.as_ref().unwrap().pool;
     for &prefix in &[
         SIZE,
         (SPLIT + 17).min(SIZE - 1),
@@ -181,6 +182,15 @@ fn large_direct_read_reuses_only_one_private_prefix_and_publishes_exact_short_cq
         assert!(actual[start + prefix..] == sentinel[start + prefix..]);
         let stats = f.engine.stats()?.io_uring.unwrap();
         assert_eq!((stats.pageable_bytes, stats.idle_read_bytes), (0, SPLIT));
+        let (before, resident, discarded_resident) = pool.idle_read_residency()?;
+        assert_eq!(discarded_resident, 0);
+        assert!(resident <= SPLIT - task::IDLE_DISCARD_BYTES + 65536);
+        if prefix == SIZE {
+            eprintln!("idle direct READ pages: {before} -> {resident} resident bytes");
+            if std::env::var_os("ORBITE_REQUIRE_TRIM_RECEIPT").is_some() {
+                assert!(before >= SIZE && resident <= 32 << 20);
+            }
+        }
     }
     let moved = task::PUBLISHED_BY_MOVE.load(std::sync::atomic::Ordering::Relaxed) - moved_before;
     let recycled =
@@ -191,7 +201,6 @@ fn large_direct_read_reuses_only_one_private_prefix_and_publishes_exact_short_cq
     if std::env::var_os("ORBITE_REQUIRE_PAGE_MOVE").is_some() {
         assert!(moved >= SIZE && recycled >= SPLIT);
     }
-    let pool = &f.engine.io_uring.as_ref().unwrap().pool;
     let _competing = pool.charge(EngineConfig::default().max_inflight_bytes)?;
     assert_eq!(pool.stats().idle_read_bytes, 0);
     Ok(())
