@@ -8,6 +8,7 @@ struct Trace {
     submitter: Option<std::thread::ThreadId>,
     submits: usize,
     pushes: Vec<usize>,
+    readv_views: Option<Vec<Vec<(usize, usize)>>>,
     reject_push: Option<(usize, i32)>,
     peeks: usize,
     reaps: usize,
@@ -31,6 +32,31 @@ struct Observed {
     ready: bool,
     no_space: bool,
 }
+// Decode the published Linux io_uring_sqe addr/len fields. Reading self/mem
+// returns an I/O error for an invalid target address rather than dereferencing it.
+fn native_readv_views(entry: &squeue::Entry) -> io::Result<Vec<(usize, usize)>> {
+    use std::os::unix::fs::FileExt;
+    assert_eq!(entry.get_opcode(), u32::from(io_uring::opcode::Readv::CODE));
+    let proc = fs::File::open("/proc/self/mem")?;
+    let mut sqe = [0u8; 32];
+    proc.read_exact_at(&mut sqe, entry as *const _ as u64)?;
+    let addr = u64::from_ne_bytes(sqe[16..24].try_into().unwrap());
+    let count = u32::from_ne_bytes(sqe[24..28].try_into().unwrap());
+    assert!((1..=2).contains(&count));
+    let word = std::mem::size_of::<usize>();
+    let mut views = Vec::new();
+    for i in 0..count {
+        let mut raw = [0u8; std::mem::size_of::<libc::iovec>()];
+        let offset = addr + u64::from(i) * raw.len() as u64;
+        proc.read_exact_at(&mut raw, offset)?;
+        views.push((
+            usize::from_ne_bytes(raw[..word].try_into().unwrap()),
+            usize::from_ne_bytes(raw[word..].try_into().unwrap()),
+        ));
+    }
+    Ok(views)
+}
+
 impl Ring for Observed {
     fn empty_after_drain(&mut self) -> bool {
         self.trace.lock().unwrap().allow_reuse
@@ -50,6 +76,11 @@ impl Ring for Observed {
     fn push(&mut self, entries: &[squeue::Entry]) -> io::Result<()> {
         let mut trace = self.trace.lock().unwrap();
         trace.pushes.push(entries.len());
+        if let Some(records) = &mut trace.readv_views {
+            for entry in entries {
+                records.push(native_readv_views(entry)?);
+            }
+        }
         if let Some((at, code)) = trace.reject_push {
             if trace.pushes.len() == at {
                 trace.reject_push = None;

@@ -127,7 +127,10 @@ fn check_failed_scratch_unmap(partial: Option<&str>) -> Result<()> {
         // A consumed entry whose completion cannot retire keeps the whole ring.
         assert_eq!(observed.alive.upgrade().is_some(), expected_receipts == 1);
         assert_eq!(observed.pushes, [1]);
-        assert_eq!(observed.submits, usize::from(partial != Some("rejected-push")));
+        assert_eq!(
+            observed.submits,
+            usize::from(partial != Some("rejected-push"))
+        );
         assert_eq!(observed.reaps, expected_receipts);
     }
     assert!(f.memory.read(start, &mut [0]).is_err());
@@ -164,13 +167,42 @@ fn direct_fixture(
     ready: bool,
 ) -> Result<(Fixture, Arc<Mutex<Trace>>, usize)> {
     let (mut f, trace) = observed_at(dir, image, ready, false, false)?;
+    let unit = super::super::vectored::file_io_unit(dir, true)?;
     f.memory = f.engine.register_memory(
-        vec![0x9a; image.len() + 2 * PAGE].into_boxed_slice(),
+        vec![0x9a; image.len() + 2 * unit].into_boxed_slice(),
         Permission::LocalOnly,
     )?;
     let base = f.memory.base_address();
-    let start = (base.next_multiple_of(PAGE as u64) - base) as usize + PAGE;
+    let start = (base.next_multiple_of(unit as u64) - base) as usize + unit;
     Ok((f, trace, start))
+}
+
+// Private page publication is available only for CPU-only FileDestination mappings.
+// Congruent addresses share their alignment through a PMD, so the test can query
+// the actual descriptor without predicting where scratch will be allocated.
+fn cached_readv_width(f: &Fixture, start: usize) -> Result<usize> {
+    if cfg!(any(feature = "cuda", feature = "rdma")) {
+        return Ok(1);
+    }
+    let size = task::READ_PREFIX_BYTES;
+    let addr = f.memory.base_address() as usize + start;
+    let hot = size - task::IDLE_DISCARD_BYTES - addr % (2 << 20);
+    let (lease, _) = f
+        .engine
+        .files
+        .admit(&f.segment, TransferOp::Read, 0, size)?;
+    let views = [
+        libc::iovec {
+            iov_base: addr as *mut _,
+            iov_len: hot,
+        },
+        libc::iovec {
+            iov_base: (addr + hot) as *mut _,
+            iov_len: size - hot,
+        },
+    ];
+    let (fd, align) = lease.file_for_iovecs(0, &views)?;
+    Ok(1 + usize::from(align <= 2 << 20 && lease.is_direct_read(TransferOp::Read, &fd)))
 }
 
 #[test]
@@ -200,6 +232,14 @@ fn check_large_direct_read(truncate: Option<usize>) -> Result<()> {
         .map(|i| 0x80 | (((i >> 12) ^ i) & 0x7f) as u8)
         .collect();
     let (f, trace, start) = direct_fixture(&dir, &image, true)?;
+    assert!(
+        f.run(TransferOp::Read, &[f.request(start, 0, SIZE)])?
+            .is_complete()
+    );
+    *trace.lock().unwrap() = Trace {
+        readv_views: Some(Vec::new()),
+        ..Trace::default()
+    };
     let original: Vec<_> = (0..64 * 1024)
         .map(|i: usize| ((i ^ (i >> 8)) & 0x7f) as u8)
         .collect();
@@ -240,6 +280,17 @@ fn check_large_direct_read(truncate: Option<usize>) -> Result<()> {
         (status.completed_tasks, status.transferred_bytes),
         (0, prefix)
     );
+    {
+        let seen = trace.lock().unwrap();
+        let views = &seen.readv_views.as_ref().unwrap()[0];
+        assert_eq!(seen.pushes, [1]);
+        assert_eq!((seen.submits, seen.reaps), (1, 1));
+        assert_eq!(views.len(), cached_readv_width(&f, start)?);
+        if let [first, last] = &views[..] {
+            assert_eq!(first.0 + first.1, last.0);
+        }
+        assert_eq!(views.iter().map(|v| v.1).sum::<usize>(), SIZE);
+    }
     let failure = task.failure.unwrap();
     let error = &failure.error;
     if truncate.is_some() {
@@ -289,6 +340,8 @@ fn large_direct_read_reuses_only_one_private_prefix_and_publishes_exact_short_cq
     let (f, trace, start) = direct_fixture(&dir, &image, true)?;
     let sentinel = vec![0xa5; f.memory.len()];
     let mut actual = vec![0; sentinel.len()];
+    let reused_width = cached_readv_width(&f, start)?;
+    let mut widths = Vec::new();
     let mut receipts = Vec::new();
     let mut enters = Vec::new();
     let destination = f.memory.base_address() as usize + start;
@@ -297,7 +350,10 @@ fn large_direct_read_reuses_only_one_private_prefix_and_publishes_exact_short_cq
     let recycled_before = task::RECYCLED_BY_MOVE.load(std::sync::atomic::Ordering::Relaxed);
     let pool = &f.engine.io_uring.as_ref().unwrap().pool;
     for prefix in [SIZE, boundary - 11, boundary, boundary + 511, SIZE - 1] {
-        *trace.lock().unwrap() = Trace::default();
+        *trace.lock().unwrap() = Trace {
+            readv_views: Some(Vec::new()),
+            ..Trace::default()
+        };
         fs::write(&f.path, &image)?;
         f.memory.write(0, &sentinel)?;
         trace.lock().unwrap().truncate_to = Some(prefix as u64);
@@ -318,6 +374,26 @@ fn large_direct_read_reuses_only_one_private_prefix_and_publishes_exact_short_cq
         assert!(actual[start..start + prefix] == image[..prefix]);
         assert!(actual[start + prefix..] == sentinel[start + prefix..]);
         let observed = trace.lock().unwrap();
+        let records = observed.readv_views.as_ref().unwrap();
+        assert_eq!(records.len(), 1);
+        let views = &records[0];
+        widths.push(views.len());
+        assert_eq!(
+            views.len(),
+            if receipts.is_empty() { 1 } else { reused_width }
+        );
+        if views.len() == 1 {
+            assert_eq!(views[0].1, SIZE);
+        } else {
+            assert_eq!(views.len(), 2);
+            assert_eq!((views[0].1, views[1].1), (boundary, SIZE - boundary));
+            assert_eq!(views[0].0 + views[0].1, views[1].0);
+        }
+        assert!(
+            views
+                .iter()
+                .all(|&(ptr, len)| ptr + len <= destination || ptr >= destination + SIZE)
+        );
         assert_eq!(observed.pushes, [1]);
         assert_eq!((observed.submits, observed.reaps), (1, 1));
         receipts.push(observed.reaps);
@@ -346,8 +422,55 @@ fn large_direct_read_reuses_only_one_private_prefix_and_publishes_exact_short_cq
     }
     eprintln!("private READ receipts {receipts:?}; hot prefix {boundary} bytes; enters {enters:?}");
     assert_eq!(receipts, [1; 5]);
+    eprintln!(
+        "cached private READV: iovcnt {widths:?}, SQE [1, 1, 1, 1, 1], CQE {receipts:?}, enters {enters:?}"
+    );
     let _competing = pool.charge(EngineConfig::default().max_inflight_bytes)?;
     assert_eq!(pool.stats().idle_read_bytes, 0);
+    Ok(())
+}
+
+#[test]
+fn cached_scalar_readv_respects_the_device_offset_alignment() -> Result<()> {
+    let Some(dir) = directory("ORBITE_EXT4_DIR") else {
+        return Ok(());
+    };
+    if !kernel() {
+        return Ok(());
+    }
+    const SIZE: usize = 64 << 20;
+    let (f, trace, start) = direct_fixture(&dir, &vec![0x5b; SIZE], true)?;
+    let requests = [f.request(start, 0, SIZE)];
+    let widths = [1, cached_readv_width(&f, start)?, 1];
+    for (round, expected) in widths.into_iter().enumerate() {
+        *trace.lock().unwrap() = Trace {
+            readv_views: Some(Vec::new()),
+            ..Trace::default()
+        };
+        if round == 2 {
+            // The intact 64 MiB request is direct; both nonempty pieces violate
+            // this injected length alignment. The actual O_DIRECT fd stays live.
+            f.segment
+                .override_test_direct_offset_alignment(SIZE as u64)?;
+        }
+        f.memory.write(start, &[0x37])?;
+        f.memory.write(start + SIZE - 1, &[0x37])?;
+        assert!(f.run(TransferOp::Read, &requests)?.is_complete());
+        let observed = trace.lock().unwrap();
+        assert_eq!(observed.pushes, [1]);
+        let reads = observed.readv_views.as_ref().unwrap();
+        assert_eq!(reads.len(), 1);
+        assert_eq!(reads[0].len(), expected);
+        assert_eq!(reads[0].iter().map(|&(_, n)| n).sum::<usize>(), SIZE);
+        assert_eq!((observed.submits, observed.reaps), (1, 1));
+        drop(observed);
+        for offset in [start, start + SIZE - 1] {
+            let mut byte = [0];
+            f.memory.read(offset, &mut byte)?;
+            assert_eq!(byte, [0x5b]);
+        }
+    }
+    eprintln!("cached direct READV fallback: iovcnt {widths:?}, one SQE/CQE each");
     Ok(())
 }
 

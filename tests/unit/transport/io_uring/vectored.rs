@@ -261,7 +261,7 @@ fn padded_file_vectors_borrow_a_slot_only_when_the_kernel_uses_it() -> Result<()
             continue;
         };
         let dir = Path::new(&dir);
-        let unit = padded_vector_unit(dir, direct)?;
+        let unit = file_io_unit(dir, direct)?;
         let image: Vec<_> = (0..3 * unit).map(|i| (1 + i % 251) as u8).collect();
         let f = Fixture::new(
             dir,
@@ -333,7 +333,7 @@ fn padded_file_vectors_borrow_a_slot_only_when_the_kernel_uses_it() -> Result<()
 // the descriptor independently of any proposed range. ext4 block and logical
 // sector sizes are powers of two, so doubling from the required pointer
 // alignment finds a length accepted for direct I/O on this mount.
-fn padded_vector_unit(dir: &Path, expect_direct: bool) -> Result<usize> {
+pub(super) fn file_io_unit(dir: &Path, expect_direct: bool) -> Result<usize> {
     let probe = Fixture::new(dir, &[0], TransferEngine::new(EngineConfig::default())?)?;
     let (lease, _) = probe
         .engine

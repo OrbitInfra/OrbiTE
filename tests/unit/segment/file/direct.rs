@@ -5,6 +5,17 @@ use super::*;
 use crate::transport::io_uring::tests::{Fixture, kernel};
 use crate::{EngineConfig, FileIoElement, TransferEngine, TransferRequest, Transport};
 
+impl FileSegment {
+    pub(crate) fn override_test_direct_offset_alignment(&self, alignment: u64) -> Result<()> {
+        let entry = self.0.upgrade().ok_or(Error::FileSegmentClosed)?;
+        let mut state = entry.lock()?;
+        let direct = state.direct.as_mut().expect("warm direct descriptor");
+        assert!(direct.file.is_some());
+        direct.offset_alignment = alignment;
+        Ok(())
+    }
+}
+
 #[test]
 fn padded_vectors_apply_device_memory_and_offset_alignment_independently() -> Result<()> {
     if !kernel() {

@@ -264,6 +264,10 @@ pub(super) static RECYCLED_BY_MOVE: std::sync::atomic::AtomicUsize =
 
 struct SplitRead {
     iovecs: [libc::iovec; 2],
+    // These submission-only views live with the boxed Task backing through its CQE.
+    // Publication still moves or copies a contiguous mapping as a single range.
+    submission_views: Option<[libc::iovec; 2]>,
+    reused_prefix: bool,
     charge: super::pool::Charge,
     move_pages: bool,
 }
@@ -278,9 +282,11 @@ impl SplitRead {
     ) -> Result<(Self, DmaLease, Arc<File>)> {
         let mut charge = transport.pool.charge_read(length, Some(alignment))?;
         match Self::prepare(transport, &memory, length, alignment, &mut charge) {
-            Ok((iovecs, move_pages)) => Ok((
+            Ok((iovecs, move_pages, reused_prefix)) => Ok((
                 Self {
                     iovecs,
+                    submission_views: None,
+                    reused_prefix,
                     move_pages,
                     charge,
                 },
@@ -306,7 +312,7 @@ impl SplitRead {
         length: usize,
         alignment: usize,
         charge: &mut super::pool::Charge,
-    ) -> Result<([libc::iovec; 2], bool)> {
+    ) -> Result<([libc::iovec; 2], bool, bool)> {
         let destination = memory.address().as_ptr() as usize;
         // Mapped scratch only guarantees congruence modulo a huge page.
         let move_pages = alignment <= HUGE_PAGE
@@ -330,7 +336,8 @@ impl SplitRead {
             }
             Bounce::pageable(transport, length, alignment, true)
         };
-        if charge.prefix.is_none() {
+        let reused_prefix = charge.prefix.is_some();
+        if !reused_prefix {
             charge.prefix = Some(allocate(READ_PREFIX_BYTES, 0)?);
         }
         let remaining = length - READ_PREFIX_BYTES;
@@ -367,7 +374,7 @@ impl SplitRead {
                 iov_len: remaining,
             },
         ];
-        Ok((iovecs, move_pages))
+        Ok((iovecs, move_pages, reused_prefix))
     }
 
     #[allow(unsafe_code)]
@@ -609,6 +616,42 @@ impl Task {
         cqe_error(operation, self.result?, self.length, self.late)
     }
 
+    /// Split only the native iovec of an intact 64 MiB direct read. A single CQE
+    /// still describes the entire private buffer, including a short or failed read.
+    pub(super) fn prepare_cached_readv(&mut self, request: &FileRequest) -> Result<()> {
+        let Some(HostMemory::SplitRead { private, .. }) = &mut self.memory else {
+            return Ok(());
+        };
+        if !private.reused_prefix || !private.move_pages || self.length != READ_PREFIX_BYTES {
+            return Ok(());
+        }
+        let prefix = private
+            .charge
+            .prefix
+            .as_ref()
+            .ok_or(Error::Internal("missing direct read staging"))?;
+        let base = prefix.ptr.as_ptr();
+        let boundary = prefix.idle_discard_start();
+        let hot = boundary as usize - base as usize;
+        let views = [
+            libc::iovec {
+                iov_base: base.cast(),
+                iov_len: hot,
+            },
+            libc::iovec {
+                iov_base: boundary.cast(),
+                iov_len: self.length - hot,
+            },
+        ];
+        // A device can accept the whole request yet reject the interior boundary.
+        // Keep the selected direct fd and its original iovec when that happens.
+        let (file, _) = request.lease.file_for_iovecs(self.offset, &views)?;
+        if Arc::ptr_eq(&file, &self.file) {
+            private.submission_views = Some(views);
+        }
+        Ok(())
+    }
+
     pub(super) fn entry(
         &self,
         operation: TransferOp,
@@ -616,9 +659,10 @@ impl Task {
         index: usize,
     ) -> squeue::Entry {
         let iovecs = match (&self.memory, &self.bounce) {
-            (Some(HostMemory::SplitRead { private, .. }), _) => {
-                &private.iovecs[..if private.charge.tail.is_some() { 2 } else { 1 }]
-            }
+            (Some(HostMemory::SplitRead { private, .. }), _) => match &private.submission_views {
+                Some(views) => &views[..],
+                None => &private.iovecs[..if private.charge.tail.is_some() { 2 } else { 1 }],
+            },
             (Some(HostMemory::Vector { iovecs, .. }), None) => &**iovecs,
             _ => std::slice::from_ref(iov),
         };

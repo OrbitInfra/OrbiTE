@@ -180,6 +180,11 @@ impl IoUringTransport {
             tasks.push(task);
             iovecs.push(iov);
         }
+        if let [task] = tasks.as_mut_slice() {
+            if let Err(error) = task.prepare_cached_readv(&requests[0]) {
+                return Err(rollback_unsubmitted(tasks, error, None, progress));
+            }
+        }
         // Only a caller-admitted group can populate the one idle ring. The
         // existing caller admission caps its depth and validates all extents.
         let reusable = on_caller
