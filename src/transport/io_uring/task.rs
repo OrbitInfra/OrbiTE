@@ -631,8 +631,18 @@ impl Task {
         Ok(())
     }
 
-    #[allow(unsafe_code)]
     pub(super) fn complete(&mut self, operation: TransferOp, result: i32, late: bool) -> bool {
+        self.complete_with_publish_mark(operation, result, late, || {})
+    }
+
+    #[allow(unsafe_code)]
+    pub(super) fn complete_with_publish_mark(
+        &mut self,
+        operation: TransferOp,
+        result: i32,
+        late: bool,
+        mark: impl FnOnce(),
+    ) -> bool {
         let Some(memory) = &mut self.memory else {
             return false;
         };
@@ -682,6 +692,7 @@ impl Task {
                 (_, None) => (),
             }
         }
+        mark();
         if self.finish_staging().is_err() {
             // Quarantine the entire batch before returning the destination loan.
             return false;

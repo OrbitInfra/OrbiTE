@@ -6,6 +6,9 @@ use super::*;
 use io_uring::{opcode, types};
 use std::os::fd::AsRawFd;
 
+pub(super) mod phases;
+use phases::PhaseClock;
+
 pub(super) fn execute(
     transport: &IoUringTransport,
     request: &FileRequest,
@@ -20,6 +23,7 @@ pub(super) fn execute(
     {
         return Ok(false);
     }
+    let mut phases = PhaseClock::start();
     let local = request.parts[0].registered()?;
     #[cfg(feature = "cuda")]
     if local.is_cuda_pinned_host() {
@@ -63,14 +67,18 @@ pub(super) fn execute(
                     .build()
                     .user_data(index)
             };
-            first = read(scratch, prefix, request.offset, 0).flags(squeue::Flags::ASYNC);
-            // Ordinary direct I/O faults the discarded pages as needed.
-            second = Some(read(tail_address, tail, request.offset + prefix as u64, 1));
-            lengths = [prefix, tail];
+            if phases::split_enabled() {
+                first = read(scratch, prefix, request.offset, 0).flags(squeue::Flags::ASYNC);
+                // Ordinary direct I/O faults the discarded pages as needed.
+                second = Some(read(tail_address, tail, request.offset + prefix as u64, 1));
+                lengths = [prefix, tail];
+            } else {
+                first = read(scratch, request.length, request.offset, 0);
+            }
         }
     }
     let count = 1 + usize::from(second.is_some());
-    let mut ring = transport.create_ring(count as u32)?;
+    let mut ring = transport.create_ring(2)?;
     if ring.space() < count {
         return Err(Error::ResourceExhausted);
     }
@@ -83,12 +91,14 @@ pub(super) fn execute(
     ring.push(std::slice::from_ref(&first))?;
     let mut live = ManuallyDrop::new((ring, task, scalar_iov));
     let mut receipts = [None; 2];
+    phases.mark(1);
     let mut drain_result = submit_ring(&mut *live.0, 1, deadline);
     if drain_result.consumed != 0 {
         if let Some((attempts, index)) = progress {
             attempts.posted(index);
         }
     }
+    phases.mark(2);
     if let Some(second) =
         second.filter(|_| drain_result.status.is_ok() && drain_result.consumed == 1)
     {
@@ -113,6 +123,11 @@ pub(super) fn execute(
             }
         }
     }
+    if count == 2 {
+        phases.mark(3);
+    } else {
+        phases.skip_second();
+    }
     if drain_result.status.is_ok() {
         drain_result.status = drain(
             &mut *live.0,
@@ -123,6 +138,7 @@ pub(super) fn execute(
             },
         );
     }
+    phases.mark(4);
     let mut bytes = 0;
     let mut locally_drained = drain_result.status.is_ok();
     let error = if let Err(code) = drain_result.status {
@@ -159,7 +175,12 @@ pub(super) fn execute(
             }
             result = prefix as i32;
         }
-        if !task.complete(TransferOp::Read, result, Instant::now() >= deadline) {
+        if !task.complete_with_publish_mark(
+            TransferOp::Read,
+            result,
+            Instant::now() >= deadline,
+            || phases.mark(5),
+        ) {
             // A partially completed page move may still own both mappings.
             // Keep the destination loan, scratch, descriptor and ring fenced.
             let _retained = ManuallyDrop::new((_ring, task, iov));
@@ -168,6 +189,10 @@ pub(super) fn execute(
         bytes = task.bytes();
         task.observed_error(TransferOp::Read)
     };
+    phases.mark(6);
+    if error.is_none() {
+        phases.emit(count);
+    }
     report.locally_drained = locally_drained;
     if let Some(error) = error {
         if let Some((attempts, index)) = progress {

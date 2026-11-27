@@ -196,6 +196,14 @@ fn check_large_direct_read(truncate: Option<usize>) -> Result<()> {
         .map(|i| 0x80 | (((i >> 12) ^ i) & 0x7f) as u8)
         .collect();
     let (f, trace, start) = direct_fixture(&dir, &image, true)?;
+    if std::env::var_os("ORBITE_DIAG_SPLIT_PREWARM_FAULT").is_some() {
+        assert!(
+            f.run(TransferOp::Read, &[f.request(start, 0, SIZE)])?
+                .is_complete()
+        );
+        assert_eq!(trace.lock().unwrap().pushes, [1]);
+        *trace.lock().unwrap() = Trace::default();
+    }
     let original: Vec<_> = (0..64 * 1024)
         .map(|i: usize| ((i ^ (i >> 8)) & 0x7f) as u8)
         .collect();
@@ -236,6 +244,15 @@ fn check_large_direct_read(truncate: Option<usize>) -> Result<()> {
         (status.completed_tasks, status.transferred_bytes),
         (0, prefix)
     );
+    if std::env::var_os("ORBITE_DIAG_SPLIT_PREWARM_FAULT").is_some() {
+        let expected = if parallel_read::phases::split_enabled() {
+            2
+        } else {
+            1
+        };
+        assert_eq!(trace.lock().unwrap().reaps, expected);
+        eprintln!("reused fault receipt count={expected}");
+    }
     let failure = task.failure.unwrap();
     let error = &failure.error;
     if truncate.is_some() {
@@ -313,7 +330,7 @@ fn large_direct_read_reuses_only_one_private_prefix_and_publishes_exact_short_cq
         assert!(actual[start..start + prefix] == image[..prefix]);
         assert!(actual[start + prefix..] == sentinel[start + prefix..]);
         let observed = trace.lock().unwrap();
-        let expected = if receipts.is_empty() {
+        let expected = if receipts.is_empty() || !parallel_read::phases::split_enabled() {
             vec![1]
         } else {
             vec![1, 1]
@@ -347,7 +364,12 @@ fn large_direct_read_reuses_only_one_private_prefix_and_publishes_exact_short_cq
     }
     eprintln!("private READ receipts {receipts:?}; hot prefix {boundary} bytes");
     if std::env::var_os("ORBITE_REQUIRE_SPLIT_RECEIPT").is_some() {
-        assert_eq!(receipts, [1, 2, 2, 2, 2]);
+        let expected = if parallel_read::phases::split_enabled() {
+            [1, 2, 2, 2, 2]
+        } else {
+            [1; 5]
+        };
+        assert_eq!(receipts, expected);
     }
     let _competing = pool.charge(EngineConfig::default().max_inflight_bytes)?;
     assert_eq!(pool.stats().idle_read_bytes, 0);
