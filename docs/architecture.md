@@ -387,7 +387,10 @@ in its CQE. Even a size-stable, read-only file can deliver a negative CQE
 after other blocks of the same request have already modified its destination.
 Each direct host READ therefore targets private, byte-budgeted
 storage. Its CQE authorizes copying that prefix to the retained registration,
-including a vector in file order. Aligned WRITEs and aligned buffered READs
+including a vector in file order. A one-range file vector retains the vector
+submission path. Descriptor selection checks the offset and every range, so
+a sub-sector tail can select buffered I/O for the entire vector even when
+the aggregate is aligned. Aligned WRITEs and aligned buffered READs
 can still use the registration directly. After trying the configured staging
 slots, a direct READ of at least 2 MiB can request 2 MiB-aligned pageable
 scratch and advise transparent huge pages on complete units. If the larger

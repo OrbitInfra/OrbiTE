@@ -767,6 +767,13 @@ both guards and the released staging and admission budgets.
 The companion 64 MiB READ truncates after admission at 16 MiB minus one byte,
 16 MiB plus 511 bytes and 64 MiB minus one byte. It compares the reported
 prefix with the file and every remaining byte with the original destination.
+For external registrations, the 64 MiB vector control holds a real CQE
+after the kernel writes and unregisters each destination. Its ranges stay
+inaccessible and the batch retains its byte charge until completion. It checks
+full reads, truncation 13 bytes past the first 32 MiB and an injected late
+error on aligned direct layouts. The separate 128-byte tail is a registered
+range whose contents the caller verifies. That layout covers a full read and
+EOF seven bytes before the end of the tail on the buffered descriptor.
 
 Scratch allocation failure must leave the ring untouched and return the
 pageable charge. A 2 MiB direct READ control rejects the optional huge-page

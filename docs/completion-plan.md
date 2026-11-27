@@ -229,6 +229,8 @@ Done:
   resident, but the next prepared request took about 3.6 ms longer to
   return with 18 additional minor faults. The step remains open until a
   protected implementation meets all four limits against both frozen references.
+  The [external-vector controls](qualification.md#local-file-segments) cover
+  a separate consumer shape with independent registrations and a readable tail.
 
 - **S16 — reference fixtures.** Retain the CPU trace contract and three frozen
   request prefixes used by native-listener rejection. Compatibility inventories

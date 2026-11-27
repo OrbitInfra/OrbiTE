@@ -104,7 +104,8 @@ jobs:
           ext="$RUNNER_TEMP/orbite-ext4"
           mkdir -p "$ext"
           if test "$(findmnt -n -o FSTYPE -T "$ext")" != ext4; then
-            truncate -s 64M "$RUNNER_TEMP/ext4.img"
+            # The scalar and vector 64 MiB controls may run concurrently.
+            truncate -s 512M "$RUNNER_TEMP/ext4.img"
             mkfs.ext4 -q -F "$RUNNER_TEMP/ext4.img"
             sudo mount -o loop "$RUNNER_TEMP/ext4.img" "$ext"
             sudo chown "$(id -u):$(id -g)" "$ext"
