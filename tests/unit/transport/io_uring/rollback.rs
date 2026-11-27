@@ -209,6 +209,26 @@ fn run(case: &str) -> Result<()> {
 #[test]
 fn mismatched_cached_mapping_failure_identifies_its_preflight_owner() -> Result<()> {
     use std::sync::atomic::AtomicBool;
+    const CHILD: &str = "ORBITE_TEST_CACHED_MAPPING_EVICTION_FAILURE";
+    if std::env::var_os(CHILD).is_none() {
+        let name = concat!(
+            module_path!(),
+            "::mismatched_cached_mapping_failure_identifies_its_preflight_owner"
+        );
+        // libtest omits the crate name. A matching single test must execute.
+        let (_, name) = name.split_once("::").unwrap();
+        let output = std::process::Command::new(std::env::current_exe()?)
+            .args(["--exact", name, "--nocapture", "--test-threads=1"])
+            .env(CHILD, "1")
+            .output()?;
+        let log = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            output.status.success() && log.contains("1 passed; 0 failed;"),
+            "{log} {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return Ok(());
+    }
     // The warm-up retires its spare normally. Only eviction of the cached
     // mapping on the second batch fails. A failed unmap keeps that mapping.
     static ARMED: AtomicBool = AtomicBool::new(false);
