@@ -1,0 +1,362 @@
+{
+  "old_reclaim": [
+    {
+      "name": "large_direct_read_after_truncate_publishes_only_the_confirmed_prefix",
+      "full": "transport::io_uring::tests::inline::group::large_direct_read_after_truncate_publishes_only_the_confirmed_prefix",
+      "env": {},
+      "patterns": []
+    },
+    {
+      "name": "large_direct_read_with_negative_cqe_preserves_the_entire_destination",
+      "full": "transport::io_uring::tests::inline::group::large_direct_read_with_negative_cqe_preserves_the_entire_destination",
+      "env": {},
+      "patterns": []
+    },
+    {
+      "name": "large_direct_read_uses_device_alignment_when_huge_alignment_is_unavailable",
+      "full": "transport::io_uring::tests::inline::group::large_direct_read_uses_device_alignment_when_huge_alignment_is_unavailable",
+      "env": {},
+      "patterns": []
+    },
+    {
+      "name": "large_direct_read_reuses_only_one_private_prefix_and_publishes_exact_short_cqes",
+      "full": "transport::io_uring::tests::inline::group::large_direct_read_reuses_only_one_private_prefix_and_publishes_exact_short_cqes",
+      "env": {
+        "ORBITE_REQUIRE_PAGE_MOVE": "1",
+        "ORBITE_REQUIRE_TRIM_RECEIPT": "1"
+      },
+      "patterns": [
+        "idle direct READ pages: \\d+ -> \\d+ resident bytes"
+      ]
+    }
+  ],
+  "parent": [
+    {
+      "name": "large_direct_read_after_truncate_publishes_only_the_confirmed_prefix",
+      "full": "transport::io_uring::tests::inline::group::large_direct_read_after_truncate_publishes_only_the_confirmed_prefix",
+      "env": {},
+      "patterns": []
+    },
+    {
+      "name": "large_direct_read_with_negative_cqe_preserves_the_entire_destination",
+      "full": "transport::io_uring::tests::inline::group::large_direct_read_with_negative_cqe_preserves_the_entire_destination",
+      "env": {},
+      "patterns": []
+    },
+    {
+      "name": "large_direct_read_uses_device_alignment_when_huge_alignment_is_unavailable",
+      "full": "transport::io_uring::tests::inline::group::large_direct_read_uses_device_alignment_when_huge_alignment_is_unavailable",
+      "env": {},
+      "patterns": []
+    },
+    {
+      "name": "large_direct_read_reuses_only_one_private_prefix_and_publishes_exact_short_cqes",
+      "full": "transport::io_uring::tests::inline::group::large_direct_read_reuses_only_one_private_prefix_and_publishes_exact_short_cqes",
+      "env": {
+        "ORBITE_REQUIRE_PAGE_MOVE": "1",
+        "ORBITE_REQUIRE_TRIM_RECEIPT": "1"
+      },
+      "patterns": [
+        "idle direct READ pages: \\d+ -> \\d+ resident bytes",
+        "private READ receipts \\[1, 1, 1, 1, 1\\]; hot prefix \\d+ bytes; enters \\[1, 1, 1, 1, 1\\]",
+        "direct READ page publication: \\d+ confirmed bytes moved; \\d+ old bytes recycled"
+      ]
+    },
+    {
+      "name": "large_direct_read_with_failed_scratch_unmap_retains_admission_and_mapping",
+      "full": "transport::io_uring::tests::inline::group::large_direct_read_with_failed_scratch_unmap_retains_admission_and_mapping",
+      "env": {},
+      "patterns": []
+    },
+    {
+      "name": "partial_direct_read_with_failed_unmap_keeps_every_owner",
+      "full": "transport::io_uring::tests::inline::group::partial_direct_read_with_failed_unmap_keeps_every_owner",
+      "env": {},
+      "patterns": []
+    },
+    {
+      "name": "direct_vector_read_preserves_ranges_beyond_eof_and_skips_padding",
+      "full": "transport::io_uring::tests::inline::group::direct_vector_read_preserves_ranges_beyond_eof_and_skips_padding",
+      "env": {},
+      "patterns": []
+    },
+    {
+      "name": "padded_file_vectors_borrow_a_slot_only_when_the_kernel_uses_it",
+      "full": "transport::io_uring::tests::vectored::padded_file_vectors_borrow_a_slot_only_when_the_kernel_uses_it",
+      "env": {},
+      "patterns": []
+    },
+    {
+      "name": "direct_read_preflight_and_unsubmitted_suffix_report_retirement",
+      "full": "transport::io_uring::tests::inline::group::rollback::direct_read_preflight_and_unsubmitted_suffix_report_retirement",
+      "env": {},
+      "patterns": []
+    },
+    {
+      "name": "mismatched_cached_mapping_failure_identifies_its_preflight_owner",
+      "full": "transport::io_uring::tests::inline::group::rollback::mismatched_cached_mapping_failure_identifies_its_preflight_owner",
+      "env": {},
+      "patterns": []
+    },
+    {
+      "name": "failed_idle_unmap_keeps_reserved_bytes_after_eviction_and_last_drop",
+      "full": "transport::io_uring::pool::tests::failed_idle_unmap_keeps_reserved_bytes_after_eviction_and_last_drop",
+      "env": {},
+      "patterns": []
+    }
+  ],
+  "candidate": [
+    {
+      "name": "large_direct_read_after_truncate_publishes_only_the_confirmed_prefix",
+      "full": "transport::io_uring::tests::inline::group::large_direct_read_after_truncate_publishes_only_the_confirmed_prefix",
+      "env": {},
+      "patterns": []
+    },
+    {
+      "name": "large_direct_read_with_negative_cqe_preserves_the_entire_destination",
+      "full": "transport::io_uring::tests::inline::group::large_direct_read_with_negative_cqe_preserves_the_entire_destination",
+      "env": {},
+      "patterns": []
+    },
+    {
+      "name": "large_direct_read_uses_device_alignment_when_huge_alignment_is_unavailable",
+      "full": "transport::io_uring::tests::inline::group::large_direct_read_uses_device_alignment_when_huge_alignment_is_unavailable",
+      "env": {},
+      "patterns": []
+    },
+    {
+      "name": "large_direct_read_reuses_only_one_private_prefix_and_publishes_exact_short_cqes",
+      "full": "transport::io_uring::tests::inline::group::large_direct_read_reuses_only_one_private_prefix_and_publishes_exact_short_cqes",
+      "env": {
+        "ORBITE_REQUIRE_PAGE_MOVE": "1",
+        "ORBITE_REQUIRE_TRIM_RECEIPT": "1"
+      },
+      "patterns": [
+        "idle direct READ pages: \\d+ -> \\d+ resident bytes",
+        "private READ receipts \\[1, 1, 1, 1, 1\\]; hot prefix \\d+ bytes; enters \\[1, 1, 1, 1, 1\\]",
+        "direct READ page publication: \\d+ confirmed bytes moved; \\d+ old bytes recycled",
+        "cached private READV: iovcnt \\[1, 2, 2, 2, 2\\], SQE \\[1, 1, 1, 1, 1\\], CQE \\[1, 1, 1, 1, 1\\], enters \\[1, 1, 1, 1, 1\\]"
+      ]
+    },
+    {
+      "name": "large_direct_read_with_failed_scratch_unmap_retains_admission_and_mapping",
+      "full": "transport::io_uring::tests::inline::group::large_direct_read_with_failed_scratch_unmap_retains_admission_and_mapping",
+      "env": {},
+      "patterns": []
+    },
+    {
+      "name": "partial_direct_read_with_failed_unmap_keeps_every_owner",
+      "full": "transport::io_uring::tests::inline::group::partial_direct_read_with_failed_unmap_keeps_every_owner",
+      "env": {},
+      "patterns": []
+    },
+    {
+      "name": "direct_vector_read_preserves_ranges_beyond_eof_and_skips_padding",
+      "full": "transport::io_uring::tests::inline::group::direct_vector_read_preserves_ranges_beyond_eof_and_skips_padding",
+      "env": {},
+      "patterns": []
+    },
+    {
+      "name": "padded_file_vectors_borrow_a_slot_only_when_the_kernel_uses_it",
+      "full": "transport::io_uring::tests::vectored::padded_file_vectors_borrow_a_slot_only_when_the_kernel_uses_it",
+      "env": {},
+      "patterns": []
+    },
+    {
+      "name": "direct_read_preflight_and_unsubmitted_suffix_report_retirement",
+      "full": "transport::io_uring::tests::inline::group::rollback::direct_read_preflight_and_unsubmitted_suffix_report_retirement",
+      "env": {},
+      "patterns": []
+    },
+    {
+      "name": "mismatched_cached_mapping_failure_identifies_its_preflight_owner",
+      "full": "transport::io_uring::tests::inline::group::rollback::mismatched_cached_mapping_failure_identifies_its_preflight_owner",
+      "env": {},
+      "patterns": []
+    },
+    {
+      "name": "failed_idle_unmap_keeps_reserved_bytes_after_eviction_and_last_drop",
+      "full": "transport::io_uring::pool::tests::failed_idle_unmap_keeps_reserved_bytes_after_eviction_and_last_drop",
+      "env": {},
+      "patterns": []
+    },
+    {
+      "name": "cached_scalar_readv_respects_the_device_offset_alignment",
+      "full": "transport::io_uring::tests::inline::group::cached_scalar_readv_respects_the_device_offset_alignment",
+      "env": {},
+      "patterns": [
+        "cached direct READV fallback: iovcnt \\[1, 2, 1\\], one SQE/CQE each"
+      ]
+    }
+  ],
+  "distributed": [
+    {
+      "name": "large_direct_read_after_truncate_publishes_only_the_confirmed_prefix",
+      "full": "transport::io_uring::tests::inline::group::large_direct_read_after_truncate_publishes_only_the_confirmed_prefix",
+      "env": {},
+      "patterns": []
+    },
+    {
+      "name": "large_direct_read_with_negative_cqe_preserves_the_entire_destination",
+      "full": "transport::io_uring::tests::inline::group::large_direct_read_with_negative_cqe_preserves_the_entire_destination",
+      "env": {},
+      "patterns": []
+    },
+    {
+      "name": "large_direct_read_uses_device_alignment_when_huge_alignment_is_unavailable",
+      "full": "transport::io_uring::tests::inline::group::large_direct_read_uses_device_alignment_when_huge_alignment_is_unavailable",
+      "env": {},
+      "patterns": []
+    },
+    {
+      "name": "large_direct_read_reuses_only_one_private_prefix_and_publishes_exact_short_cqes",
+      "full": "transport::io_uring::tests::inline::group::large_direct_read_reuses_only_one_private_prefix_and_publishes_exact_short_cqes",
+      "env": {
+        "ORBITE_REQUIRE_PAGE_MOVE": "1",
+        "ORBITE_REQUIRE_TRIM_RECEIPT": "1"
+      },
+      "patterns": [
+        "idle direct READ pages: \\d+ -> \\d+ resident bytes",
+        "private READ receipts \\[1, 1, 1, 1, 1\\]; distributed whole pages; enters \\[1, 1, 1, 1, 1\\]",
+        "direct READ page publication: \\d+ confirmed bytes moved; \\d+ old bytes recycled",
+        "idle direct READ pages: 67108864 -> 29360128 resident bytes"
+      ]
+    },
+    {
+      "name": "large_direct_read_with_failed_scratch_unmap_retains_admission_and_mapping",
+      "full": "transport::io_uring::tests::inline::group::large_direct_read_with_failed_scratch_unmap_retains_admission_and_mapping",
+      "env": {},
+      "patterns": []
+    },
+    {
+      "name": "partial_direct_read_with_failed_unmap_keeps_every_owner",
+      "full": "transport::io_uring::tests::inline::group::partial_direct_read_with_failed_unmap_keeps_every_owner",
+      "env": {},
+      "patterns": []
+    },
+    {
+      "name": "direct_vector_read_preserves_ranges_beyond_eof_and_skips_padding",
+      "full": "transport::io_uring::tests::inline::group::direct_vector_read_preserves_ranges_beyond_eof_and_skips_padding",
+      "env": {},
+      "patterns": []
+    },
+    {
+      "name": "padded_file_vectors_borrow_a_slot_only_when_the_kernel_uses_it",
+      "full": "transport::io_uring::tests::vectored::padded_file_vectors_borrow_a_slot_only_when_the_kernel_uses_it",
+      "env": {},
+      "patterns": []
+    },
+    {
+      "name": "direct_read_preflight_and_unsubmitted_suffix_report_retirement",
+      "full": "transport::io_uring::tests::inline::group::rollback::direct_read_preflight_and_unsubmitted_suffix_report_retirement",
+      "env": {},
+      "patterns": []
+    },
+    {
+      "name": "mismatched_cached_mapping_failure_identifies_its_preflight_owner",
+      "full": "transport::io_uring::tests::inline::group::rollback::mismatched_cached_mapping_failure_identifies_its_preflight_owner",
+      "env": {},
+      "patterns": []
+    },
+    {
+      "name": "failed_idle_unmap_keeps_reserved_bytes_after_eviction_and_last_drop",
+      "full": "transport::io_uring::pool::tests::failed_idle_unmap_keeps_reserved_bytes_after_eviction_and_last_drop",
+      "env": {},
+      "patterns": []
+    },
+    {
+      "name": "drained_private_slot_reclaims_pages_in_each_quarter",
+      "full": "transport::io_uring::pool::tests::drained_private_slot_reclaims_pages_in_each_quarter",
+      "env": {},
+      "patterns": [
+        "discarded bytes by quarter, residue 0: \\[\\d+, \\d+, \\d+, \\d+\\]",
+        "discarded bytes by quarter, residue 4096: \\[\\d+, \\d+, \\d+, \\d+\\]"
+      ]
+    }
+  ],
+  "distributed_half": [
+    {
+      "name": "large_direct_read_after_truncate_publishes_only_the_confirmed_prefix",
+      "full": "transport::io_uring::tests::inline::group::large_direct_read_after_truncate_publishes_only_the_confirmed_prefix",
+      "env": {},
+      "patterns": []
+    },
+    {
+      "name": "large_direct_read_with_negative_cqe_preserves_the_entire_destination",
+      "full": "transport::io_uring::tests::inline::group::large_direct_read_with_negative_cqe_preserves_the_entire_destination",
+      "env": {},
+      "patterns": []
+    },
+    {
+      "name": "large_direct_read_uses_device_alignment_when_huge_alignment_is_unavailable",
+      "full": "transport::io_uring::tests::inline::group::large_direct_read_uses_device_alignment_when_huge_alignment_is_unavailable",
+      "env": {},
+      "patterns": []
+    },
+    {
+      "name": "large_direct_read_reuses_only_one_private_prefix_and_publishes_exact_short_cqes",
+      "full": "transport::io_uring::tests::inline::group::large_direct_read_reuses_only_one_private_prefix_and_publishes_exact_short_cqes",
+      "env": {
+        "ORBITE_REQUIRE_PAGE_MOVE": "1",
+        "ORBITE_REQUIRE_TRIM_RECEIPT": "1"
+      },
+      "patterns": [
+        "idle direct READ pages: \\d+ -> \\d+ resident bytes",
+        "private READ receipts \\[1, 1, 1, 1, 1\\]; distributed whole pages; enters \\[1, 1, 1, 1, 1\\]",
+        "direct READ page publication: \\d+ confirmed bytes moved; \\d+ old bytes recycled",
+        "idle direct READ pages: 67108864 -> 33554432 resident bytes"
+      ]
+    },
+    {
+      "name": "large_direct_read_with_failed_scratch_unmap_retains_admission_and_mapping",
+      "full": "transport::io_uring::tests::inline::group::large_direct_read_with_failed_scratch_unmap_retains_admission_and_mapping",
+      "env": {},
+      "patterns": []
+    },
+    {
+      "name": "partial_direct_read_with_failed_unmap_keeps_every_owner",
+      "full": "transport::io_uring::tests::inline::group::partial_direct_read_with_failed_unmap_keeps_every_owner",
+      "env": {},
+      "patterns": []
+    },
+    {
+      "name": "direct_vector_read_preserves_ranges_beyond_eof_and_skips_padding",
+      "full": "transport::io_uring::tests::inline::group::direct_vector_read_preserves_ranges_beyond_eof_and_skips_padding",
+      "env": {},
+      "patterns": []
+    },
+    {
+      "name": "padded_file_vectors_borrow_a_slot_only_when_the_kernel_uses_it",
+      "full": "transport::io_uring::tests::vectored::padded_file_vectors_borrow_a_slot_only_when_the_kernel_uses_it",
+      "env": {},
+      "patterns": []
+    },
+    {
+      "name": "direct_read_preflight_and_unsubmitted_suffix_report_retirement",
+      "full": "transport::io_uring::tests::inline::group::rollback::direct_read_preflight_and_unsubmitted_suffix_report_retirement",
+      "env": {},
+      "patterns": []
+    },
+    {
+      "name": "mismatched_cached_mapping_failure_identifies_its_preflight_owner",
+      "full": "transport::io_uring::tests::inline::group::rollback::mismatched_cached_mapping_failure_identifies_its_preflight_owner",
+      "env": {},
+      "patterns": []
+    },
+    {
+      "name": "failed_idle_unmap_keeps_reserved_bytes_after_eviction_and_last_drop",
+      "full": "transport::io_uring::pool::tests::failed_idle_unmap_keeps_reserved_bytes_after_eviction_and_last_drop",
+      "env": {},
+      "patterns": []
+    },
+    {
+      "name": "drained_private_slot_reclaims_pages_in_each_quarter",
+      "full": "transport::io_uring::pool::tests::drained_private_slot_reclaims_pages_in_each_quarter",
+      "env": {},
+      "patterns": [
+        "discarded bytes by quarter, residue 0: \\[\\d+, \\d+, \\d+, \\d+\\]",
+        "discarded bytes by quarter, residue 4096: \\[\\d+, \\d+, \\d+, \\d+\\]"
+      ]
+    }
+  ]
+}

@@ -1,67 +1,24 @@
-name: Frozen TENT CPU comparison
-
+name: Qualify protected single-SQE direct read candidates
 on:
-  workflow_call:
-    inputs:
-      release_gate:
-        type: boolean
-        default: false
   workflow_dispatch:
-    inputs:
-      profile_only:
-        description: Collect slow-path strace and CPU stack profiles without timing sweeps
-        type: boolean
-        default: false
-      tail_profile_only:
-        description: Collect per-sample io_uring and scheduler timelines without timing sweeps
-        type: boolean
-        default: false
-      tail_workload:
-        description: Workload when collecting per-sample timelines
-        type: choice
-        options: [all, tmpfs-read-batch, ext4-read-batch]
-        default: all
-      tmpfs_tail_only:
-        description: Interleave frozen OrbiTE, the candidate and TENT for singleton tmpfs p99
-        type: boolean
-        default: false
-      tcp_read_rss_only:
-        description: Measure 64 MiB TCP READ RSS and profile live heap allocations
-        type: boolean
-        default: false
-      tmpfs_read_rss_only:
-        description: Measure 64 MiB tmpfs READ RSS and profile live heap allocations
-        type: boolean
-        default: false
-      baseline_ref:
-        description: Optional base commit for same-runner sweeps or a READ memory comparison
-        type: string
-        default: ''
-      enforce_cpu_guards:
-        description: Use the frozen OrbiTE baseline and fail on any CPU workload outside its limits
-        type: boolean
-        default: false
-      repeat_baseline:
-        description: Measure the same frozen OrbiTE binary in both sweeps to assess run-to-run variation
-        type: boolean
-        default: false
-
 permissions:
   contents: read
-
 jobs:
-  cpu-oracle:
-    # Release PRs run this same job through release.yml, once per revision.
-    if: ${{ !startsWith(github.head_ref, 'release/') || inputs.release_gate }}
+  matched:
     runs-on: ubuntu-24.04
-    timeout-minutes: ${{ (inputs.baseline_ref != '' || inputs.enforce_cpu_guards || inputs.repeat_baseline) && 240 || 120 }}
+    timeout-minutes: 200
     strategy:
       fail-fast: false
       matrix:
-        toolchain: [stable, 1.85.0]
+        include:
+          - slot: stable-first
+            first: stable
+            second: 1.85.0
+          - slot: msrv-first
+            first: 1.85.0
+            second: stable
     env:
-      RUSTUP_TOOLCHAIN: ${{ matrix.toolchain }}
-      READ_RSS_FLAG: ${{ inputs.tmpfs_read_rss_only && '--tmpfs-read-rss-only' || inputs.tcp_read_rss_only && '--tcp-read-rss-only' || '' }}
+      RUNNER_SLOT: ${{ matrix.slot }}
       CC: gcc
       CXX: g++
       LIBCLANG_PATH: /usr/lib/llvm-18/lib
@@ -70,172 +27,127 @@ jobs:
       - uses: actions/checkout@v7.0.1
         with:
           fetch-depth: 0
-      - name: Select the paired measurement revision
-        if: inputs.baseline_ref != '' || inputs.enforce_cpu_guards || inputs.repeat_baseline || inputs.tmpfs_tail_only || env.READ_RSS_FLAG != ''
+          persist-credentials: false
+      - name: Verify existing x86_64 ext4 and io_uring facilities
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(uname -m)" = x86_64
+          mkdir -p "$RUNNER_TEMP/receipts" "$RUNNER_TEMP/probe-ext4"
+          findmnt -n -o FSTYPE,SOURCE,TARGET,OPTIONS -T "$RUNNER_TEMP/probe-ext4" | tee "$RUNNER_TEMP/receipts/mount.txt"
+          if test "$(findmnt -n -o FSTYPE -T "$RUNNER_TEMP/probe-ext4")" != ext4; then
+            echo "::error::No writable ext4 at RUNNER_TEMP on this runner."
+            exit 1
+          fi
+          if test -r /proc/sys/kernel/io_uring_disabled; then cat /proc/sys/kernel/io_uring_disabled | tee "$RUNNER_TEMP/receipts/kernel-io-uring-disabled.txt"; fi
+          cc -Wall -Wextra -Werror -O2 -x c -o "$RUNNER_TEMP/check-ring" - <<'C'
+          #define _GNU_SOURCE
+          #include <errno.h>
+          #include <linux/io_uring.h>
+          #include <stdio.h>
+          #include <string.h>
+          #include <sys/syscall.h>
+          #include <unistd.h>
+          int main(void) {
+              struct io_uring_params p = {0};
+              int fd = (int)syscall(SYS_io_uring_setup, 2U, &p);
+              if (fd < 0) {
+                  int reason = errno;
+                  fprintf(stderr, "native io_uring unavailable: errno=%d (%s)\n", reason, strerror(reason));
+                  return 1;
+              }
+              return close(fd) == 0 ? 0 : 1;
+          }
+          C
+          "$RUNNER_TEMP/check-ring" 2>&1 | tee "$RUNNER_TEMP/receipts/ring-probe.log"
+      - name: Build the frozen native TENT oracle
+        id: oracle
+        shell: bash
+        run: |
+          set -euo pipefail
+          .github/scripts/install-native-deps.sh cmake g++ git curl time strace python3-dev libgoogle-glog-dev libgflags-dev libnuma-dev libyaml-cpp-dev libjsoncpp-dev libibverbs-dev libcurl4-openssl-dev libssl-dev libcli11-dev liburing-dev clang-18 libclang-18-dev
+          python3 tests/reference/run.py --fetch-reference --output "$RUNNER_TEMP/oracle"
+          python3 -I -B tests/reference/test_manifest.py "$RUNNER_TEMP/oracle/manifest.json"
+      - name: Build the frozen caller and protected READV owners on the first compiler
+        id: build_first
+        if: ${{ !cancelled() && steps.oracle.outcome == 'success' }}
         env:
-          BASELINE_REF: ${{ inputs.baseline_ref }}
-          FROZEN_PAIR: ${{ inputs.enforce_cpu_guards || inputs.repeat_baseline }}
-          DIAGNOSTIC: ${{ inputs.profile_only || inputs.tail_profile_only }}
-          TMPFS_TAIL_ONLY: ${{ inputs.tmpfs_tail_only }}
-          BOTH_RSS_PROFILES: ${{ inputs.tcp_read_rss_only && inputs.tmpfs_read_rss_only }}
+          JOB_TOOLCHAIN: ${{ matrix.first }}
         run: |
-          if [[ -n "$READ_RSS_FLAG" && ( "$BOTH_RSS_PROFILES" == true || "$FROZEN_PAIR" == true || "$DIAGNOSTIC" == true || "$TMPFS_TAIL_ONLY" == true ) ]]; then
-            echo "Run each READ memory profile as a separate dispatch" >&2
-            exit 2
-          fi
-          if [[ -n "$READ_RSS_FLAG" && -z "$BASELINE_REF" ]]; then exit 0; fi
-          if [[ "$TMPFS_TAIL_ONLY" == true && ( -n "$BASELINE_REF" || "$FROZEN_PAIR" == true || "$DIAGNOSTIC" == true ) ]]; then
-            echo "Run the balanced tmpfs diagnostic as a separate dispatch" >&2
-            exit 2
-          fi
-          frozen=$(PYTHONPATH=benches python3 -Bc 'from guards import ORBITE_BASELINE; print(ORBITE_BASELINE)')
-          ref=$(git rev-parse --verify --end-of-options "${BASELINE_REF:-$frozen}^{commit}")
-          if [[ "$FROZEN_PAIR" == true && ( "$ref" != "$frozen" || "$DIAGNOSTIC" == true ) ]]; then
-            echo "Formal CPU guards require the frozen OrbiTE revision and untraced sweeps" >&2
-            exit 2
-          fi
-          git worktree add --detach "$RUNNER_TEMP/orbite-before" "$ref"
-          if [[ "$ref" == "$frozen" ]]; then echo "ORBITE_GUARD_PAIR=1" >> "$GITHUB_ENV"; fi
-      - name: Install reference build dependencies
-        timeout-minutes: 10
+          set -euo pipefail
+          rustup toolchain install "$JOB_TOOLCHAIN" --profile minimal
+          out="$RUNNER_TEMP/readv2-$JOB_TOOLCHAIN/receipts"
+          mkdir -p "$out"
+          cp "$RUNNER_TEMP/receipts/"* "$out/"
+          python3 -B benches/readv2_hosted.py build
+      - name: Measure first compiler with the frozen public callers
+        if: ${{ !cancelled() && steps.build_first.outcome == 'success' }}
+        env:
+          JOB_TOOLCHAIN: ${{ matrix.first }}
         run: |
-          .github/scripts/install-native-deps.sh cmake g++ git curl time python3-dev libgoogle-glog-dev libgflags-dev libnuma-dev libyaml-cpp-dev libjsoncpp-dev libibverbs-dev libcurl4-openssl-dev libssl-dev libcli11-dev liburing-dev clang-18 libclang-18-dev
-          rustup toolchain install "$RUSTUP_TOOLCHAIN" --profile minimal
-      - name: Install profiling tools
-        if: inputs.profile_only || inputs.tail_profile_only || (inputs.baseline_ref != '' && env.READ_RSS_FLAG == '')
-        run: |
-          .github/scripts/install-native-deps.sh strace linux-tools-generic
-          sudo sysctl -w kernel.perf_event_paranoid=-1
-          sudo sysctl -w kernel.kptr_restrict=0
-      - name: Compare frozen native TENT and OrbiTE
-        run: |
-          python3 tests/reference/run.py --fetch-reference --output "$RUNNER_TEMP/orbite-native-cpu"
-          python3 -I -B tests/reference/test_manifest.py "$RUNNER_TEMP/orbite-native-cpu/manifest.json"
-      - name: Reject the frozen TENT client at the native listener
-        run: |
-          native="$RUNNER_TEMP/orbite-native-cpu"
-          python3 tests/reference/wire/check.py --source "$native/reference" --build "$native/tent-build" --output "$RUNNER_TEMP/orbite-wire"
-      - name: Compare frozen RDMA slice geometry and controls
-        run: python3 tests/reference/rdma_geometry.py --tent-source "$RUNNER_TEMP/orbite-native-cpu/reference" --output "$RUNNER_TEMP/orbite-rdma-geometry"
-      - name: Preserve RDMA geometry evidence
+          set -euo pipefail
+          out="$RUNNER_TEMP/readv2-$JOB_TOOLCHAIN/receipts"
+          python3 -B benches/readv2_hosted.py controls
+          python3 -B benches/readv2_hosted.py measure
+          python3 -B benches/readv2_replay.py "$out" formal > "$out/recalculated.json"
+      - uses: actions/upload-artifact@v7.0.2
         if: always()
-        uses: actions/upload-artifact@v7.0.2
         with:
-          name: frozen-tent-rdma-geometry-${{ matrix.toolchain }}
-          path: ${{ runner.temp }}/orbite-rdma-geometry/
-      - name: Prepare warmed ext4 and tmpfs benchmark filesystems
-        run: |
-          if test -e /proc/sys/kernel/io_uring_disabled; then sudo sysctl -w kernel.io_uring_disabled=0; fi
-          ext="$RUNNER_TEMP/orbite-bench-ext4"
-          mkdir -p "$ext"
-          if test "$(findmnt -n -o FSTYPE -T "$ext")" != ext4; then
-            truncate -s 1G "$RUNNER_TEMP/bench-ext4.img"
-            mkfs.ext4 -q -F "$RUNNER_TEMP/bench-ext4.img"
-            sudo mount -o loop "$RUNNER_TEMP/bench-ext4.img" "$ext"
-            sudo chown "$(id -u):$(id -g)" "$ext"
-          fi
-          echo "ORBITE_EXT4_DIR=$ext" >> "$GITHUB_ENV"
-      - name: Profile the target owners (traced timings are not performance results)
-        if: (inputs.profile_only || inputs.baseline_ref != '') && !inputs.tail_profile_only && env.READ_RSS_FLAG == ''
-        env:
-          CARGO_PROFILE_RELEASE_DEBUG: 1
-          CARGO_TARGET_DIR: ${{ runner.temp }}/profile-target
-        run: python3 benches/run.py --reference "$RUNNER_TEMP/orbite-native-cpu" --output "$RUNNER_TEMP/orbite-profiles" --ext4 "$ORBITE_EXT4_DIR" --samples 100 --warmup 3 --workers 2 --trials 3 --profile-only
-      - name: Trace io_uring sample tails (diagnostic only)
-        if: inputs.tail_profile_only
-        env:
-          CARGO_PROFILE_RELEASE_DEBUG: 1
-          CARGO_TARGET_DIR: ${{ runner.temp }}/profile-target
-          BASELINE_REF: ${{ inputs.baseline_ref }}
-          TAIL_WORKLOAD: ${{ inputs.tail_workload || 'all' }}
-        run: |
-          if test -n "$BASELINE_REF"; then
-            (
-              args=(--tail-profile-only)
-              if [[ "$TAIL_WORKLOAD" == all ]]; then
-                cd "$RUNNER_TEMP/orbite-before"
-              else
-                args+=("$TAIL_WORKLOAD" --orbite-source "$RUNNER_TEMP/orbite-before")
-              fi
-              CARGO_TARGET_DIR="$RUNNER_TEMP/baseline-profile-target" python3 benches/run.py --reference "$RUNNER_TEMP/orbite-native-cpu" --output "$RUNNER_TEMP/orbite-profiles-before" --ext4 "$ORBITE_EXT4_DIR" --samples 1000 --warmup 3 --workers 2 --trials 3 "${args[@]}"
-            )
-            python3 benches/analyze_io_tail.py "$RUNNER_TEMP/orbite-profiles-before/tail"
-          fi
-          python3 benches/run.py --reference "$RUNNER_TEMP/orbite-native-cpu" --output "$RUNNER_TEMP/orbite-profiles" --ext4 "$ORBITE_EXT4_DIR" --samples 1000 --warmup 3 --workers 2 --trials 3 --tail-profile-only "$TAIL_WORKLOAD"
-      - name: Matched baseline sweeps on the same runner
-        if: (inputs.baseline_ref != '' || inputs.enforce_cpu_guards || inputs.repeat_baseline) && !inputs.profile_only && !inputs.tail_profile_only && env.READ_RSS_FLAG == ''
-        env:
-          CARGO_TARGET_DIR: ${{ runner.temp }}/baseline-target
-        run: |
-          args=()
-          if [[ "$ORBITE_GUARD_PAIR" == 1 ]]; then
-            args+=(--orbite-source "$RUNNER_TEMP/orbite-before")
-          else
-            cd "$RUNNER_TEMP/orbite-before"
-          fi
-          python3 benches/run.py "${args[@]}" --reference "$RUNNER_TEMP/orbite-native-cpu" --output "$RUNNER_TEMP/orbite-bench-before" --ext4 "$ORBITE_EXT4_DIR" --samples 100 --warmup 3 --workers 2 --trials 3
-      - name: Matched byte-checked CPU sweeps (no hardware)
-        if: ${{ !inputs.profile_only && !inputs.tail_profile_only && !inputs.tmpfs_tail_only && env.READ_RSS_FLAG == '' }}
-        env:
-          REPEAT_BASELINE: ${{ inputs.repeat_baseline }}
-        run: |
-          args=()
-          if [[ "$REPEAT_BASELINE" == true ]]; then
-            export CARGO_TARGET_DIR="$RUNNER_TEMP/baseline-target"
-            args+=(--orbite-source "$RUNNER_TEMP/orbite-before")
-          fi
-          python3 benches/run.py "${args[@]}" --reference "$RUNNER_TEMP/orbite-native-cpu" --output "$RUNNER_TEMP/orbite-bench" --ext4 "$ORBITE_EXT4_DIR" --samples 100 --warmup 3 --workers 2 --trials 3
-      - name: Record CPU workload guard verdicts
-        if: ${{ !inputs.profile_only && !inputs.tail_profile_only && !inputs.tmpfs_tail_only && env.READ_RSS_FLAG == '' }}
-        env:
-          ENFORCE: ${{ inputs.enforce_cpu_guards }}
-        run: |
-          args=()
-          if [[ "$ORBITE_GUARD_PAIR" == 1 ]]; then args+=(--baseline "$RUNNER_TEMP/orbite-bench-before"); fi
-          if [[ "$ENFORCE" != true ]]; then args+=(--report-only); fi
-          python3 -B benches/guards.py "$RUNNER_TEMP/orbite-bench" "${args[@]}" --output "$RUNNER_TEMP/orbite-bench/cpu-guards.json"
-      - name: Repeat single-block tmpfs READ and WRITE in balanced process order
-        if: inputs.tmpfs_tail_only
-        run: python3 -B benches/run.py --reference "$RUNNER_TEMP/orbite-native-cpu" --output "$RUNNER_TEMP/orbite-bench" --ext4 "$ORBITE_EXT4_DIR" --samples 1000 --tmpfs-tail-baseline "$RUNNER_TEMP/orbite-before"
-      - name: Measure 64 MiB READ memory and collect allocation stacks
-        if: env.READ_RSS_FLAG != ''
-        env:
-          CARGO_PROFILE_RELEASE_DEBUG: 1
-          BASELINE_REF: ${{ inputs.baseline_ref }}
-        run: |
-          .github/scripts/install-native-deps.sh heaptrack
-          if test -n "$BASELINE_REF"; then
-            CARGO_TARGET_DIR="$RUNNER_TEMP/baseline-profile-target" python3 -B benches/run.py --reference "$RUNNER_TEMP/orbite-native-cpu" --output "$RUNNER_TEMP/orbite-profiles-before" --ext4 "$ORBITE_EXT4_DIR" --orbite-source "$RUNNER_TEMP/orbite-before" "$READ_RSS_FLAG"
-          fi
-          python3 -B benches/run.py --reference "$RUNNER_TEMP/orbite-native-cpu" --output "$RUNNER_TEMP/orbite-profiles" --ext4 "$ORBITE_EXT4_DIR" "$READ_RSS_FLAG"
-      - name: Preserve raw measurements outside Git
+          name: readv2-${{ matrix.slot }}-${{ matrix.first }}
+          path: ${{ runner.temp }}/readv2-${{ matrix.first }}/receipts/
+          if-no-files-found: warn
+      - name: Retire temporary first compiler build outputs
         if: always()
-        uses: actions/upload-artifact@v7.0.2
-        with:
-          name: cpu-bench-${{ matrix.toolchain }}
-          path: |
-            ${{ runner.temp }}/orbite-bench/*.json
-            ${{ runner.temp }}/orbite-bench/*.jsonl
-            ${{ runner.temp }}/orbite-bench/*.stdout
-            ${{ runner.temp }}/orbite-bench/*.stderr
-            ${{ runner.temp }}/orbite-bench-before/*.json
-            ${{ runner.temp }}/orbite-bench-before/*.jsonl
-            ${{ runner.temp }}/orbite-bench-before/*.stdout
-            ${{ runner.temp }}/orbite-bench-before/*.stderr
-            ${{ runner.temp }}/orbite-profiles/**
-            ${{ runner.temp }}/orbite-profiles-before/**
-      - name: Preserve comparison evidence
+        env:
+          JOB_TOOLCHAIN: ${{ matrix.first }}
+        run: |
+          python3 -B - <<'PYCODE'
+          import os, shutil
+          from pathlib import Path
+          path = Path(os.environ["RUNNER_TEMP"]) / ("readv2-" + os.environ["JOB_TOOLCHAIN"])
+          for target in path.glob("target-*"):
+              if target.is_dir() and not target.is_symlink():
+                  shutil.rmtree(target)
+          PYCODE
+      - name: Build the frozen caller and protected READV owners on the second compiler
+        id: build_second
+        if: ${{ !cancelled() && steps.oracle.outcome == 'success' }}
+        env:
+          JOB_TOOLCHAIN: ${{ matrix.second }}
+        run: |
+          set -euo pipefail
+          rustup toolchain install "$JOB_TOOLCHAIN" --profile minimal
+          out="$RUNNER_TEMP/readv2-$JOB_TOOLCHAIN/receipts"
+          mkdir -p "$out"
+          cp "$RUNNER_TEMP/receipts/"* "$out/"
+          python3 -B benches/readv2_hosted.py build
+      - name: Measure second compiler with the frozen public callers
+        if: ${{ !cancelled() && steps.build_second.outcome == 'success' }}
+        env:
+          JOB_TOOLCHAIN: ${{ matrix.second }}
+        run: |
+          set -euo pipefail
+          out="$RUNNER_TEMP/readv2-$JOB_TOOLCHAIN/receipts"
+          python3 -B benches/readv2_hosted.py controls
+          python3 -B benches/readv2_hosted.py measure
+          python3 -B benches/readv2_replay.py "$out" formal > "$out/recalculated.json"
+      - uses: actions/upload-artifact@v7.0.2
         if: always()
-        uses: actions/upload-artifact@v7.0.2
         with:
-          name: frozen-tent-cpu-${{ matrix.toolchain }}
-          path: |
-            ${{ runner.temp }}/orbite-wire/*.json
-            ${{ runner.temp }}/orbite-native-cpu/manifest.json
-            ${{ runner.temp }}/orbite-native-cpu/*.stdout
-            ${{ runner.temp }}/orbite-native-cpu/*.stderr
-            ${{ runner.temp }}/orbite-native-cpu/tent-build/CMakeCache.txt
-            ${{ runner.temp }}/orbite-native-cpu/tent-driver
-            ${{ runner.temp }}/orbite-native-cpu/tent-build/mooncake-transfer-engine/benchmark/tebench
-            ${{ runner.temp }}/orbite-native-cpu/tent-build/**/*.so*
-            ${{ runner.temp }}/orbite-native-cpu/cargo/debug/examples/cpu_trace
+          name: readv2-${{ matrix.slot }}-${{ matrix.second }}
+          path: ${{ runner.temp }}/readv2-${{ matrix.second }}/receipts/
+          if-no-files-found: warn
+  verdict:
+    runs-on: ubuntu-24.04
+    needs: matched
+    if: always()
+    steps:
+      - uses: actions/checkout@v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: readv2-*
+          path: ${{ runner.temp }}/comparisons
+      - name: Apply frozen baselines and the hot buffer memory limit
+        run: python3 -B benches/readv2_status.py "$RUNNER_TEMP/comparisons"
