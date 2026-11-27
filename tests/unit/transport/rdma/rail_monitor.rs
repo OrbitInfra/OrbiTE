@@ -5,7 +5,7 @@ fn path(id: usize, name: &str) -> NicPath {
         nic_id: id,
         name: name.into(),
         domain: [id as u8 + 1; 16],
-        gid_type: GidType::Ib,
+        gid_type: GidType::InfiniBand,
         descriptor: Descriptor {
             mtu: 3,
             lid: 1,

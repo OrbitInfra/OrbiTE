@@ -581,7 +581,7 @@ checks its identity and verifies the absence of network/thread syscalls.
 ## RDMA resource owners
 
 OrbitRDMA owns the native ABI, device and port queries, protection domains, RC
-transitions, host MR/MW operations, async and CQ events, dma-buf registration,
+transitions, Linux GID inventory, per-PD key history, host MR/MW operations, async and CQ events, dma-buf registration,
 mlx5 DevX keys and native destruction. OrbiTE retains CUDA export FDs and
 arbitrates loans across transports. It submits READ/WRITE and completion-message SEND/RECV
 through OrbitRDMA's `verbs::post`. The progress lane uses `verbs::poll` on the

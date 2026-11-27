@@ -2,7 +2,7 @@
 
 #![allow(unsafe_code)]
 
-use std::ffi::{CStr, c_char, c_int, c_void};
+use std::ffi::{c_char, c_int, c_void};
 
 use orbit_rdma::provider;
 pub(in crate::transport::rdma) use orbit_rdma::provider::abi as ffi;
@@ -26,7 +26,7 @@ mod memory;
 #[cfg(feature = "cuda")]
 pub(crate) use gpu_registration::GpuRegistrationVerbs;
 #[cfg(all(test, feature = "cuda"))]
-pub(super) use gpu_registration::peermem_at;
+pub(super) use provider::mlx5::peermem_at;
 mod qp;
 
 use cq::poll;
@@ -281,16 +281,6 @@ pub(crate) struct Verbs {
     pub(in crate::transport::rdma) close_device: unsafe extern "C" fn(*mut DeviceHandles) -> c_int,
 }
 
-// The opaque handles belong to Resources, not to a wrapper's infallible Drop.
-// Every successful destroy clears exactly one handle; any error leaves all
-// remaining handles and the actual DMA backing owned by the caller.
-fn failure() -> c_int {
-    std::io::Error::last_os_error()
-        .raw_os_error()
-        .filter(|code| *code != 0)
-        .unwrap_or(libc::EIO)
-}
-
 pub(super) fn install() -> Result<()> {
     provider::install().map_err(|e| Error::Unavailable(provider::load_diagnostic(&e)))
 }
@@ -299,6 +289,9 @@ fn provider_error(error: orbit_rdma::Error) -> Error {
     match error {
         orbit_rdma::Error::Load(e) => Error::Unavailable(provider::load_diagnostic(&e)),
         orbit_rdma::Error::Native { operation, code } => Error::Backend { operation, code },
+        orbit_rdma::Error::Invalid(reason) | orbit_rdma::Error::Unsupported(reason) => {
+            Error::Unavailable(reason)
+        }
         orbit_rdma::Error::DeviceList(e) => Error::Io(e),
         _ => Error::Internal("unexpected RDMA provider error"),
     }

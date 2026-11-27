@@ -38,13 +38,13 @@ impl Resources {
                     usage.burned_window_keys += 1;
                     return Ok(key);
                 }
-                Err(error) => {
+                Err(_) => {
                     let index = memory.window_key & !255;
                     if !self.keys.exhausted(memory.window_key)
                         || self.exhausted_windows.len() >= config.max_window_key_indices
                     {
                         usage.window_key_exhaustions += 1;
-                        return Err(error);
+                        return Err(Error::ResourceExhausted);
                     }
                     if self.exhausted_windows.try_reserve(1).is_err() {
                         usage.window_key_exhaustions += 1;

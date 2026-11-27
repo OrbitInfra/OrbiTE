@@ -370,7 +370,7 @@ fn requester_checks_source_offer_and_each_bound_phase_before_data_or_read_copyba
                     nic_id: 0,
                     name: "copy".into(),
                     domain: [8; 16],
-                    gid_type: crate::transport::rdma::discovery::GidType::Ib,
+                    gid_type: crate::transport::rdma::discovery::GidType::InfiniBand,
                     descriptor: Descriptor {
                         lid: 1,
                         mtu: 3,

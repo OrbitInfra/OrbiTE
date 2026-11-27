@@ -103,7 +103,10 @@ impl Resources {
             let index = space.base + ((sequence + u64::from(space.pdn)) % count) as u32;
             let key = (index << 8) | (1 + (sequence / count) as u32);
             let before = self.keys.len();
-            let fresh = self.keys.claim_exact(key)?;
+            let fresh = self
+                .keys
+                .claim_exact(key)
+                .map_err(|_| Error::ResourceExhausted)?;
             self.usage
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())

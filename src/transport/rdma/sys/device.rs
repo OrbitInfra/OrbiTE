@@ -8,7 +8,7 @@ pub(in crate::transport::rdma) fn devices() -> Result<Vec<(String, String)>> {
 
 pub(super) fn validate_gid_entry(entry: &provider::GidEntry, address: &RdmaAddress) -> Result<()> {
     let (kind, link_layer) = match address.gid_type {
-        discovery::GidType::Ib => (ffi::IBV_GID_TYPE_IB, 1),
+        discovery::GidType::InfiniBand => (ffi::IBV_GID_TYPE_IB, 1),
         discovery::GidType::RoceV1 => (ffi::IBV_GID_TYPE_ROCE_V1, 2),
         discovery::GidType::RoceV2 => (ffi::IBV_GID_TYPE_ROCE_V2, 2),
     };
@@ -37,13 +37,11 @@ unsafe fn read_address(
     }
 
     // SAFETY: The caller keeps the device and its selected port alive through both queries.
-    let (descriptor, active, link_speed_mbps) =
-        unsafe { provider::read_port(device, expected.port, expected.gid_index) }.map_err(
-            |code| Error::Backend {
-                operation: "ibverbs route query",
-                code,
-            },
-        )?;
+    let observed = unsafe { provider::read_port(device, expected.port, expected.gid_index) };
+    let (descriptor, active, link_speed_mbps) = observed.map_err(|code| Error::Backend {
+        operation: "ibverbs route query",
+        code,
+    })?;
     let descriptor: Descriptor = descriptor.into();
     // SAFETY: the context owner retains this open device through its native GID query.
     let entry = unsafe { provider::gid_entry(&*device, expected.port, expected.gid_index) }
@@ -51,13 +49,14 @@ unsafe fn read_address(
             operation: "ibv_query_gid_ex",
             code,
         })?;
-    let (gid_type, net_device, net_device_index) = discovery::gid_metadata(
+    let (gid_type, net_device, net_device_index) = provider::inventory::gid_metadata(
         std::path::Path::new("/sys"),
         &expected.device,
         expected.port,
         expected.gid_index,
         descriptor.link_layer,
-    )?;
+    )
+    .map_err(provider_error)?;
     let observed = RdmaAddress {
         active,
         link_speed_mbps,
@@ -107,24 +106,14 @@ unsafe fn query_selected_address(
     // SAFETY: The caller retains the open device throughout the selected address query.
     let (observed, entry) = unsafe { read_address(device, expected) }?;
     validate_gid_entry(&entry, &observed)?;
-    if entry.ndev_ifindex != 0 {
-        let mut name = [0; libc::IF_NAMESIZE];
-        // SAFETY: name provides IF_NAMESIZE writable bytes for the interface name.
-        let value = unsafe { libc::if_indextoname(entry.ndev_ifindex, name.as_mut_ptr()) };
-        if value.is_null() {
-            return Err(Error::Backend {
-                operation: "if_indextoname",
-                code: failure(),
-            });
-        }
-        // SAFETY: On success if_indextoname returns a NUL-terminated string in the still-live
-        // name array.
-        if unsafe { CStr::from_ptr(value) }.to_str().ok() != observed.net_device.as_deref() {
-            return Err(Error::Backend {
-                operation: "RDMA network device changed",
-                code: libc::ESTALE,
-            });
-        }
+    if entry.ndev_ifindex != 0
+        && !provider::inventory::netdev_matches(entry.ndev_ifindex, observed.net_device.as_deref())
+            .map_err(provider_error)?
+    {
+        return Err(Error::Backend {
+            operation: "RDMA network device changed",
+            code: libc::ESTALE,
+        });
     }
     Ok(observed)
 }

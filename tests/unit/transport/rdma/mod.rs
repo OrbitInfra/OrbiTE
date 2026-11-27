@@ -1613,7 +1613,7 @@ pub(super) fn discover(
         port: config.port.unwrap_or(1),
         active: !name.contains("initial_down"),
         gid_index: config.gid_index.unwrap_or(0),
-        gid_type: discovery::GidType::Ib,
+        gid_type: discovery::GidType::InfiniBand,
         net_device: None,
         net_device_index: 0,
         descriptor: Descriptor {

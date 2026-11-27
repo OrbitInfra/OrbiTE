@@ -1,3 +1,4 @@
+use std::fs;
 use std::os::unix::fs::symlink;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -189,7 +190,7 @@ fn gid_ranking_prefers_physical_v2_but_keeps_ib_and_valid_fallbacks() {
     f.put("sys/class/infiniband/a/ports/1/link_layer", "InfiniBand");
     let (_, routes) = f.discover(&RdmaConfig::default()).unwrap();
     assert_eq!(routes.len(), 1);
-    assert_eq!(routes[0].gid_type, GidType::Ib);
+    assert_eq!(routes[0].gid_type, GidType::InfiniBand);
     fs::remove_file(
         f.root
             .join("sys/class/infiniband/a/ports/1/gid_attrs/types/0"),

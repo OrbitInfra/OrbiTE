@@ -747,7 +747,7 @@ fn native_gid_identity_checks_type_interface_port_index_and_bytes_independently(
         );
     }
     let ib = RdmaAddress {
-        gid_type: discovery::GidType::Ib,
+        gid_type: discovery::GidType::InfiniBand,
         net_device: None,
         net_device_index: 0,
         descriptor: Descriptor {
