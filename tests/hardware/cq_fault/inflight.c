@@ -60,7 +60,7 @@ int orbite_inflight_fault(unsigned command, unsigned op, struct inflight_snapsho
         if (inflight.armed || inflight.posts || state.armed || cleanup.armed || state.errors
                 || state.contexts != 2 || !(op == 1 || op == 2)) error = EINVAL;
         else {
-            if (!native_modify_qp) *(void **)(&native_modify_qp) = dlsym(RTLD_NEXT, "ibv_modify_qp");
+            if (!native_modify_qp) *(void **)(&native_modify_qp) = native_verb("ibv_modify_qp");
             if (!native_modify_qp) fail();
             inflight.armed = 1; inflight_operation = op;
             receipt("\"kind\":\"dma_arm\",\"operation\":%u", op);

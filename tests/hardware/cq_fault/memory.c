@@ -40,7 +40,7 @@ static int memory_destroy(struct ibv_mr *mr, struct ibv_mw *mw) {
 
 int ibv_dereg_mr(struct ibv_mr *mr) {
     pthread_mutex_lock(&lock);
-    if (!native_dereg_mr) *(void **)(&native_dereg_mr) = dlsym(RTLD_NEXT, "ibv_dereg_mr");
+    if (!native_dereg_mr) *(void **)(&native_dereg_mr) = native_verb("ibv_dereg_mr");
     if (!native_dereg_mr) fail();
     if (memory_fault.attempts && mr == memory_mr) fail();
     int selected = memory_fault.armed && memory_fault.kind == 1 && !memory_fault.attempts
@@ -108,7 +108,7 @@ int orbite_memory_fault(unsigned command, unsigned kind, unsigned source, uint64
                 || (uintptr_t)memory_mr->pd != memory_fault.pd || memory_mr->lkey != memory_fault.lkey
                 || (memory_mw ? memory_mw->rkey : memory_mr->rkey) != memory_fault.rkey) error = EINVAL;
         else {
-            if (!native_dealloc_pd) *(void **)(&native_dealloc_pd) = dlsym(RTLD_NEXT, "ibv_dealloc_pd");
+            if (!native_dealloc_pd) *(void **)(&native_dealloc_pd) = native_verb("ibv_dealloc_pd");
             if (!native_dealloc_pd) fail();
             /* Not a query-MR claim: the real PD destructor must still see native children.
              * Unexpected success terminates the process before any owner can use that PD. */

@@ -176,7 +176,7 @@ pub(super) unsafe extern "C" fn open_device(
     unsafe {
         (*h).context = state.cast();
         if (*h).request_gpu_keys && (*state).mode.starts_with("gpu_key_") {
-            (*h).gpu_keys = sys::GpuKeyRange {
+            (*h).gpu_keys = orbit_rdma::provider::GpuKeyRange {
                 pdn: 1,
                 base: 0x10000,
                 count: 16,
@@ -286,7 +286,7 @@ unsafe extern "C" fn register_memory(
     // SAFETY: The grant supplies exclusive MR handle storage and retains the device and
     // registered bytes through deregistration.
     unsafe {
-        (*h).mr = Box::into_raw(Box::new(FakeMr {
+        (*h).native.mr = Box::into_raw(Box::new(FakeMr {
             private_pd,
             device,
             address: address as usize,
@@ -395,7 +395,7 @@ unsafe extern "C" fn prepare_grant(
     // SAFETY: The caller retains the grant registration and its handle storage through this
     // callback.
     unsafe {
-        if (*memory).mr.is_null() {
+        if (*memory).native.mr.is_null() {
             #[cfg(feature = "cuda")]
             if (*memory).dmabuf.is_some() {
                 let pd = if (*h).private_pd.is_null() {
@@ -417,50 +417,53 @@ unsafe extern "C" fn prepare_grant(
                     .fetch_add(1, Ordering::SeqCst);
             }
             device.mrs.fetch_add(1, Ordering::SeqCst);
-            (*memory).mr = Box::into_raw(Box::new(FakeMr {
+            (*memory).native.mr = Box::into_raw(Box::new(FakeMr {
                 private_pd: (*h).private_pd.cast(),
                 device,
                 address: bytes as usize,
                 length,
                 local_only: false,
-                window_bind: permission != 0 && !(*memory).remote_mr,
+                window_bind: permission != 0 && !(*memory).native.remote_mr,
                 qps: AtomicUsize::new(0),
                 windows: AtomicUsize::new(0),
             }))
             .cast();
         } else {
-            let mr = &*(*memory).mr.cast::<FakeMr>();
-            assert_eq!(mr.window_bind, permission != 0 && !(*memory).gpu_parent);
+            let mr = &*(*memory).native.mr.cast::<FakeMr>();
+            assert_eq!(
+                mr.window_bind,
+                permission != 0 && !(*memory).native.gpu_parent
+            );
             assert!(
                 bytes as usize >= mr.address && bytes as usize + length <= mr.address + mr.length
             );
         }
-        (*(*memory).mr.cast::<FakeMr>())
+        (*(*memory).native.mr.cast::<FakeMr>())
             .qps
             .fetch_add(1, Ordering::SeqCst);
         qp.grants.lock().unwrap().insert(
             memory as usize,
             FakeGrant {
-                mr: (*memory).mr as usize,
+                mr: (*memory).native.mr as usize,
                 window: 0,
                 address: bytes as u64,
                 length,
                 permission,
             },
         );
-        qp.mr.store((*memory).mr as usize, Ordering::Release);
+        qp.mr.store((*memory).native.mr as usize, Ordering::Release);
         qp.bytes.store(bytes as u64, Ordering::Release);
         qp.length.store(length, Ordering::Release);
         qp.first_id.store(0, Ordering::Release);
         qp.send_id.store(0, Ordering::Release);
-        if (*memory).remote_mr {
+        if (*memory).native.remote_mr {
             assert!(!(*h).private_pd.is_null());
-            (*memory).window_key = 0x707;
+            (*memory).native.window_key = 0x707;
             device.events.lock().unwrap().push("register_gpu_grant");
         }
         if permission != 0
-            && !(*memory).gpu_parent
-            && !(*memory).remote_mr
+            && !(*memory).native.gpu_parent
+            && !(*memory).native.remote_mr
             && !device.mode.starts_with("open")
         {
             let code = allocate_window(memory, handles);
@@ -474,7 +477,7 @@ unsafe extern "C" fn prepare_grant(
             0,
             // SAFETY: The caller retains the grant registration and its handle storage through
             // this callback.
-            unsafe { (*memory).mr } as usize,
+            unsafe { (*memory).native.mr } as usize,
             Ordering::AcqRel,
             Ordering::Acquire,
         );
@@ -484,10 +487,10 @@ unsafe extern "C" fn prepare_grant(
         FakeGrant {
             // SAFETY: The caller retains the grant registration and its handle storage through
             // this callback.
-            mr: unsafe { (*memory).mr } as usize,
+            mr: unsafe { (*memory).native.mr } as usize,
             // SAFETY: The caller retains the grant registration and its handle storage through
             // this callback.
-            window: unsafe { (*memory).mw } as usize,
+            window: unsafe { (*memory).native.mw } as usize,
             address: bytes as u64,
             length,
             permission,
@@ -526,7 +529,7 @@ unsafe extern "C" fn open(
     }
     // SAFETY: The private PD is retained by its dependent QPs and MRs; this access is within
     // their lifetime.
-    if unsafe { (*memory).remote_mr } {
+    if unsafe { (*memory).native.remote_mr } {
         let pd = Box::into_raw(Box::new(FakePd {
             device,
             mrs: AtomicUsize::new(0),
@@ -545,7 +548,7 @@ unsafe extern "C" fn open(
             // SAFETY: The grant supplies exclusive MR handle storage and retains the device and
             // registered bytes through deregistration.
             unsafe {
-                (*memory).mr = Box::into_raw(Box::new(FakeMr {
+                (*memory).native.mr = Box::into_raw(Box::new(FakeMr {
                     private_pd: pd,
                     device,
                     address: bytes as usize,
@@ -616,7 +619,7 @@ unsafe extern "C" fn open(
             rkey: if permission == 0 {
                 7
             } else {
-                (*memory).window_key
+                (*memory).native.window_key
             },
             qpn,
             psn,
@@ -691,11 +694,11 @@ unsafe extern "C" fn window(
     let cq = unsafe { &*qp.cq };
     // SAFETY: The grant retains the boxed FakeWindow from allocation until it detaches and
     // deallocates the window.
-    let native_window = unsafe { &*(*memory).mw.cast::<FakeWindow>() };
+    let native_window = unsafe { &*(*memory).native.mw.cast::<FakeWindow>() };
     if bind {
         // SAFETY: The caller retains the grant registration and its handle storage through this
         // callback.
-        let mr = unsafe { (*memory).mr } as usize;
+        let mr = unsafe { (*memory).native.mr } as usize;
         assert_eq!(native_window.mr.swap(mr, Ordering::SeqCst), 0);
         // SAFETY: The registration owns the boxed FakeMr while the grant or posted message refers
         // to it.
@@ -713,17 +716,17 @@ unsafe extern "C" fn window(
             .unwrap()
             // SAFETY: The caller retains the grant registration and its handle storage through
             // this callback.
-            .window = unsafe { (*memory).mw } as usize;
+            .window = unsafe { (*memory).native.mw } as usize;
     }
     let state = &native_window.bound;
     qp.window_key
         // SAFETY: The caller retains the grant registration and its handle storage through this
         // callback.
-        .store(unsafe { (*memory).window_key }, Ordering::Release);
+        .store(unsafe { (*memory).native.window_key }, Ordering::Release);
     qp.window
         // SAFETY: The caller retains the grant registration and its handle storage through this
         // callback.
-        .store(unsafe { (*memory).mw } as usize, Ordering::Release);
+        .store(unsafe { (*memory).native.mw } as usize, Ordering::Release);
     {
         let grants = qp.grants.lock().unwrap();
         let grant = &grants[&(memory as usize)];
@@ -734,7 +737,7 @@ unsafe extern "C" fn window(
             .key
             // SAFETY: The caller retains the grant registration and its handle storage through
             // this callback.
-            .store(unsafe { (*memory).window_key }, Ordering::Release);
+            .store(unsafe { (*memory).native.window_key }, Ordering::Release);
     }
     assert!(matches!(permission, 1 | 2));
     assert_ne!(state.load(Ordering::Acquire), bind);
@@ -917,7 +920,7 @@ unsafe extern "C" fn post(
     let first_mr = device.first_payload_mr.load(Ordering::Acquire);
     // SAFETY: The caller retains the grant registration and its handle storage through this
     // callback.
-    let own_mr = unsafe { (*memory).mr } as usize;
+    let own_mr = unsafe { (*memory).native.mr } as usize;
     if mode.starts_with("copy_cross_hold") && own_mr == first_mr && accepted > 0 {
         // A post can refill a slice or fill the whole CQ. Hold one exact WR
         // from the first private registration, leaving credit for other chunks.
@@ -1047,7 +1050,7 @@ unsafe extern "C" fn post_receive(
     assert_ne!(
         // SAFETY: The caller retains the grant registration and its handle storage through this
         // callback.
-        unsafe { (*memory).mr },
+        unsafe { (*memory).native.mr },
         qp.mr.load(Ordering::Acquire) as *mut c_void
     );
     // SAFETY: The posting owner provides exclusive writable result storage for this callback.
@@ -1059,7 +1062,7 @@ unsafe extern "C" fn post_receive(
     }
     // SAFETY: The registration owns the boxed FakeMr while the grant or posted message refers to
     // it.
-    let mr = unsafe { (*memory).mr.cast::<FakeMr>() };
+    let mr = unsafe { (*memory).native.mr.cast::<FakeMr>() };
     assert_eq!(
         // SAFETY: The registration owns the boxed FakeMr while the grant or posted message refers
         // to it.
@@ -1115,12 +1118,12 @@ unsafe extern "C" fn send_completion(
     assert_ne!(
         // SAFETY: The caller retains the grant registration and its handle storage through this
         // callback.
-        unsafe { (*memory).mr },
+        unsafe { (*memory).native.mr },
         qp.mr.load(Ordering::Acquire) as *mut c_void
     );
     // SAFETY: The registration owns the boxed FakeMr while the grant or posted message refers to
     // it.
-    let mr = unsafe { (*memory).mr.cast::<FakeMr>() };
+    let mr = unsafe { (*memory).native.mr.cast::<FakeMr>() };
     // SAFETY: The registration owns the boxed FakeMr while the grant or posted message refers to
     // it.
     assert_eq!(unsafe { &*mr }.address, address as usize);
@@ -1610,7 +1613,7 @@ pub(super) fn discover(
         port: config.port.unwrap_or(1),
         active: !name.contains("initial_down"),
         gid_index: config.gid_index.unwrap_or(0),
-        gid_type: discovery::GidType::Ib,
+        gid_type: discovery::GidType::InfiniBand,
         net_device: None,
         net_device_index: 0,
         descriptor: Descriptor {

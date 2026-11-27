@@ -170,6 +170,8 @@ fn receive_identity_flags_binding_and_key_never_pay_foreign_debt() {
         "length",
         "flags",
         "extra_flags",
+        "grh",
+        "checksum_instead_of_invalidation",
         "key",
         "binding",
         "unposted",
@@ -191,13 +193,17 @@ fn receive_identity_flags_binding_and_key_never_pay_foreign_debt() {
             "length" => completion.length -= 1,
             "flags" => completion.flags = 0,
             "extra_flags" => completion.flags |= 0x8000_0000,
+            "grh" => completion.flags |= sys::GRH,
+            "checksum_instead_of_invalidation" => {
+                completion.flags = sys::GRH | sys::ffi::IBV_WC_IP_CSUM_OK;
+            }
             "key" => completion.invalidated_rkey = first.rkey,
             "binding" => queue.slots[0].message.memory.bytes_mut()[0] ^= 1,
             "wc_error" => completion.status = 5,
             _ => {}
         }
         let result = acknowledge(&mut queue, completion);
-        let success = matches!(case, "valid" | "duplicate");
+        let success = matches!(case, "valid" | "grh" | "duplicate");
         assert_eq!(result.is_ok(), success, "{case}");
         assert_eq!(second.completed(), success, "{case}");
         assert!(!first.completed(), "{case}");
@@ -274,7 +280,14 @@ impl ReceiveQueue {
 
 #[test]
 fn mr_authority_requires_plain_send_and_exact_binding_without_claiming_invalidation() {
-    for case in ["valid", "invalidation", "binding", "profile"] {
+    for case in [
+        "valid",
+        "grh",
+        "immediate",
+        "invalidation",
+        "binding",
+        "profile",
+    ] {
         let (runtime, device, mut queue) = fixture(1);
         let mut binding = [0x55; COMPLETION_MESSAGE_SIZE];
         binding[COMPLETION_MESSAGE_SIZE - 1] = crate::transport::rdma::protocol::MR_AUTHORITY;
@@ -285,6 +298,8 @@ fn mr_authority_requires_plain_send_and_exact_binding_without_claiming_invalidat
         completion.flags = 0;
         completion.invalidated_rkey = 0;
         match case {
+            "grh" => completion.flags = sys::GRH,
+            "immediate" => completion.flags = sys::GRH | sys::ffi::IBV_WC_WITH_IMM,
             "invalidation" => {
                 completion.flags = sys::WITH_INVALIDATE;
                 completion.invalidated_rkey = receipt.rkey;
@@ -295,7 +310,7 @@ fn mr_authority_requires_plain_send_and_exact_binding_without_claiming_invalidat
         }
         assert_eq!(
             acknowledge(&mut queue, completion).is_ok(),
-            case == "valid",
+            matches!(case, "valid" | "grh"),
             "{case}"
         );
         close(runtime, device, queue);

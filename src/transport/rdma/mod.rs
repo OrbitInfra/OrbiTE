@@ -21,7 +21,6 @@ mod endpoint;
 mod endpoint_store;
 mod events;
 mod grant;
-mod keys;
 mod monitor;
 mod path;
 mod promotion_policy;

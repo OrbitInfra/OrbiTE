@@ -169,7 +169,7 @@ fn requester_accepts_private_domain_only_without_reusable_qp_ownership() {
                     nic_id: 0,
                     name: "copy".into(),
                     domain: [8; 16],
-                    gid_type: discovery::GidType::Ib,
+                    gid_type: discovery::GidType::InfiniBand,
                     descriptor: Descriptor {
                         qpn: 0,
                         psn: 0,

@@ -16,7 +16,7 @@ unsafe extern "C" fn create(
     let (device, mr, native) = unsafe {
         (
             &*(*handles).context.cast::<FakeDevice>(),
-            &*(*memory).mr.cast::<FakeMr>(),
+            &*(*memory).native.mr.cast::<FakeMr>(),
             &mut *memory,
         )
     };

@@ -21,8 +21,6 @@ dependencies = [
  "cexpr",
  "clang-sys",
  "itertools",
- "log",
- "prettyplease",
  "proc-macro2",
  "quote",
  "regex",
@@ -200,17 +198,28 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
-name = "orbite"
-version = "0.1.0-beta.1"
+name = "orbit-rdma"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6db49f36471c681f73762e547f16fff6e5bbeec68fc83eaef61b7518bc72f6dc"
 dependencies = [
  "bindgen",
  "cc",
+ "libc",
+ "libloading",
+]
+
+[[package]]
+name = "orbite"
+version = "0.1.0-beta.1"
+dependencies = [
  "cudarc",
  "io-uring",
  "libc",
  "libloading",
  "log",
  "mio",
+ "orbit-rdma",
  "serde",
  "serde_json",
  "socket2",
@@ -240,16 +249,6 @@ name = "portable-atomic"
 version = "1.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "05c8b63e8d9609db387f0324918f81d68fe27748f084ef092fb35954d0539a85"
-
-[[package]]
-name = "prettyplease"
-version = "0.2.37"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "479ca8adacdd7ce8f1fb39ce9ecccbfe93a3f1344b3d0d97f20bc0196208f62b"
-dependencies = [
- "proc-macro2",
- "syn 2.0.119",
-]
 
 [[package]]
 name = "proc-macro2"

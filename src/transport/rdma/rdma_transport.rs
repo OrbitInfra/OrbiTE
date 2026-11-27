@@ -229,7 +229,8 @@ impl RdmaTransport {
             }
             devices
         };
-        self.registrations.publish(&devices, &memory, deadline)
+        self.registrations
+            .publish(&devices, &memory, self.config.host_source_reuse, deadline)
     }
 
     /// Submission readiness is sampled once; native dispatch rechecks its owners.
@@ -557,9 +558,11 @@ impl RdmaTransport {
             Operation::RdmaReadSlices | Operation::RdmaWriteSlices
         );
         let reusable_source = self.direct(memory)
-            && (!memory.is_cuda()
-                || (length <= 1 << 31
-                    && self.registrations.gpu_source_reusable(memory, &paths)?));
+            && if memory.is_cuda() {
+                length <= 1 << 31 && self.registrations.gpu_source_reusable(memory, &paths)?
+            } else {
+                self.config.host_source_reuse
+            };
         let qp_width = if reusable_source { self.qp_width() } else { 0 };
         let plan = if multi {
             path::write_paths(channel, epoch, &paths, qp_width)?;

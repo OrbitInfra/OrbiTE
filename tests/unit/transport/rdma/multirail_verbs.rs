@@ -120,7 +120,7 @@ unsafe extern "C" fn post_send(
             // SAFETY: The provider lends the linked WRs and writable bad-WR pointer through this
             // post_send callback.
             unsafe { (*first).opcode },
-            ffi::ibv_wr_opcode::IBV_WR_RDMA_READ | ffi::ibv_wr_opcode::IBV_WR_RDMA_WRITE
+            ffi::IBV_WR_RDMA_READ | ffi::IBV_WR_RDMA_WRITE
         ) {
             // SAFETY: The provider lends the linked WRs and writable bad-WR pointer through this
             // post_send callback.
@@ -161,7 +161,7 @@ unsafe extern "C" fn register(
     if code == 0 {
         // SAFETY: The registration retains this native ibv_mr until the deregistration call
         // returns.
-        let mr = unsafe { &*(*memory).mr.cast::<ffi::ibv_mr>() };
+        let mr = unsafe { &*(*memory).native.mr.cast::<ffi::ibv_mr>() };
         // SAFETY: The callback borrows the live protection-domain handle from its device owner.
         assert_eq!(mr.pd.cast::<std::ffi::c_void>(), unsafe { (*device).pd });
         let mut trace = TRACE.get().unwrap().0.lock().unwrap();
@@ -186,7 +186,7 @@ unsafe extern "C" fn post(
     // SAFETY: The connection owns the native ibv_qp while the fixture inspects its fields.
     let qp = unsafe { &*(*h).qp.cast::<ffi::ibv_qp>() };
     // SAFETY: The registration retains this native ibv_mr until the deregistration call returns.
-    let mr = unsafe { &*(*memory).mr.cast::<ffi::ibv_mr>() };
+    let mr = unsafe { &*(*memory).native.mr.cast::<ffi::ibv_mr>() };
     assert_eq!(
         mr.pd, qp.pd,
         "payload MR must belong to the actual selected QP PD"
@@ -242,7 +242,7 @@ unsafe extern "C" fn post(
         // SAFETY: The connection supplies a live QP handle slot for the callback.
         trace.bad_qp = unsafe { (*h).qp } as usize;
         // SAFETY: The registration owner keeps its MR handle slot valid through the callback.
-        trace.bad_mr = unsafe { (*memory).mr } as usize;
+        trace.bad_mr = unsafe { (*memory).native.mr } as usize;
         // SAFETY: The lane or connection keeps its CQ handle slot live during observation.
         trace.bad_cqs = [unsafe { (*h).cq } as usize, unsafe { (*h).receive_cq }
             as usize]
@@ -372,7 +372,7 @@ unsafe extern "C" fn destroy_cq(h: *mut sys::CqHandles) -> c_int {
 
 unsafe extern "C" fn deregister(h: *mut sys::MemoryHandles) -> c_int {
     // SAFETY: The registration owner keeps its MR handle slot valid through the callback.
-    let before = unsafe { (*h).mr } as usize;
+    let before = unsafe { (*h).native.mr } as usize;
     // SAFETY: The registration owner retains the MR and backing through the deregistration
     // attempt.
     let code = unsafe { (sys::REAL.deregister)(h) };

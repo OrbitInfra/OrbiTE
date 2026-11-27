@@ -7,6 +7,12 @@
   protects the returned prefix. Concurrent file truncation preserves the
   remaining registered bytes for both scalar and vectored reads. [File transfers](storage.md#dram-transfers-with-io_uring)
 
+- OrbitRDMA 0.1.1 supplies device and port queries, RC queues, host and GPU
+  registrations, events, data operations and native teardown. Direct host sources
+  can set `host_source_reuse = false` to allocate a private PD, QP and
+  exact-range MR for each grant. The existing MR-authority handshake governs
+  cleanup. [Host RDMA profiles](rdma-cuda.md#build-and-select-a-path)
+
 - Dependency security fixes: PyO3 requires 0.29.3 or a compatible patch
   (locked at 0.29.3), covering GHSA-36hh-v3qg-5jq4 and GHSA-chgr-c6px-7xpp.
   The Python module explicitly retains its GIL requirement; blocking calls

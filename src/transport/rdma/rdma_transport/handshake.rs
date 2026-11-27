@@ -118,6 +118,10 @@ impl RdmaTransport {
         }
     }
 
+    pub(in crate::transport::rdma) fn private_source_mr(&self, memory: &RegisteredMemory) -> bool {
+        self.direct(memory) && (memory.is_cuda() || !self.config.host_source_reuse)
+    }
+
     pub(super) fn finish_requester_slice(
         &self,
         channel: &mut ControlChannel<'_>,
@@ -177,7 +181,7 @@ impl RdmaTransport {
             return Err(Error::Protocol("RDMA slice rendezvous changed planned PD"));
         }
         let cacheable = hello.direct && admission.reusable_source;
-        let remote_mr = self.direct(memory) && memory.is_cuda() && !cacheable;
+        let remote_mr = !cacheable && self.private_source_mr(memory);
         if cacheable != (hello.qp_width != 0) || hello.qp_width > self.qp_width() {
             return Err(Error::Protocol("RDMA bootstrap QP width/profile mismatch"));
         }

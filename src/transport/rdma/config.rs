@@ -182,6 +182,9 @@ pub struct RdmaConfig {
     pub max_staging_bytes: usize,
     /// Host registration strategy; defaults to Direct, fixed at installation.
     pub host_memory: RdmaHostMemory,
+    /// Reuse host source QPs with exact type-2B windows. Defaults to true.
+    /// Disable to isolate each direct host grant on a fresh QP and private PD.
+    pub host_source_reuse: bool,
     /// Device registration strategy; defaults to Staged, fixed at installation.
     pub cuda_memory: RdmaCudaMemory,
     /// Registration route for Direct CUDA memory; Auto by default. This does not
@@ -262,6 +265,7 @@ impl Default for RdmaConfig {
             max_grants: 64,
             max_staging_bytes: 64 << 20,
             host_memory: RdmaHostMemory::Direct,
+            host_source_reuse: true,
             cuda_memory: RdmaCudaMemory::Staged,
             gpu_direct_registration: GpuDirectRegistration::Auto,
             gpu_source_reuse: false,

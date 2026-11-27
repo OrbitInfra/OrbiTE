@@ -23,7 +23,7 @@ static void gdr_registration(struct ibv_pd *pd, void *address, size_t length,
 #undef ibv_reg_mr
 struct ibv_mr *ibv_reg_mr(struct ibv_pd *pd, void *address, size_t length, int access) {
     struct ibv_mr *(*native)(struct ibv_pd *, void *, size_t, int);
-    *(void **)(&native) = dlsym(RTLD_NEXT, "ibv_reg_mr");
+    *(void **)(&native) = native_verb("ibv_reg_mr");
     if (!native) fail();
     struct ibv_mr *mr = native(pd, address, length, access);
     int saved_errno = errno;
@@ -35,7 +35,7 @@ struct ibv_mr *ibv_reg_mr(struct ibv_pd *pd, void *address, size_t length, int a
 struct ibv_mr *ibv_reg_mr_iova2(struct ibv_pd *pd, void *address, size_t length,
                                uint64_t iova, unsigned access) {
     struct ibv_mr *(*native)(struct ibv_pd *, void *, size_t, uint64_t, unsigned);
-    *(void **)(&native) = dlsym(RTLD_NEXT, "ibv_reg_mr_iova2");
+    *(void **)(&native) = native_verb("ibv_reg_mr_iova2");
     if (!native) fail();
     struct ibv_mr *mr = native(pd, address, length, iova, access);
     int saved_errno = errno;

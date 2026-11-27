@@ -21,7 +21,11 @@ pub(super) struct NicPath {
 impl NicPath {
     fn validate(&self) -> Result<()> {
         let d = self.descriptor;
-        let layer = if self.gid_type == GidType::Ib { 1 } else { 2 };
+        let layer = if self.gid_type == GidType::InfiniBand {
+            1
+        } else {
+            2
+        };
         let gid = Ipv6Addr::from(d.gid);
         if self.nic_id >= 64
             || self.name.is_empty()
@@ -51,7 +55,7 @@ impl NicPath {
         bytes[2..2 + self.name.len()].copy_from_slice(self.name.as_bytes());
         bytes[130..146].copy_from_slice(&self.domain);
         bytes[146] = match self.gid_type {
-            GidType::Ib => 1,
+            GidType::InfiniBand => 1,
             GidType::RoceV1 => 2,
             GidType::RoceV2 => 3,
         };
@@ -73,7 +77,7 @@ impl NicPath {
         let mut domain = [0; 16];
         domain.copy_from_slice(&bytes[130..146]);
         let gid_type = match bytes[146] {
-            1 => GidType::Ib,
+            1 => GidType::InfiniBand,
             2 => GidType::RoceV1,
             3 => GidType::RoceV2,
             _ => return Err(Error::Protocol("RDMA NIC path GID type")),
@@ -162,7 +166,7 @@ pub(super) fn decode_paths(bytes: &[u8]) -> Result<(Vec<NicPath>, usize)> {
 pub(super) fn compatible(local: &NicPath, remote: &NicPath) -> bool {
     local.gid_type == remote.gid_type
         && local.descriptor.link_layer == remote.descriptor.link_layer
-        && (local.gid_type == GidType::Ib
+        && (local.gid_type == GidType::InfiniBand
             || Ipv6Addr::from(local.descriptor.gid)
                 .to_ipv4_mapped()
                 .is_some()
