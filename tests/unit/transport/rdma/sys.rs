@@ -418,10 +418,8 @@ fn poll_dispatch_decodes_native_cqes_and_only_reads_error_valid_fields() {
     let before = state.calls;
     let mut batch = [Completion::default(); 5];
     // SAFETY: the test owns this live CQ and five writable CQE slots.
-    assert_eq!(
-        unsafe { poll(&mut handles, batch.as_mut_ptr(), batch.len()) },
-        3
-    );
+    let count = unsafe { poll(&mut handles, batch.as_mut_ptr(), batch.len()) };
+    assert_eq!(count, 3);
     assert_eq!((state.calls - before, state.limit), (1, 5));
     assert_eq!(batch.map(|wc| wc.id), [7, 8, 9, 0, 0]);
 }

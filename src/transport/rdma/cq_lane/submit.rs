@@ -266,7 +266,9 @@ impl CqLane {
                 .control
                 .lock()
                 .unwrap_or_else(|p| p.into_inner());
-            return Err(control.fault.map_or(error, Fault::error));
+            return Err(control
+                .fault
+                .map_or(error, |fault| fault.for_lane_retirement().error()));
         }
         Ok(request)
     }

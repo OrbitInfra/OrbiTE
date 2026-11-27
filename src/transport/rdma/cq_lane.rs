@@ -44,6 +44,16 @@ impl Fault {
             _ => Self::Internal("unexpected RDMA progress failure"),
         }
     }
+    fn for_lane_retirement(self) -> Self {
+        // The failed WR belongs to its original grant. Draining the lane
+        // carries no second device failure for a sibling's rail-health policy.
+        match self {
+            Self::Backend("RDMA work completion", _) => {
+                Self::Unavailable("RDMA lane retired after a work completion")
+            }
+            other => other,
+        }
+    }
     fn error(self) -> Error {
         match self {
             Self::Backend(operation, code) => Error::Backend { operation, code },
