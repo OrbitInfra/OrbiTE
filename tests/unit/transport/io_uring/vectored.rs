@@ -251,8 +251,6 @@ fn padded_file_vectors_borrow_a_slot_only_when_the_kernel_uses_it() -> Result<()
     if !kernel() {
         return Ok(());
     }
-    const PAGE: usize = 4096;
-    let image: Vec<_> = (0..3 * PAGE).map(|i| (1 + i % 251) as u8).collect();
     for (variable, direct) in [("ORBITE_EXT4_DIR", true), ("ORBITE_TMPFS_DIR", false)] {
         let Some(dir) = std::env::var_os(variable) else {
             assert!(
@@ -262,41 +260,49 @@ fn padded_file_vectors_borrow_a_slot_only_when_the_kernel_uses_it() -> Result<()
             eprintln!("skipping file vector control without {variable}");
             continue;
         };
+        let dir = Path::new(&dir);
+        let unit = padded_vector_unit(dir, direct)?;
+        let image: Vec<_> = (0..3 * unit).map(|i| (1 + i % 251) as u8).collect();
         let f = Fixture::new(
-            Path::new(&dir),
+            dir,
             &image,
             TransferEngine::new(EngineConfig {
                 io_uring: crate::IoUringConfig {
                     pinned_staging: true,
-                    staging_slot_kb: 4,
+                    staging_slot_kb: unit / 1024,
                     staging_slots: 1,
                 },
+                max_transfer_bytes: image.len(),
                 ..Default::default()
             })?,
         )?;
-        let base = f.memory.base_address();
-        let address = base.next_multiple_of(PAGE as u64) + PAGE as u64;
+        let memory = f.engine.register_memory(
+            vec![0x9a; 5 * unit].into_boxed_slice(),
+            Permission::LocalOnly,
+        )?;
+        let base = memory.base_address();
+        let address = base.next_multiple_of(unit as u64) + unit as u64;
         let start = (address - base) as usize;
         let req = TransferRequest::file_vectored(
             Transport::IoUring,
             0,
             &[
-                (address, PAGE).into(),
-                crate::FileIoElement::Padding(PAGE),
-                (address + (2 * PAGE) as u64, PAGE).into(),
+                (address, unit).into(),
+                crate::FileIoElement::Padding(unit),
+                (address + (2 * unit) as u64, unit).into(),
             ],
         )?;
         let request = std::slice::from_ref(&req);
         let read = f.run(TransferOp::Read, request)?;
         assert!(read.is_complete() && read.locally_drained);
         assert_eq!(read.transferred_bytes, image.len());
-        let mut expected = vec![0x9a; f.memory.len()];
-        expected[start..start + PAGE].copy_from_slice(&image[..PAGE]);
-        expected[start + 2 * PAGE..start + 3 * PAGE].copy_from_slice(&image[2 * PAGE..]);
+        let mut expected = vec![0x9a; memory.len()];
+        expected[start..start + unit].copy_from_slice(&image[..unit]);
+        expected[start + 2 * unit..start + 3 * unit].copy_from_slice(&image[2 * unit..]);
         let mut got = vec![0; expected.len()];
-        f.memory.read(0, &mut got)?;
+        memory.read(0, &mut got)?;
         assert_eq!(got, expected);
-        // The 12 KiB private direct-read buffer cannot use a 4 KiB slot.
+        // The private direct-read buffer spans three units; each slot fits one.
         // Buffered READ needs the slot as the native destination for its gap.
         let stats = f.engine.stats()?.io_uring.unwrap();
         assert_eq!(
@@ -310,7 +316,7 @@ fn padded_file_vectors_borrow_a_slot_only_when_the_kernel_uses_it() -> Result<()
         assert!(write.is_complete() && write.locally_drained);
         assert_eq!(write.transferred_bytes, image.len());
         let mut expected_file = image.clone();
-        expected_file[PAGE..2 * PAGE].fill(0);
+        expected_file[unit..2 * unit].fill(0);
         assert_eq!(fs::read(&f.path)?, expected_file);
         let stats = f.engine.stats()?.io_uring.unwrap();
         assert_eq!(
@@ -321,6 +327,31 @@ fn padded_file_vectors_borrow_a_slot_only_when_the_kernel_uses_it() -> Result<()
         assert_eq!((stats.active_slots, stats.pageable_bytes), (0, 0));
     }
     Ok(())
+}
+
+// Use the filesystem's actual regular-file descriptor. An empty vector probes
+// the descriptor independently of any proposed range. ext4 block and logical
+// sector sizes are powers of two, so doubling from the required pointer
+// alignment finds a length accepted for direct I/O on this mount.
+fn padded_vector_unit(dir: &Path, expect_direct: bool) -> Result<usize> {
+    let probe = Fixture::new(dir, &[0], TransferEngine::new(EngineConfig::default())?)?;
+    let (lease, _) = probe
+        .engine
+        .files
+        .admit(&probe.segment, TransferOp::Read, 0, 1)?;
+    let (file, alignment) = lease.file_for_iovecs(0, &[])?;
+    assert_eq!(lease.is_direct_read(TransferOp::Read, &file), expect_direct);
+    let mut unit = alignment.max(4096);
+    if expect_direct {
+        loop {
+            let (file, _) = lease.io_file(0, unit)?;
+            if lease.is_direct_read(TransferOp::Read, &file) {
+                break;
+            }
+            unit = unit.checked_mul(2).ok_or(Error::InvalidRange)?;
+        }
+    }
+    Ok(unit)
 }
 
 #[test]
