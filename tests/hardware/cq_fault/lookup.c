@@ -10,7 +10,7 @@ static void resolve_lookup(void) {
 #else
     const char *version = "GLIBC_2.2.5";
 #endif
-    *(void **)(&system_lookup) = dlvsym(RTLD_NEXT, "dlsym", version);
+    system_lookup = dlvsym(RTLD_NEXT, "dlsym", version);
     if (!system_lookup) fail();
 }
 
@@ -26,11 +26,9 @@ static void *native_verb(const char *name) {
     return system_lookup(verbs_library, name);
 }
 
-void *dlsym(void *library, const char *name) {
-    pthread_once(&lookup_once, resolve_lookup);
+static void *lookup_verb(void *library, const char *name) {
     void *native = system_lookup(library, name);
-    if (!native || library == RTLD_DEFAULT || library == RTLD_NEXT || strncmp(name, "ibv_", 4))
-        return native;
+    if (!native) return NULL;
     static const struct { const char *name; void *wrapper; } observed[] = {
 #define OBSERVE(symbol) { #symbol, (void *)(symbol) }
         OBSERVE(ibv_open_device), OBSERVE(ibv_close_device), OBSERVE(ibv_alloc_pd),
@@ -50,4 +48,14 @@ void *dlsym(void *library, const char *name) {
         break;
     }
     return native;
+}
+
+void *dlsym(void *library, const char *name) {
+    pthread_once(&lookup_once, resolve_lookup);
+    /* glibc finds DEFAULT and NEXT's search scope from the return address.
+     * Tail-call libc with the original caller. The packaged ELF control checks
+     * both scopes from a separate RTLD_LOCAL object with its own dependency. */
+    if (library == RTLD_DEFAULT || library == RTLD_NEXT || strncmp(name, "ibv_", 4))
+        return system_lookup(library, name);
+    return lookup_verb(library, name);
 }

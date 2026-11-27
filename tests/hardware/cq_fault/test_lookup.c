@@ -10,10 +10,14 @@ struct snapshot {
 };
 
 int main(int argc, char **argv) {
-    assert(argc == 2);
+    assert(argc == 3);
     void *verbs = dlopen("libibverbs.so.1", RTLD_NOW | RTLD_LOCAL);
     void *other = dlopen(argv[1], RTLD_NOW | RTLD_LOCAL);
     assert(verbs && other && verbs != other);
+    void *caller = dlopen(argv[2], RTLD_NOW | RTLD_LOCAL);
+    assert(caller);
+    int (*has_scope)(int) = dlsym(caller, "fixture_has_scope");
+    assert(has_scope && has_scope(0) && has_scope(1));
     int (*snapshot)(unsigned, unsigned, unsigned, unsigned, struct snapshot *) =
         dlsym(RTLD_DEFAULT, "orbite_cq_fault");
     struct ibv_context *(*open_device)(struct ibv_device *) = dlsym(verbs, "ibv_open_device");
@@ -47,6 +51,6 @@ int main(int argc, char **argv) {
     assert(snapshot(0, 0, 0, 0, &state) == 0 && state.destroyed_qps == 1);
     assert(close_device(devx) == 0 && close_device(ctx) == 0);
     assert(snapshot(0, 0, 0, 0, &state) == 0 && state.contexts == 0 && !state.errors);
-    assert(dlclose(other) == 0 && dlclose(verbs) == 0);
+    assert(dlclose(caller) == 0 && dlclose(other) == 0 && dlclose(verbs) == 0);
     return 0;
 }

@@ -159,7 +159,7 @@ generations, `payload <= block`, 8 parents with one lane or 16 with three, a
 observer. A CPU control loads a test verbs library through the same private
 dynamic-library handle as OrbitRDMA. It checks that the observer sees both
 context-opening paths and QP destruction, forwards an MR error, and leaves
-missing symbols and lookups on a different library alone. The two-host driver
+missing symbols and the lookup scopes of other local libraries intact. The two-host driver
 preloads the observer for native fault profiles. Armed on the requester, it
 records accepted payload WRs and removes their successful CQEs
 from `poll_cq`; it never fabricates data or completions. At the kill point the
