@@ -344,7 +344,7 @@ fn large_direct_read_reuses_only_one_private_prefix_and_publishes_exact_short_cq
     if std::env::var_os("ORBITE_REQUIRE_PAGE_MOVE").is_some() {
         assert!(moved >= SIZE && recycled >= SPLIT);
     }
-    eprintln!("private READ receipts {receipts:?}; hot prefix {boundary} bytes; enters {enters:?}");
+    eprintln!("private READ receipts {receipts:?}; distributed whole pages; enters {enters:?}");
     assert_eq!(receipts, [1; 5]);
     let _competing = pool.charge(EngineConfig::default().max_inflight_bytes)?;
     assert_eq!(pool.stats().idle_read_bytes, 0);

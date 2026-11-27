@@ -74,29 +74,29 @@ impl Bounce {
             && self.ptr.as_ptr() as usize % HUGE_PAGE == destination % HUGE_PAGE
     }
 
-    // The cache holds one scalar iovec even when part of it is nonresident.
-    // Discard only whole 2 MiB units inside this retired buffer. Its ends
-    // may be offset relative to the PMD containing the destination address.
-    fn idle_discard_start(&self) -> *mut u8 {
-        let start = self.ptr.as_ptr() as usize;
-        let end = (start + READ_PREFIX_BYTES) & !(HUGE_PAGE - 1);
-        self.ptr
-            .as_ptr()
-            .wrapping_add(end - IDLE_DISCARD_BYTES - start)
+    // Leave resident PMDs between reclaimed runs so a later direct read
+    // encounters both kinds throughout its range. Skip partial PMDs at either end.
+    fn idle_discard_ranges(&self) -> impl Iterator<Item = (usize, usize)> {
+        let first = self.ptr.as_ptr().align_offset(HUGE_PAGE);
+        let units = (READ_PREFIX_BYTES - first) / HUGE_PAGE;
+        let cold = IDLE_DISCARD_BYTES / HUGE_PAGE;
+        let warm = units - cold;
+        (0..warm).map(move |index| {
+            let previous = index * cold / warm;
+            let next = (index + 1) * cold / warm;
+            let offset = first + (index + 1 + previous) * HUGE_PAGE;
+            (offset, (next - previous) * HUGE_PAGE)
+        })
     }
 
     #[allow(unsafe_code)]
     pub(super) fn discard_idle_pages(&self) -> bool {
-        // SAFETY: only a drained or never-submitted charge can return a buffer
-        // to its pool. The aligned range is strictly inside its exclusive,
-        // writable payload, whose previous bytes have no consumer.
-        unsafe {
-            libc::madvise(
-                self.idle_discard_start().cast(),
-                IDLE_DISCARD_BYTES,
-                libc::MADV_DONTNEED,
-            ) == 0
-        }
+        self.idle_discard_ranges().all(|(offset, len)| {
+            let ptr = self.ptr.as_ptr().wrapping_add(offset);
+            // SAFETY: each range contains only full PMDs in this drained,
+            // exclusively owned private mapping. No live operation references it.
+            unsafe { libc::madvise(ptr.cast(), len, libc::MADV_DONTNEED) == 0 }
+        })
     }
 
     #[cfg(test)]
@@ -114,12 +114,15 @@ impl Bounce {
         if unsafe { libc::mincore(base as *mut _, len, vec.as_mut_ptr()) } != 0 {
             return Err(std::io::Error::last_os_error());
         }
-        let first = (self.idle_discard_start() as usize - base) / page;
         let resident = |pages: &[u8]| pages.iter().filter(|v| **v & 1 != 0).count() * page;
-        Ok((
-            resident(&vec),
-            resident(&vec[first..first + IDLE_DISCARD_BYTES / page]),
-        ))
+        let discarded = self
+            .idle_discard_ranges()
+            .map(|(offset, length)| {
+                let first = (addr - base + offset) / page;
+                resident(&vec[first..first + length / page])
+            })
+            .sum();
+        Ok((resident(&vec), discarded))
     }
 
     fn pageable(
